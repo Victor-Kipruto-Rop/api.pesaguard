@@ -14,7 +14,16 @@ from pesaguard_backend_pipeline . models import (
     TransactionEvent,
     TransactionOutbox,
 )
-from pesaguard_backend_pipeline.communications.models import (
+# Bare, not "pesaguard_backend_pipeline.communications.models": that module
+# already unifies onto pesaguard_backend_pipeline.models.Base itself (see the
+# try/except at the top of communications/models.py), so importing it under a
+# second dotted name here doesn't change which Base its classes attach to --
+# it just makes Python execute the file's class bodies a second time. Each of
+# those classes uses __table_args__ = {"extend_existing": True} so the second
+# execution reuses the same Table rather than raising, but the bare Index(...)
+# objects inside __table_args__ aren't deduplicated the same way, so
+# Base.metadata.create_all() below tried to CREATE INDEX the same index twice.
+from communications.models import (
     CommunicationConsent,
     CommunicationNotification,
     CommunicationOutboxEntry,
