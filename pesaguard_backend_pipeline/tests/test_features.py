@@ -145,7 +145,8 @@ def test_filter_presets_get(test_client):
 
 
 def test_filter_presets_post(test_client):
-    """Test saving new filter preset."""
+    """Saving a preset actually persists it -- a prior version of this route
+    returned 201 without writing anything, so a follow-up GET is the real test."""
     client, auth_headers = test_client
     response = client.post(
         '/incidents/filters/presets',
@@ -156,7 +157,22 @@ def test_filter_presets_post(test_client):
     data = response.get_json()
 
     assert 'presets' in data
-    assert 'test_preset' in data['presets']
+    assert data['presets']['test_preset'] == {'severity': 'warning'}
+
+    # Persistence, not just an echo in the POST response: a fresh GET (a new
+    # request, same tenant) must see it too.
+    follow_up = client.get('/incidents/filters/presets', headers=auth_headers)
+    assert follow_up.status_code == 200
+    assert follow_up.get_json()['presets']['test_preset'] == {'severity': 'warning'}
+
+    # Posting the same name again updates it in place rather than erroring or duplicating.
+    updated = client.post(
+        '/incidents/filters/presets',
+        json={'name': 'test_preset', 'filters': {'severity': 'critical'}},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 201
+    assert updated.get_json()['presets']['test_preset'] == {'severity': 'critical'}
 
 
 def test_auto_escalate(test_client):
@@ -173,7 +189,7 @@ def test_auto_escalate(test_client):
 
 
 def test_bulk_assign(test_client):
-    """Test bulk assignment of incidents."""
+    """Test bulk assignment of incidents, and that it now leaves an audit record."""
     client, auth_headers = test_client
     response = client.post(
         '/incidents/bulk-assign',
@@ -185,6 +201,23 @@ def test_bulk_assign(test_client):
 
     assert data['status'] == 'assigned'
     assert data['updated'] == 2
+
+    from action_audit import ActionAuditEntry
+    import app_2
+
+    session = app_2.SessionLocal()
+    try:
+        entry = (
+            session.query(ActionAuditEntry)
+            .filter(ActionAuditEntry.action == "bulk_assign_incidents")
+            .order_by(ActionAuditEntry.created_at.desc())
+            .first()
+        )
+        assert entry is not None, "bulk-assign wrote no audit record"
+        assert sorted(entry.details["discrepancy_ids"]) == ["test-1", "test-2"]
+        assert entry.details["assignee"] == "john_doe"
+    finally:
+        session.close()
 
 
 def test_search_incidents(test_client):

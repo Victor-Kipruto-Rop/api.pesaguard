@@ -511,6 +511,28 @@ class DiscrepancyEvent(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class DiscrepancyFilterPreset(Base):
+    """A tenant's saved discrepancy/incident search filter.
+
+    Mirrors CommunicationSavedFilter (communications/models.py) -- same shape,
+    separate table, because discrepancy filters and communications filters are
+    different resources with different tenants' data in their JSON payload.
+    """
+
+    __tablename__ = "discrepancy_filter_presets"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_discrepancy_filter_preset_name"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_discrepancy_filter_preset_tenant_id_nonempty"),
+    )
+
+    id = Column(String(64), primary_key=True)
+    tenant_id = Column(String(128), nullable=False)
+    owner_user_id = Column(String(128), nullable=True)
+    name = Column(String(128), nullable=False)
+    filters = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default="now()")
+
+
 class InternalRecord(Base):
     """Customer internal ledger or order system record baseline for comparison."""
 

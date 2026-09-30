@@ -12,6 +12,7 @@ import math
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -32,7 +33,7 @@ from ingestion import IngestionService
 from health import build_health_payload
 from logging_utils import configure_logging, get_correlation_id, set_correlation_id
 from metrics import build_metrics_payload, record_security_event
-from models import Base, DeadLetter, Discrepancy, ImportJob, LineageRecord, MerchantMetric, Transaction, UserAccount
+from models import Base, DeadLetter, Discrepancy, DiscrepancyFilterPreset, ImportJob, LineageRecord, MerchantMetric, Transaction, UserAccount
 from provider_management_service import ProviderManagementService
 from rate_limiter import RateLimiter
 from runtime_config import RuntimeConfig
@@ -2108,28 +2109,64 @@ def auto_escalate_incidents():
 @app.route("/incidents/filters/presets", methods=["GET", "POST"])
 @require_auth("read:discrepancies")
 def incident_filter_presets():
-    """Return and persist a minimal set of dashboard filter presets."""
+    """Return the tenant's discrepancy/incident search filter presets.
+
+    Three presets (critical_open, needs_review, all) always exist. POST adds
+    or replaces one more, scoped to the caller's tenant, persisted in
+    discrepancy_filter_presets -- it used to return 201 without saving
+    anything at all.
+    """
     default_presets = {
         "critical_open": {"severity": "critical", "resolved": "open"},
         "needs_review": {"status": "needs_review"},
         "all": {},
     }
-    if request.method == "POST":
-        current_user = get_current_user()
-        if _api_auth_required() and (current_user is None or not AuthRBAC.check_permission(current_user, "write:discrepancies")):
-            return jsonify({"error": "insufficient_permissions", "message": "Write permission required."}), 403
-        payload, error = _json_object()
-        if error:
-            return error
-        error = _validate_fields(payload, {"name": (str, False), "filters": (dict, False)})
-        if error:
-            return error
-        name = str(payload.get("name") or "custom_preset").strip()
-        if not name:
-            return jsonify({"error": "missing_name", "message": "Preset name is required."}), 400
-        default_presets[name] = payload.get("filters") or {}
-        return jsonify({"status": "saved", "presets": default_presets}), 201
-    return jsonify({"presets": default_presets}), 200
+    tenant_id = _current_tenant_id() or "default"
+    session = _open_session()
+    try:
+        if request.method == "POST":
+            current_user = get_current_user()
+            if _api_auth_required() and (current_user is None or not AuthRBAC.check_permission(current_user, "write:discrepancies")):
+                return jsonify({"error": "insufficient_permissions", "message": "Write permission required."}), 403
+            payload, error = _json_object()
+            if error:
+                return error
+            error = _validate_fields(payload, {"name": (str, False), "filters": (dict, False)})
+            if error:
+                return error
+            name = str(payload.get("name") or "custom_preset").strip()
+            if not name:
+                return jsonify({"error": "missing_name", "message": "Preset name is required."}), 400
+            filters = payload.get("filters") or {}
+            actor = getattr(current_user, "user_id", None) or getattr(current_user, "username", None)
+            existing = (
+                session.query(DiscrepancyFilterPreset)
+                .filter(DiscrepancyFilterPreset.tenant_id == tenant_id, DiscrepancyFilterPreset.name == name)
+                .one_or_none()
+            )
+            if existing:
+                existing.filters = filters
+                existing.owner_user_id = actor
+            else:
+                session.add(DiscrepancyFilterPreset(
+                    id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
+                    owner_user_id=actor,
+                    name=name,
+                    filters=filters,
+                ))
+            session.commit()
+            saved = dict(default_presets)
+            for preset in session.query(DiscrepancyFilterPreset).filter(DiscrepancyFilterPreset.tenant_id == tenant_id):
+                saved[preset.name] = preset.filters
+            return jsonify({"status": "saved", "presets": saved}), 201
+
+        presets = dict(default_presets)
+        for preset in session.query(DiscrepancyFilterPreset).filter(DiscrepancyFilterPreset.tenant_id == tenant_id):
+            presets[preset.name] = preset.filters
+        return jsonify({"presets": presets}), 200
+    finally:
+        session.close()
 
 
 @app.route("/analytics/reconciliation-report", methods=["GET"])
@@ -2197,9 +2234,12 @@ def bulk_assign_incidents():
         ids = payload.get("ids", [])
         assignee = payload.get("assignee", "").strip()
         note = payload.get("note", "Bulk assigned")
+        current_user = get_current_user()
+        actor = getattr(current_user, "user_id", None) or getattr(current_user, "username", None) or "system"
 
         updated = 0
         skipped_ids = []
+        assigned_ids = []
         for incident_id in ids:
             incident = _tenant_scoped_get(session, Discrepancy, incident_id, tenant_id)
             if not incident:
@@ -2213,7 +2253,18 @@ def bulk_assign_incidents():
                 "message": f"Bulk assigned to {assignee}: {note}",
             })
             updated += 1
+            assigned_ids.append(incident.id)
 
+        if assigned_ids:
+            # One audit record for the whole batch, same convention as
+            # bulk_resolve_discrepancies: a bulk action is one operator
+            # decision, so it reads back as one event listing every id it touched.
+            persist_audit_event(session, ActionAuditRecord(
+                tenant_id=tenant_id or "default",
+                actor=actor,
+                action="bulk_assign_incidents",
+                details={"discrepancy_ids": assigned_ids, "assignee": assignee, "note": note, "skipped_ids": skipped_ids},
+            ))
         session.commit()
         return jsonify({"status": "assigned", "updated": updated, "skipped_ids": skipped_ids}), 200
     finally:
