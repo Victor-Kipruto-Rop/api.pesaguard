@@ -21,9 +21,16 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_DATABASE_URL = required_env("DATABASE_URL")
 
-# Configuration controlling whether optional infrastructure affects the overall health status
-KAFKA_REQUIRED_FOR_OK = os.getenv("PESAGUARD_HEALTH_REQUIRE_KAFKA", "0") == "1"
-REDIS_REQUIRED_FOR_OK = os.getenv("PESAGUARD_HEALTH_REQUIRE_REDIS", "0") == "1"
+# Database is always required. In production, Kafka and Redis are also required
+# before an instance is considered ready to receive traffic. Development and
+# test environments may keep these dependencies optional unless explicitly gated.
+_ENVIRONMENT = os.getenv("PESAGUARD_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
+KAFKA_REQUIRED_FOR_OK = (
+    os.getenv("PESAGUARD_HEALTH_REQUIRE_KAFKA", "1" if _ENVIRONMENT == "production" else "0") == "1"
+)
+REDIS_REQUIRED_FOR_OK = (
+    os.getenv("PESAGUARD_HEALTH_REQUIRE_REDIS", "1" if _ENVIRONMENT == "production" else "0") == "1"
+)
 
 DARAJA_OAUTH_URL = os.getenv(
     "DARAJA_OAUTH_URL",
@@ -248,4 +255,3 @@ def build_health_payload() -> Dict[str, Any]:
             "daraja": daraja_result["daraja"],
         },
     }
-
