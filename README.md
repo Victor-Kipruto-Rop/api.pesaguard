@@ -1,97 +1,60 @@
 # PesaGuard
 
-**Real-time M-Pesa reconciliation and anomaly detection for SACCOs, e-commerce operators, and small fintechs.**
+Real-time M-Pesa reconciliation and anomaly detection for SACCOs, e-commerce operators, and small fintechs.
 
-PesaGuard watches your M-Pesa transaction flow as it happens, flags mismatches before they become disputes, and catches suspicious patterns before they become losses — so finance teams stop reconciling by hand and stop finding fraud after the money's gone.
+## Current status
 
----
+The repository contains the production application, migrations, Docker deployment, readiness checks, backup tooling, and CI/CD workflows. It must still pass the staging deployment gate before live payment traffic is enabled.
 
-## The Problem
+## Technology stack
 
-Most SACCOs and small fintechs in East Africa reconcile M-Pesa transactions manually — cross-checking statements, spreadsheets, and internal records days after the fact. By the time a discrepancy is spotted, the transaction window for recovery has often closed, and fraud patterns (duplicate payments, phantom reversals, callback spoofing) go unnoticed until they've repeated dozens of times.
+- Python 3.12
+- Flask API mounted behind a FastAPI control plane
+- PostgreSQL 15+
+- Redis 7+
+- Redpanda/Kafka-compatible event streaming
+- RQ background workers
+- Docker and GitHub Actions
+- Safaricom Daraja integrations
 
-## What PesaGuard Does
-
-- **Real-time reconciliation** — ingests M-Pesa (Daraja) callbacks and matches them against internal records as transactions happen, not at end-of-day.
-- **Anomaly detection** — flags irregular patterns (duplicate transaction IDs, amount mismatches, timing anomalies, suspicious reversal sequences) using rule-based and statistical checks.
-- **Webhook-first architecture** — built for idempotent, secure ingestion of Safaricom Daraja callbacks, so retried or duplicate webhooks never corrupt your ledger.
-- **Alerting** — surfaces discrepancies to your team immediately, not at month-end audit.
-- **Built for scale-down as much as scale-up** — designed to run affordably for a single SACCO branch or a growing fintech, not just enterprise volumes.
-
-## Who It's For
-
-- **SACCOs** reconciling member contributions and loan repayments via M-Pesa
-- **E-commerce operators** processing high volumes of STK Push payments
-- **Small fintechs** that need fraud visibility without building a data team
-
-## Status
-
-🚧 **MVP live with a pilot customer.** Currently in production hardening — focused on webhook idempotency, security, and reliability before wider rollout.
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | *(fill in: e.g. Django / FastAPI / Node.js)* |
-| Transaction ingestion | Safaricom Daraja API (M-Pesa) |
-| Deployment | Render (free-tier infrastructure) |
-| Database | *(fill in: e.g. PostgreSQL)* |
-
-*(Update the stack table with your actual services — happy to fill this in if you tell me the current setup.)*
-
-## Getting Started
+## Local verification
 
 ```bash
-# Clone the repo
-git clone https://github.com/Victor-Kipruto-Rop/pesaguard.git
-cd pesaguard
-
-# Install dependencies
-# (add your install command here)
-
-# Configure environment variables
+python -m venv .venv
+source .venv/bin/activate
+pip install -r pesaguard_backend_pipeline/requirements-dev.txt
 cp .env.example .env
-# Add your Daraja API credentials, database URL, etc.
 
-# Run locally
-# (add your run command here)
+export PYTHONPATH=.
+pytest -v --tb=short --durations=10
+python -m compileall -q pesaguard_backend_pipeline
 ```
 
-## Roadmap
+## Local services
 
-- [x] Core reconciliation engine
-- [x] MVP deployed with first pilot customer
-- [ ] Webhook idempotency hardening
-- [ ] Security audit (auth, secrets management, rate limiting)
-- [ ] Multi-tenant support for additional SACCOs/fintechs
-- [ ] Public dashboard for real-time transaction health
+Use Docker Compose after setting real local values in `.env`:
 
-## Branding
+```bash
+python infra/configure.py compose -- -f infra/docker/docker-compose.yml config --quiet
+python infra/configure.py compose -- -f infra/docker/docker-compose.yml up -d --build
+```
 
-PesaGuard uses a shield-and-"PG" mark in forest green — reflecting trust, security, and financial stewardship.
+The API exposes liveness at `/livez` and dependency readiness at `/health`. In production, PostgreSQL, Redis, Kafka/Redpanda, and configured Daraja credentials are required for a ready instance.
 
-## Observability & Code Quality
+## Production release gates
 
-PesaGuard ships with an optional Sentry-backed observability bootstrap and a Sourcery-enabled developer workflow.
+A release must satisfy all of the following:
 
-Sentry:
-- Production error tracking and exception monitoring
-- Performance sampling and release/environment tagging
-- Safe context enrichment and structured service tags
+1. Full CI passes, including migrations and tests.
+2. The production image builds and passes the vulnerability scan.
+3. Staging deploys using the immutable image digest.
+4. Staging `/health` reports `status: ok`.
+5. Database backup and restore validation succeeds.
+6. Production deployment is approved through the protected `production` environment.
+7. Production `/health` reports `status: ok` after deployment.
 
-Sourcery:
-- AI-powered code review on pull requests
-- Repository-level quality configuration in `.sourcery.yaml`
-- GitHub Actions workflow under `.github/workflows/sourcery.yml`
+Do not commit `.env` or production credentials. Generate secrets outside Git and provide them through the deployment environment.
 
-These integrations operate around the existing Flask and worker architecture and do not replace the repository’s business logic.
+## Documentation
 
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
-## Contact
-
-Built by **Victor Kipruto Rop** ([DataForge](https://github.com/Victor-Kipruto-Rop)) — data engineer focused on East African fintech infrastructure.
-
-For pilot inquiries or partnership questions, reach out via [GitHub](https://github.com/Victor-Kipruto-Rop).
+Operational, security, database, testing, and recovery procedures are under `docs/` and `infra/README.md`.
