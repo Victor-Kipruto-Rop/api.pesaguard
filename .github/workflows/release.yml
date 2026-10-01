@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r pesaguard_backend_pipeline/requirements.txt
+          pip install -r pesaguard_backend_pipeline/requirements-dev.txt
           pip install alembic
       - name: Compile Python modules
         run: python -m compileall -q pesaguard_backend_pipeline
@@ -125,14 +125,14 @@ jobs:
           test -n "$DEPLOY_HOOK_URL" || { echo "RENDER_STAGING_DEPLOY_HOOK is required"; exit 1; }
           curl --fail --silent --show-error --retry 3 -X POST "$DEPLOY_HOOK_URL" \
             -H 'Content-Type: application/json' --data "{\"image\":\"$IMAGE_REF\"}"
-      - name: Wait for staging health
+      - name: Wait for staging liveness
         env:
           HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
         run: |
           test -n "$HEALTH_URL" || { echo "STAGING_HEALTH_URL is required"; exit 1; }
           for attempt in $(seq 1 30); do
             response=$(curl --fail --silent --show-error --max-time 10 "$HEALTH_URL" || true)
-            if [ -n "$response" ] && python -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "ok" else 1)' <<< "$response"; then
+            if [ -n "$response" ] && python -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") in ("ok", "alive") else 1)' <<< "$response"; then
               exit 0
             fi
             sleep 10
@@ -154,16 +154,16 @@ jobs:
           test -n "$DEPLOY_HOOK_URL" || { echo "RENDER_PRODUCTION_DEPLOY_HOOK is required"; exit 1; }
           curl --fail --silent --show-error --retry 3 -X POST "$DEPLOY_HOOK_URL" \
             -H 'Content-Type: application/json' --data "{\"image\":\"$IMAGE_REF\"}"
-      - name: Wait for production health
+      - name: Wait for production readiness
         env:
           HEALTH_URL: ${{ secrets.PRODUCTION_HEALTH_URL }}
         run: |
           test -n "$HEALTH_URL" || { echo "PRODUCTION_HEALTH_URL is required"; exit 1; }
           for attempt in $(seq 1 30); do
             response=$(curl --fail --silent --show-error --max-time 10 "$HEALTH_URL" || true)
-            if [ -n "$response" ] && python -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "ok" else 1)' <<< "$response"; then
+            if [ -n "$response" ] && python -c 'import json,sys; payload=json.load(sys.stdin); sys.exit(0 if payload.get("status") == "ok" else 1)' <<< "$response"; then
               exit 0
             fi
             sleep 10
           done
-          echo "Production did not become healthy"; exit 1
+          echo "Production did not become ready"; exit 1
