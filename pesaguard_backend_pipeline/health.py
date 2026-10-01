@@ -21,16 +21,15 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_DATABASE_URL = required_env("DATABASE_URL")
 
-# Database is always required. In production, Kafka and Redis are also required
-# before an instance is considered ready to receive traffic. Development and
-# test environments may keep these dependencies optional unless explicitly gated.
-_ENVIRONMENT = os.getenv("PESAGUARD_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
-KAFKA_REQUIRED_FOR_OK = (
-    os.getenv("PESAGUARD_HEALTH_REQUIRE_KAFKA", "1" if _ENVIRONMENT == "production" else "0") == "1"
-)
-REDIS_REQUIRED_FOR_OK = (
-    os.getenv("PESAGUARD_HEALTH_REQUIRE_REDIS", "1" if _ENVIRONMENT == "production" else "0") == "1"
-)
+_environment = os.getenv("PESAGUARD_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
+KAFKA_REQUIRED_FOR_OK = os.getenv(
+    "PESAGUARD_HEALTH_REQUIRE_KAFKA",
+    "1" if _environment == "production" else "0",
+) == "1"
+REDIS_REQUIRED_FOR_OK = os.getenv(
+    "PESAGUARD_HEALTH_REQUIRE_REDIS",
+    "1" if _environment == "production" else "0",
+) == "1"
 
 DARAJA_OAUTH_URL = os.getenv(
     "DARAJA_OAUTH_URL",
@@ -40,7 +39,6 @@ DARAJA_CHECK_CACHE_SECONDS = int(os.getenv("PESAGUARD_DARAJA_HEALTH_CACHE_SECOND
 
 
 def _database_connect_args(database_url: str, timeout: int) -> Dict[str, Any]:
-    """Return database dialect-specific connection arguments."""
     if database_url.startswith("sqlite"):
         return {"check_same_thread": False}
     if database_url.startswith("postgresql"):
@@ -53,7 +51,6 @@ _db_engine_lock = threading.Lock()
 
 
 def _get_or_create_engine(database_url: str, timeout: int):
-    """Reuse cached database engines across health checks."""
     cache_key = f"{database_url}::{timeout}"
     with _db_engine_lock:
         engine = _db_engines.get(cache_key)
@@ -78,7 +75,6 @@ def _get_or_create_engine(database_url: str, timeout: int):
 
 
 def check_database_connection(database_url: Optional[str] = None, timeout: int = 5) -> Dict[str, Any]:
-    """Verify database connectivity via a ping query."""
     url = database_url or DEFAULT_DATABASE_URL
     try:
         engine = _get_or_create_engine(url, timeout)
@@ -87,27 +83,17 @@ def check_database_connection(database_url: Optional[str] = None, timeout: int =
         return {"status": "ok", "database": {"status": "ok", "type": "sql"}}
     except SQLAlchemyError as exc:
         logger.warning("Database health check failed: %s", exc)
-        return {
-            "status": "failed",
-            "database": {"status": "failed", "error": str(exc)},
-        }
+        return {"status": "failed", "database": {"status": "failed", "error": str(exc)}}
     except Exception as exc:
         logger.exception("Unexpected error during database health check: %s", exc)
-        return {
-            "status": "failed",
-            "database": {"status": "failed", "error": str(exc)},
-        }
+        return {"status": "failed", "database": {"status": "failed", "error": str(exc)}}
 
 
 def check_kafka_connectivity(timeout: int = 5) -> Dict[str, Any]:
-    """Check Kafka broker connectivity and ensure client resources are closed."""
     try:
         from kafka import KafkaProducer
     except ImportError:
-        return {
-            "status": "failed",
-            "kafka": {"status": "failed", "error": "kafka-python not installed"},
-        }
+        return {"status": "failed", "kafka": {"status": "failed", "error": "kafka-python not installed"}}
 
     producer = None
     try:
@@ -117,16 +103,10 @@ def check_kafka_connectivity(timeout: int = 5) -> Dict[str, Any]:
             api_version_auto_timeout_ms=timeout * 1000,
         )
         if not producer.bootstrap_connected():
-            return {
-                "status": "failed",
-                "kafka": {"status": "failed", "error": "unable to connect to Kafka brokers"},
-            }
+            return {"status": "failed", "kafka": {"status": "failed", "error": "unable to connect to Kafka brokers"}}
         return {"status": "ok", "kafka": {"status": "ok"}}
     except Exception as exc:
-        return {
-            "status": "failed",
-            "kafka": {"status": "failed", "error": str(exc)},
-        }
+        return {"status": "failed", "kafka": {"status": "failed", "error": str(exc)}}
     finally:
         if producer is not None:
             try:
@@ -140,7 +120,6 @@ _redis_client_lock = threading.Lock()
 
 
 def _get_or_create_redis_client(redis_url: str, timeout: int):
-    """Reuse cached Redis connection instances."""
     cache_key = f"{redis_url}::{timeout}"
     with _redis_client_lock:
         client = _redis_client_cache.get(cache_key)
@@ -152,26 +131,18 @@ def _get_or_create_redis_client(redis_url: str, timeout: int):
 
 
 def check_redis_connectivity(timeout: int = 5) -> Dict[str, Any]:
-    """Verify Redis server availability via ping."""
     try:
         import redis  # noqa: F401
     except ImportError:
-        return {
-            "status": "failed",
-            "redis": {"status": "failed", "error": "redis package not installed"},
-        }
+        return {"status": "failed", "redis": {"status": "failed", "error": "redis package not installed"}}
 
     try:
-        client = _get_or_create_redis_client(REDIS_URL, timeout)
-        client.ping()
+        _get_or_create_redis_client(REDIS_URL, timeout).ping()
         return {"status": "ok", "redis": {"status": "ok"}}
     except Exception as exc:
         with _redis_client_lock:
             _redis_client_cache.pop(f"{REDIS_URL}::{timeout}", None)
-        return {
-            "status": "failed",
-            "redis": {"status": "failed", "error": str(exc)},
-        }
+        return {"status": "failed", "redis": {"status": "failed", "error": str(exc)}}
 
 
 _daraja_check_lock = threading.Lock()
@@ -179,52 +150,30 @@ _daraja_check_cache: Dict[str, Any] = {"result": None, "checked_at": 0.0}
 
 
 def check_daraja_connectivity(timeout: int = 5) -> Dict[str, Any]:
-    """Verify Safaricom Daraja OAuth credentials and connectivity with rate-limiting cache."""
     consumer_key = os.getenv("DARAJA_CONSUMER_KEY", "")
     consumer_secret = os.getenv("DARAJA_CONSUMER_SECRET", "")
-
     if not consumer_key or not consumer_secret:
-        return {
-            "status": "degraded",
-            "daraja": {"status": "degraded", "reason": "credentials_not_configured"},
-        }
+        return {"status": "degraded", "daraja": {"status": "degraded", "reason": "credentials_not_configured"}}
 
     now = time.time()
     with _daraja_check_lock:
         cached = _daraja_check_cache["result"]
-        cached_at = _daraja_check_cache["checked_at"]
-        if cached is not None and (now - cached_at) < DARAJA_CHECK_CACHE_SECONDS:
+        if cached is not None and (now - _daraja_check_cache["checked_at"]) < DARAJA_CHECK_CACHE_SECONDS:
             return cached
-
         try:
-            response = requests.get(
-                DARAJA_OAUTH_URL,
-                auth=(consumer_key, consumer_secret),
-                timeout=timeout,
-            )
+            response = requests.get(DARAJA_OAUTH_URL, auth=(consumer_key, consumer_secret), timeout=timeout)
             if response.status_code == 200 and "access_token" in response.json():
                 result = {"status": "ok", "daraja": {"status": "ok"}}
             else:
-                result = {
-                    "status": "failed",
-                    "daraja": {
-                        "status": "failed",
-                        "error": f"unexpected response (status {response.status_code})",
-                    },
-                }
+                result = {"status": "failed", "daraja": {"status": "failed", "error": f"unexpected response (status {response.status_code})"}}
         except Exception as exc:
-            result = {
-                "status": "failed",
-                "daraja": {"status": "failed", "error": str(exc)},
-            }
-
+            result = {"status": "failed", "daraja": {"status": "failed", "error": str(exc)}}
         _daraja_check_cache["result"] = result
         _daraja_check_cache["checked_at"] = now
         return result
 
 
 def build_health_payload() -> Dict[str, Any]:
-    """Assemble health check telemetry across system dependencies."""
     db_result = check_database_connection()
     kafka_result = check_kafka_connectivity()
     redis_result = check_redis_connectivity()
@@ -237,13 +186,10 @@ def build_health_payload() -> Dict[str, Any]:
 
     if not db_ok:
         overall_status = "failed"
+    elif (kafka_ok or not KAFKA_REQUIRED_FOR_OK) and (redis_ok or not REDIS_REQUIRED_FOR_OK) and daraja_ok:
+        overall_status = "ok"
     else:
-        kafka_gate_ok = kafka_ok or not KAFKA_REQUIRED_FOR_OK
-        redis_gate_ok = redis_ok or not REDIS_REQUIRED_FOR_OK
-        if kafka_gate_ok and redis_gate_ok and daraja_ok:
-            overall_status = "ok"
-        else:
-            overall_status = "degraded"
+        overall_status = "degraded"
 
     return {
         "status": overall_status,
