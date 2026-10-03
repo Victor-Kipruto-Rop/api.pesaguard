@@ -1,0 +1,30 @@
+name: Public status email monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-status-email-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check status transitions and send subscribed updates
+        env:
+          STATUS_MONITOR_TOKEN: ${{ secrets.PESAGUARD_STATUS_MONITOR_TOKEN }}
+        run: |
+          if [ -z "$STATUS_MONITOR_TOKEN" ]; then
+            echo "PESAGUARD_STATUS_MONITOR_TOKEN repository secret is not configured."
+            exit 1
+          fi
+          curl --fail --silent --show-error --max-time 30 \
+            --request POST \
+            --header "Authorization: Bearer $STATUS_MONITOR_TOKEN" \
+            https://api.pesaguard.victorkipruto.com/public/status/monitor

@@ -669,6 +669,26 @@ class EmailNotification(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class PublicStatusSubscription(Base):
+    """Double-opt-in email subscriptions for public service-status changes."""
+
+    __tablename__ = "public_status_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("email_hash", name="uq_public_status_subscription_email_hash"),
+        Index("ix_public_status_subscription_confirmed", "confirmed"),
+    )
+
+    id = Column(String(32), primary_key=True)
+    email = Column(String(254), nullable=False)
+    email_hash = Column(String(64), nullable=False)
+    confirmation_token_hash = Column(String(64), nullable=True)
+    confirmation_expires_at = Column(DateTime(timezone=True), nullable=True)
+    confirmed = Column(Boolean, nullable=False, default=False, server_default="false")
+    last_status_fingerprint = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class DeadLetter(Base):
     """Failed, malformed, or unprocessable webhook payload repository."""
 
