@@ -75,12 +75,22 @@ The status website uses these public API routes:
 
 ### Production prerequisites
 
-1. Push the backend change to `main` only after required review. The release
-   workflow builds and deploys on `main`; its protected `production` GitHub
-   environment requires `RENDER_PRODUCTION_DEPLOY_HOOK` and
-   `PRODUCTION_HEALTH_URL`.
-2. Back up the database, then run migrations from the backend checkout root
-   with production `DATABASE_URL` configured:
+1. Before merging the backend change, configure the production runtime:
+   `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`, TLS (`SMTP_USE_TLS` or
+   `SMTP_USE_SSL`), and both `SMTP_USERNAME`/`SMTP_PASSWORD` when the provider
+   requires authentication. The mail transport requires TLS.
+2. Keep the existing production `JWT_SECRET_KEY` configured; it signs
+   unsubscribe links. Do not rotate it solely for this feature.
+3. Set `PESAGUARD_STATUS_MONITOR_TOKEN` to a newly generated random value of
+   at least 32 characters in the backend runtime and set the same value as the
+   GitHub Actions repository secret. Never commit the token or expose it in
+   logs.
+4. Set `PESAGUARD_CORS_ALLOWED_ORIGINS` to allow both
+   `https://api.pesaguard.victorkipruto.com` and
+   `https://status.pesaguard.victorkipruto.com`. An explicit value replaces
+   defaults, so retain any other origins required by clients.
+5. Back up the database, then run migrations from the backend checkout root
+   with production `DATABASE_URL` configured, before deploying the code:
 
    ```powershell
    python -m alembic upgrade head
@@ -89,23 +99,12 @@ The status website uses these public API routes:
    This creates `public_status_subscriptions` as well as any other pending
    schema changes. The release workflow validates migrations against CI but
    does not apply them to production.
-3. Configure SMTP in the backend runtime: `SMTP_HOST`, `SMTP_PORT`,
-   `SMTP_FROM_EMAIL`, TLS (`SMTP_USE_TLS` or `SMTP_USE_SSL`), and both
-   `SMTP_USERNAME`/`SMTP_PASSWORD` when the provider requires authentication.
-   The mail transport requires TLS.
-4. Keep the existing production `JWT_SECRET_KEY` configured; it signs
-   unsubscribe links. Do not rotate it solely for this feature.
-5. Set `PESAGUARD_STATUS_MONITOR_TOKEN` to a newly generated random value of
-   at least 32 characters in the backend runtime and set the same value as the
-   GitHub Actions repository secret. Never commit the token or expose it in
-   logs.
-6. Set `PESAGUARD_CORS_ALLOWED_ORIGINS` to allow both
-   `https://api.pesaguard.victorkipruto.com` and
-   `https://status.pesaguard.victorkipruto.com`. An explicit value replaces
-   defaults, so retain any other origins required by clients.
-7. Ensure `.github/workflows/public-status-monitor.yml` is on the default
-   branch and configure the Actions secret before enabling the workflow.
-   It polls every five minutes and can also be manually dispatched.
+6. Confirm the protected `production` GitHub environment has
+   `RENDER_PRODUCTION_DEPLOY_HOOK` and `PRODUCTION_HEALTH_URL` configured.
+   Merge the reviewed change to `main` only after these prerequisites are
+   ready; the release workflow builds and deploys on `main`.
+7. The `.github/workflows/public-status-monitor.yml` workflow runs on the
+   default branch every five minutes and can also be manually dispatched.
 
 ### Production smoke checks
 
