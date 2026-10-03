@@ -252,6 +252,16 @@ class EmailService:
             return "SMTP delivery requires TLS"
         return None
 
+    def send_email(
+        self,
+        recipient_email: str,
+        subject: str,
+        html_content: str,
+        text_content: Optional[str] = None,
+    ) -> tuple[bool, Optional[str]]:
+        """Send a general transactional email through the configured SMTP transport."""
+        return self._send_email(recipient_email, subject, html_content, text_content)
+
     def _send_email(
         self,
         recipient_email: str,
@@ -459,4 +469,3 @@ class EmailService:
             }
             for e in emails
         ]
-

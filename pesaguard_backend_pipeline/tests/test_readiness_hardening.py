@@ -198,6 +198,58 @@ def test_dashboard_health_returns_ok_when_services_available(dashboard_client, m
     assert response.status_code in (200, 503)
     assert "checks" in response.json
 
+
+def test_public_status_is_public_sanitized_and_allows_status_site(dashboard_client, monkeypatch):
+    client, dashboard_app = dashboard_client
+    monkeypatch.delenv("PESAGUARD_CORS_ALLOWED_ORIGINS", raising=False)
+    import public_status
+
+    monkeypatch.setattr(public_status, "_site_services", lambda: [
+        {"id": "public-website", "name": "Public website", "status": "operational"},
+        {"id": "dashboard-site", "name": "Dashboard", "status": "operational"},
+        {"id": "documentation-site", "name": "Documentation", "status": "operational"},
+        {"id": "status-site", "name": "Status website", "status": "operational"},
+    ])
+    monkeypatch.setattr(dashboard_app, "build_health_payload", lambda: {
+        "status": "ok",
+        "checks": {
+            "database": {"status": "ok"},
+            "kafka": {"status": "ok"},
+            "redis": {"status": "ok"},
+            "daraja": {"status": "ok"},
+        },
+    })
+
+    response = client.get(
+        "/public/status",
+        headers={"Origin": "https://status.pesaguard.victorkipruto.com"},
+    )
+
+    assert response.status_code in (200, 503)
+    assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json()["verified"] is True
+
+
+def test_public_status_subscription_cors_preflight_accepts_status_site(dashboard_client, monkeypatch):
+    client, _ = dashboard_client
+    monkeypatch.delenv("PESAGUARD_CORS_ALLOWED_ORIGINS", raising=False)
+
+    response = client.options(
+        "/public/status/subscriptions",
+        headers={
+            "Origin": "https://status.pesaguard.victorkipruto.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
+    assert "POST" in response.headers["Access-Control-Allow-Methods"]
+    assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
+
+
 def test_check_kafka_connectivity_returns_failed_when_kafka_dependency_is_missing(monkeypatch):
     monkeypatch.setitem(sys.modules, "kafka", types.ModuleType("kafka"))
     import health as health_module

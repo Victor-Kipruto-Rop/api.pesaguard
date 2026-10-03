@@ -31,6 +31,7 @@ from event_store import EventStore
 from export_routes import bp as export_bp
 from ingestion import IngestionService
 from health import build_health_payload
+from public_status import create_public_status_blueprint
 from logging_utils import configure_logging, get_correlation_id, set_correlation_id
 from metrics import build_metrics_payload, record_security_event
 from models import Base, DeadLetter, Discrepancy, DiscrepancyFilterPreset, ImportJob, LineageRecord, MerchantMetric, Transaction, UserAccount
@@ -69,6 +70,8 @@ app = Flask(__name__)
 app.register_blueprint(tenant_org_bp)
 runtime_config = RuntimeConfig.from_env()
 PUBLIC_API_URL = runtime_config.public_api_url
+STATUS_SITE_ORIGIN = "https://status.pesaguard.victorkipruto.com"
+DEFAULT_CORS_ALLOWED_ORIGINS = f"{PUBLIC_API_URL},{STATUS_SITE_ORIGIN}"
 assert_auth_configuration()
 app.config["MAX_CONTENT_LENGTH"] = runtime_config.api_body_limit
 app.config["PESAGUARD_WEBHOOK_MAX_BODY_BYTES"] = runtime_config.webhook_body_limit
@@ -395,6 +398,9 @@ app.register_blueprint(
         require_auth_fn=require_auth,
         current_user_fn=get_current_user,
     )
+)
+app.register_blueprint(
+    create_public_status_blueprint(SessionLocal, build_health_payload)
 )
 
 
@@ -936,7 +942,9 @@ def enforce_api_security():
     """Enforce payload size checks, strict IP security, distributed rate limiting, and RBAC."""
     if request.method == "OPTIONS":
         allowed_origins = {
-            origin.strip() for origin in os.getenv("PESAGUARD_CORS_ALLOWED_ORIGINS", PUBLIC_API_URL).split(",")
+            origin.strip() for origin in os.getenv(
+                "PESAGUARD_CORS_ALLOWED_ORIGINS", DEFAULT_CORS_ALLOWED_ORIGINS
+            ).split(",")
             if origin.strip() and origin.strip() != "*"
         }
         origin = request.headers.get("Origin")
@@ -980,7 +988,7 @@ def enforce_api_security():
                 "error": "authentication_unavailable",
                 "message": "Authentication state is temporarily unavailable.",
             }), 503
-    if _api_auth_required():
+    if _api_auth_required() and not request.path.startswith("/public/status"):
         if not token:
             record_security_event()
             return jsonify({"error": "authentication_failed", "message": "Valid bearer authentication is required."}), 401
@@ -1007,7 +1015,9 @@ def _inject_security_headers(response: Response) -> Response:
     """Inject robust security and CORS headers into all API responses."""
     allowed_origins = {
         origin.strip()
-        for origin in os.getenv("PESAGUARD_CORS_ALLOWED_ORIGINS", PUBLIC_API_URL).split(",")
+        for origin in os.getenv(
+            "PESAGUARD_CORS_ALLOWED_ORIGINS", DEFAULT_CORS_ALLOWED_ORIGINS
+        ).split(",")
         if origin.strip() and origin.strip() != "*"
     }
     origin = request.headers.get("Origin")
@@ -1026,7 +1036,7 @@ def _inject_security_headers(response: Response) -> Response:
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     if request.path == "/docs":
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self'"
-    if request.path.startswith(("/v1/", "/tenant/", "/tenants/", "/providers", "/metrics", "/discrepancies", "/incidents")):
+    if request.path.startswith(("/v1/", "/tenant/", "/tenants/", "/providers", "/metrics", "/discrepancies", "/incidents", "/public/status")):
         response.headers["Cache-Control"] = "no-store"
     if _request_is_https():
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -2335,4 +2345,3 @@ if __name__ == "__main__":
     port = runtime_config.port
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() in {"true", "1", "yes"}
     app.run(host=os.getenv("PESAGUARD_BIND_HOST", "127.0.0.1"), port=port, debug=debug_mode)
-
