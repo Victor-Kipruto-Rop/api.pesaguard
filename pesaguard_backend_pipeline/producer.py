@@ -32,11 +32,13 @@ def publish_versioned_event(event: Any, *, producer: Any = None) -> Any:
     event = validate_event(event)
     from logging_utils import bind_observability_context
     from observability import trace_span
+    persisted_traceparent = str(event.metadata.get("traceparent") or "").strip()
     bind_observability_context(
         correlation_id=event.correlation_id,
         transaction_id=event.aggregate_id,
         event_id=event.event_id,
         tenant_id=event.tenant_id,
+        **({"traceparent": persisted_traceparent} if persisted_traceparent else {}),
     )
     topic = EVENT_TYPE_TOPICS[event.event_type]
     payload = event.to_dict()
@@ -44,7 +46,10 @@ def publish_versioned_event(event: Any, *, producer: Any = None) -> Any:
         # Keep tenant/account-related events ordered without assuming global ordering.
         partition_key = str(event.metadata.get("partition_key") or event_partition_key(event.to_dict()))
         key = partition_key.encode("utf-8")
-        with trace_span("kafka.publish", topic=topic, event_type=event.event_type):
+        span_fields = {"topic": topic, "event_type": event.event_type}
+        if persisted_traceparent:
+            span_fields["traceparent"] = persisted_traceparent
+        with trace_span("kafka.publish", **span_fields):
             from observability import inject_trace_context
             trace_headers = inject_trace_context({})
             return producer.send(topic, key=key, value=payload, headers=[
@@ -243,15 +248,34 @@ def publish_transaction_event(
         _fallback_to_dead_letter_queue(topic, payload, error_msg)
         raise CircuitBreakerOpenException(error_msg)
 
+    event_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    persisted_traceparent = str(event_metadata.get("traceparent") or "").strip()
+    if persisted_traceparent:
+        from logging_utils import bind_observability_context
+        from observability import extract_trace_context
+
+        parsed_trace = extract_trace_context({"traceparent": persisted_traceparent})
+        if parsed_trace:
+            bind_observability_context(
+                trace_id=parsed_trace["trace_id"],
+                span_id=parsed_trace["span_id"],
+                traceparent=persisted_traceparent,
+            )
+        else:
+            persisted_traceparent = ""
+
     # Format trace headers
     msg_headers: List[tuple[str, bytes]] = list(headers) if headers else []
     if not any(str(name).lower() == "traceparent" for name, _ in msg_headers):
-        try:
-            from observability import inject_trace_context
-            carrier = inject_trace_context({})
-            msg_headers.append(("traceparent", carrier["traceparent"].encode("ascii")))
-        except Exception:
-            logger.debug("Could not inject W3C traceparent header for Kafka publish", exc_info=True)
+        if persisted_traceparent:
+            msg_headers.append(("traceparent", persisted_traceparent.encode("ascii")))
+        else:
+            try:
+                from observability import inject_trace_context
+                carrier = inject_trace_context({})
+                msg_headers.append(("traceparent", carrier["traceparent"].encode("ascii")))
+            except Exception:
+                logger.debug("Could not inject W3C traceparent header for Kafka publish", exc_info=True)
     if correlation_id:
         msg_headers.append(("correlation_id", correlation_id.encode("utf-8")))
     

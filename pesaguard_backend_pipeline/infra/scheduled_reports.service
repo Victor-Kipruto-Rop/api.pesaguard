@@ -1,0 +1,14 @@
+[Unit]
+Description=PesaGuard Scheduled Reports Runner
+After=network.target
+
+[Service]
+Type=oneshot
+User=pesaguard
+Group=pesaguard
+WorkingDirectory=/home/pesaguard/Desktop/pesaguard
+EnvironmentFile=/etc/pesaguard/.env
+ExecStart=/usr/bin/env python3 /home/pesaguard/Desktop/pesaguard/pesaguard_backend_pipeline/scheduled_reports.py --tenant all --days 1 --type daily
+
+[Install]
+WantedBy=multi-user.target

@@ -6,16 +6,18 @@ Role Hierarchy (from most to least privileged):
   3. customer-user: Read-only access to discrepancies and analytics (customer portal)
   4. read-only: Read-only viewer access (minimal permissions)
 
-Token Expiry: Configurable via TOKEN_EXPIRY_HOURS (default 24h)
+Access tokens expire after at most 15 minutes. Refresh tokens use persisted rotation state.
 Auth Required: Default on; controlled via PESAGUARD_API_AUTH_REQUIRED
 """
 
 from __future__ import annotations
 
-from environment import required_env
+from environment import required_env, runtime_environment
 
 import logging
 import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import re
@@ -27,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import jwt
 from flask import g, jsonify, request
-from sqlalchemy import Boolean, Column, DateTime, String, Text, create_engine, inspect, text
+from sqlalchemy import Boolean, Column, DateTime, String, Text, and_, create_engine, inspect, or_, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -44,21 +46,11 @@ def _record_security_event() -> None:
 _INSECURE_DEV_SECRET = "pesaguard-secret-key-change-in-prod"
 
 
-def _parse_token_expiry_hours() -> int:
-    raw_value = os.getenv("PESAGUARD_TOKEN_EXPIRY_HOURS", "24")
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("PESAGUARD_TOKEN_EXPIRY_HOURS must be an integer from 1 to 168.") from exc
-    if not 1 <= value <= 168:
-        raise RuntimeError("PESAGUARD_TOKEN_EXPIRY_HOURS must be an integer from 1 to 168.")
-    return value
-
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
     if (
         os.getenv("PESAGUARD_ALLOW_INSECURE_DEV_SECRET") == "1"
-        and os.getenv("FLASK_ENV", os.getenv("ENVIRONMENT", "development")).lower() not in {"production", "prod"}
+        and runtime_environment() != "production"
     ):
         SECRET_KEY = _INSECURE_DEV_SECRET
         logger.warning(
@@ -75,7 +67,6 @@ if len(SECRET_KEY.encode("utf-8")) < 32:
     raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes.")
 
 ALGORITHM = "HS256"
-TOKEN_EXPIRY_HOURS = _parse_token_expiry_hours()
 JWT_ISSUER = os.getenv("JWT_ISSUER", "pesaguard")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "pesaguard-api")
 TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -92,7 +83,38 @@ if JWT_ACTIVE_KID not in JWT_KEYS:
     raise RuntimeError("JWT_ACTIVE_KID must identify a configured JWT signing key.")
 if any(len(secret.encode("utf-8")) < 32 for secret in JWT_KEYS.values()):
     raise RuntimeError("All configured JWT signing keys must contain at least 32 bytes.")
-_JWT_REQUIRED_CLAIMS = ["exp", "iat", "jti", "user_id", "username", "tenant_id", "type", "iss", "aud", "auth_version"]
+_JWT_REQUIRED_CLAIMS = [
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "sub",
+    "tenant_id",
+    "type",
+    "iss",
+    "aud",
+    "auth_version",
+    "scope",
+]
+_REFRESH_TOKEN_REQUIRED_CLAIMS = [
+    "exp",
+    "iat",
+    "jti",
+    "user_id",
+    "username",
+    "tenant_id",
+    "type",
+    "iss",
+    "aud",
+    "auth_version",
+    "family_id",
+]
+try:
+    ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("PESAGUARD_ACCESS_TOKEN_TTL_MINUTES", "15"))
+except ValueError as exc:
+    raise RuntimeError("PESAGUARD_ACCESS_TOKEN_TTL_MINUTES must be an integer from 1 to 15.") from exc
+if not 1 <= ACCESS_TOKEN_TTL_MINUTES <= 15:
+    raise RuntimeError("PESAGUARD_ACCESS_TOKEN_TTL_MINUTES must be an integer from 1 to 15.")
 
 
 class AuthenticationUnavailable(RuntimeError):
@@ -101,6 +123,25 @@ class AuthenticationUnavailable(RuntimeError):
 
 def _valid_tenant_id(value: Any) -> bool:
     return isinstance(value, str) and bool(TENANT_ID_PATTERN.fullmatch(value))
+
+
+def developer_scope_tenant_id(organization_id: str, project_id: str, environment_id: str) -> str:
+    """Create the canonical Developer Platform tenant partition.
+
+    The IDs must already use lowercase, hyphenated UUID spelling. The digest
+    input is UTF-8("developer-platform:v1|<org>|<project>|<environment>").
+    """
+    try:
+        canonical_ids = tuple(
+            str(uuid.UUID(value))
+            for value in (organization_id, project_id, environment_id)
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("Organization, project, and environment IDs must be UUIDs.") from exc
+    if canonical_ids != (organization_id, project_id, environment_id):
+        raise ValueError("Organization, project, and environment IDs must be canonical lowercase UUIDs.")
+    scope = "developer-platform:v1|" + "|".join(canonical_ids)
+    return "dp_" + hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
 
 def parse_bearer_token(header: str) -> Optional[str]:
@@ -145,13 +186,50 @@ def _session_is_active(session_id: Optional[str], user_id: str, tenant_id: str) 
     session = _RevocationSession()
     try:
         row = session.execute(
-            text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
+            text("SELECT active, state, last_activity_at, expires_at, absolute_expires_at FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
             {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
         ).first()
-        return bool(row and row[0])
+        if not row or not row[0] or (row[1] or "ACTIVE") != "ACTIVE":
+            return False
+        now = datetime.now(timezone.utc)
+        last_activity = row[2]
+        expires_at = row[3]
+        absolute_expires_at = row[4]
+        for timestamp in (last_activity, expires_at, absolute_expires_at):
+            if timestamp is not None and timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+        idle_minutes = max(1, int(os.getenv("PESAGUARD_SESSION_IDLE_TIMEOUT_MINUTES", "60")))
+        expired = (
+            (expires_at is not None and (expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at) <= now)
+            or (absolute_expires_at is not None and (absolute_expires_at.replace(tzinfo=timezone.utc) if absolute_expires_at.tzinfo is None else absolute_expires_at) <= now)
+            or (last_activity is not None and (last_activity.replace(tzinfo=timezone.utc) if last_activity.tzinfo is None else last_activity) + timedelta(minutes=idle_minutes) <= now)
+        )
+        if expired:
+            session.execute(
+                text("UPDATE user_sessions SET active = false, state = 'EXPIRED' WHERE id = :session_id"),
+                {"session_id": session_id},
+            )
+            session.commit()
+            return False
+        session.execute(
+            text("UPDATE user_sessions SET last_activity_at = :last_activity_at WHERE id = :session_id AND state = 'ACTIVE'"),
+            {"last_activity_at": now, "session_id": session_id},
+        )
+        session.commit()
+        return True
     except Exception as exc:
         session.rollback()
-        raise AuthenticationUnavailable("Session state is unavailable") from exc
+        # Keep older test/bootstrap schemas readable while production migrations
+        # add the lifecycle columns used by the primary path above.
+        try:
+            legacy_row = session.execute(
+                text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
+                {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
+            ).first()
+            return bool(legacy_row and legacy_row[0])
+        except Exception:
+            session.rollback()
+            raise AuthenticationUnavailable("Session state is unavailable") from exc
     finally:
         session.close()
 
@@ -192,7 +270,7 @@ def _account_is_active_and_current(user_id: str, tenant_id: str, authorization_v
 
 def auth_required() -> bool:
     """Allow auth bypass only outside production deployments."""
-    environment = os.getenv("FLASK_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    environment = runtime_environment()
     if environment in {"production", "prod"}:
         return True
     return os.getenv("PESAGUARD_API_AUTH_REQUIRED", "1") == "1"
@@ -200,7 +278,7 @@ def auth_required() -> bool:
 
 def assert_auth_configuration() -> None:
     """Reject an explicitly disabled API auth policy in production."""
-    environment = os.getenv("FLASK_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    environment = runtime_environment()
     if environment in {"production", "prod"} and os.getenv("PESAGUARD_API_AUTH_REQUIRED", "1") != "1":
         raise RuntimeError("PESAGUARD_API_AUTH_REQUIRED must be enabled in production")
 
@@ -312,12 +390,20 @@ class User:
         tenant_id: str,
         roles: List[str],
         permissions: List[str],
+        organization_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        principal_type: str = "user",
+        api_key_ip_allowlist: Optional[List[str]] = None,
     ):
         self.user_id = user_id
         self.username = username
         self.tenant_id = tenant_id
+        self.organization_id = organization_id
         self.roles = roles
         self.permissions = permissions
+        self.session_id = session_id
+        self.principal_type = principal_type
+        self.api_key_ip_allowlist = api_key_ip_allowlist or []
 
 
 class IdentityAccessService:
@@ -331,6 +417,7 @@ class IdentityAccessService:
         roles: Optional[List[str]] = None,
         permissions: Optional[List[str]] = None,
         attributes: Optional[Dict[str, Any]] = None,
+        organization_id: Optional[str] = None,
     ) -> User:
         normalized_roles = []
         for role in (roles or []):
@@ -358,11 +445,14 @@ class IdentityAccessService:
             tenant_id=tenant_id,
             roles=normalized_roles,
             permissions=trusted_permissions,
+            organization_id=organization_id,
         )
 
 
 class AuthRBAC:
     """Authentication, JWT lifecycle, and Role-Based Access Control manager."""
+
+    ACCESS_TOKEN_TTL_MINUTES = ACCESS_TOKEN_TTL_MINUTES
 
     ROLE_PERMISSIONS: Dict[str, List[str]] = {
         "owner": [
@@ -394,6 +484,7 @@ class AuthRBAC:
             "manage:all_tenants",
             "manage:tenant_isolation",
             "manage:security",
+            "manage:sso",
         ],
         "admin": [
             "read:discrepancies",
@@ -421,6 +512,7 @@ class AuthRBAC:
             "export:communications",
             "manage:api_keys",
             "manage:mfa",
+            "manage:sso",
         ],
         "finance": [
             "read:discrepancies",
@@ -500,6 +592,7 @@ class AuthRBAC:
             "manage:api_keys",
             "manage:mfa",
             "manage:all_tenants",
+            "manage:sso",
         ],
         "operator": [
             "read:discrepancies",
@@ -580,6 +673,171 @@ class AuthRBAC:
                 normalized_roles.append(normalized)
         return normalized_roles
 
+    @staticmethod
+    def normalize_machine_scopes(scopes: List[str]) -> List[str]:
+        """Normalize machine scopes against the least-privilege registry.
+
+        Deny by default, split by failure class:
+
+        - REJECTED (raises ValueError): malformed input, wildcards, internal
+          and privileged namespaces, machine-denied privileges, and scopes
+          absent from Core's customer scope registry.
+        """
+        if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+            raise ValueError("Machine scopes must be a list of strings.")
+        if not scopes:
+            raise ValueError("Machine scopes must be a non-empty list.")
+        try:
+            from pesaguard_backend_pipeline.authorization_policy import (
+                CORE_PERMISSIONS,
+                MACHINE_DENIED,
+                is_forbidden_customer_scope,
+            )
+        except ImportError:
+            from authorization_policy import (
+                CORE_PERMISSIONS,
+                MACHINE_DENIED,
+                is_forbidden_customer_scope,
+            )
+        normalized = set()
+        for scope in scopes:
+            value = scope.strip()
+            if not value or value.count(":") != 1:
+                raise ValueError("Machine scopes must use resource:action or action:resource form.")
+            left, right = (part.strip() for part in value.split(":", 1))
+            if not left or not right:
+                raise ValueError("Machine scopes must use resource:action or action:resource form.")
+            route_ordered = f"{left}:{right}"
+            reverse_ordered = f"{right}:{left}"
+            for candidate in (route_ordered, reverse_ordered):
+                if is_forbidden_customer_scope(candidate):
+                    raise ValueError(
+                        f"Machine scope is not grantable to customers: {candidate}"
+                    )
+                if candidate in MACHINE_DENIED:
+                    raise ValueError(
+                        f"Machine scope is restricted to human roles: {candidate}"
+                    )
+            chosen = route_ordered if route_ordered in CORE_PERMISSIONS else (
+                reverse_ordered if reverse_ordered in CORE_PERMISSIONS else None)
+            if chosen is None:
+                raise ValueError("Machine scope is not present in Core's customer scope registry.")
+            normalized.add(chosen)
+        return sorted(normalized)
+
+    @classmethod
+    def generate_machine_access_token(
+        cls,
+        principal_id: str,
+        principal_type: str,
+        tenant_id: str,
+        authorization_version: int,
+        scopes: List[str],
+    ) -> str:
+        """Issue a short-lived access token for a persisted service or API-client identity."""
+        if principal_type not in {"service", "api_client"}:
+            raise ValueError("Unsupported machine principal type.")
+        if not isinstance(principal_id, str) or not principal_id.strip():
+            raise ValueError("principal_id must be a non-empty string.")
+        if not _valid_tenant_id(tenant_id):
+            raise ValueError("tenant_id must match the configured tenant ID format.")
+        permissions = cls.normalize_machine_scopes(scopes)
+        now = datetime.now(timezone.utc)
+        payload = {
+            "type": "access",
+            "principal_type": principal_type,
+            "principal_id": principal_id,
+            "iss": JWT_ISSUER,
+            "aud": JWT_AUDIENCE,
+            "sub": principal_id,
+            "user_id": principal_id,
+            "username": f"{principal_type}:{principal_id}",
+            "tenant_id": tenant_id,
+            "auth_version": int(authorization_version),
+            "jti": str(uuid.uuid4()),
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),
+            "scope": " ".join(permissions),
+            "permissions": permissions,
+            "roles": [],
+        }
+        return jwt.encode(payload, _jwt_signing_key(), algorithm=ALGORITHM, headers={"kid": JWT_ACTIVE_KID})
+
+    @classmethod
+    def _verify_machine_principal(
+        cls,
+        principal_type: str,
+        principal_id: str,
+        tenant_id: str,
+        authorization_version: Any,
+        token_permissions: Any,
+    ) -> Optional[User]:
+        """Resolve current machine-identity status and scopes for every authenticated request."""
+        if not isinstance(token_permissions, list) or not all(
+            isinstance(permission, str) for permission in token_permissions
+        ):
+            return None
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            try:
+                from pesaguard_backend_pipeline.models import ApiClientIdentity, ServiceIdentity
+            except ImportError:
+                from models import ApiClientIdentity, ServiceIdentity
+
+            if principal_type == "service":
+                record = session.query(ServiceIdentity).filter_by(
+                    id=principal_id, tenant_id=tenant_id, status="active"
+                ).first()
+                if record is None or record.authorization_version != authorization_version:
+                    return None
+                current_scopes = record.scopes or []
+            elif principal_type == "api_client":
+                record = session.query(ApiClientIdentity).filter_by(
+                    id=principal_id, tenant_id=tenant_id, status="active"
+                ).first()
+                if record is None:
+                    return None
+                attributes = record.attributes or {}
+                if int(attributes.get("authorization_version", 1)) != authorization_version:
+                    return None
+                current_scopes = record.scopes or []
+                if record.service_identity_id:
+                    service = session.query(ServiceIdentity).filter_by(
+                        id=record.service_identity_id, tenant_id=tenant_id, status="active"
+                    ).first()
+                    if service is None:
+                        return None
+                    current_scopes = sorted(set(current_scopes).intersection(service.scopes or []))
+            else:
+                return None
+            allowed_permissions = set(cls.normalize_machine_scopes(current_scopes))
+            permissions = sorted(set(token_permissions).intersection(allowed_permissions))
+            if set(token_permissions) != set(permissions):
+                return None
+            principal = User(
+                user_id=principal_id,
+                username=f"{principal_type}:{principal_id}",
+                tenant_id=tenant_id,
+                roles=[],
+                permissions=permissions,
+                principal_type=principal_type,
+            )
+            principal.permissions = sorted(
+                set(principal.permissions).union(cls._assigned_role_permissions(principal))
+            )
+            return principal
+        except (TypeError, ValueError):
+            logger.warning("Machine identity has invalid authorization state", exc_info=True)
+            return None
+        except Exception as exc:
+            session.rollback()
+            logger.exception("Failed to verify machine identity status")
+            raise AuthenticationUnavailable("Machine identity authentication is unavailable") from exc
+        finally:
+            session.close()
+
     @classmethod
     def generate_token(
         cls,
@@ -588,30 +846,41 @@ class AuthRBAC:
         tenant_id: str,
         roles: List[str],
         session_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
     ) -> str:
-        """Generate a signed JWT token containing claims, unique JTI, and permissions."""
+        """Generate a short-lived access JWT with explicit security claims and minimal payload data."""
         if not _valid_tenant_id(tenant_id):
             raise ValueError("tenant_id must match the configured tenant ID format.")
         authorization_version = _account_authorization_version(user_id, tenant_id)
         normalized_roles = cls._normalize_roles_for_token(roles)
         permissions = cls._get_permissions_for_roles(normalized_roles)
         now = datetime.now(timezone.utc)
+        jti = str(uuid.uuid4())
+        token_scope = " ".join(sorted(permissions))
         payload = {
             "type": "access",
             "iss": JWT_ISSUER,
             "aud": JWT_AUDIENCE,
+            "sub": user_id,
             "auth_version": authorization_version,
             "user_id": user_id,
-            "username": username,
             "tenant_id": tenant_id,
-            "roles": normalized_roles,
-            "permissions": permissions,
-            "jti": str(uuid.uuid4()),
+            "jti": jti,
             "iat": now,
-            "exp": now + timedelta(hours=TOKEN_EXPIRY_HOURS),
+            "nbf": now,
+            "exp": now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),
+            "scope": token_scope,
         }
+        if organization_id:
+            payload["organization_id"] = str(organization_id)
         if session_id:
             payload["session_id"] = str(session_id)
+        if username:
+            payload["username"] = username
+        if normalized_roles:
+            payload["roles"] = normalized_roles
+        if permissions:
+            payload["permissions"] = permissions
         return jwt.encode(payload, _jwt_signing_key(), algorithm=ALGORITHM, headers={"kid": JWT_ACTIVE_KID})
 
     @classmethod
@@ -714,8 +983,8 @@ class AuthRBAC:
             return None
 
         try:
-            user_id = payload["user_id"]
-            username = payload["username"]
+            user_id = payload.get("sub") or payload["user_id"]
+            username = payload.get("username") or payload.get("sub") or "unknown-user"
             tenant_id = payload["tenant_id"]
         except KeyError as exc:
             logger.warning("JWT payload missing mandatory claim: %s", exc)
@@ -730,6 +999,18 @@ class AuthRBAC:
         if not _valid_tenant_id(tenant_id):
             logger.warning("JWT payload has invalid tenant_id claim")
             return None
+        principal_type = payload.get("principal_type")
+        if principal_type is not None:
+            principal_id = payload.get("principal_id")
+            if principal_id != user_id:
+                return None
+            return cls._verify_machine_principal(
+                principal_type,
+                principal_id,
+                tenant_id,
+                payload.get("auth_version"),
+                payload.get("permissions"),
+            )
         if not _session_is_active(payload.get("session_id"), user_id, tenant_id):
             logger.warning("JWT payload references an inactive or unknown session")
             return None
@@ -765,13 +1046,19 @@ class AuthRBAC:
             logger.warning("JWT payload contains permissions not consistent with confirmed roles for user %s", user_id)
             return None
 
-        return User(
+        principal = User(
             user_id=user_id,
             username=username,
             tenant_id=tenant_id,
             roles=normalized_roles,
             permissions=trusted_permissions,
+            organization_id=payload.get("organization_id"),
+            session_id=payload.get("session_id"),
         )
+        principal.permissions = sorted(
+            set(principal.permissions).union(cls._assigned_role_permissions(principal))
+        )
+        return principal
 
     @classmethod
     def verify_refresh_token(cls, token: str) -> Optional[User]:
@@ -784,7 +1071,7 @@ class AuthRBAC:
                 issuer=JWT_ISSUER,
                 audience=JWT_AUDIENCE,
                 leeway=JWT_LEEWAY_SECONDS,
-                options={"require": _JWT_REQUIRED_CLAIMS},
+                options={"require": _REFRESH_TOKEN_REQUIRED_CLAIMS},
             )
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             return None
@@ -898,7 +1185,7 @@ class AuthRBAC:
                     issuer=JWT_ISSUER,
                     audience=JWT_AUDIENCE,
                     leeway=JWT_LEEWAY_SECONDS,
-                    options={"verify_exp": False, "require": _JWT_REQUIRED_CLAIMS},
+                    options={"verify_exp": False, "require": _REFRESH_TOKEN_REQUIRED_CLAIMS},
                 )
                 family_id = payload.get("family_id")
             except jwt.InvalidTokenError:
@@ -915,7 +1202,7 @@ class AuthRBAC:
                 issuer=JWT_ISSUER,
                 audience=JWT_AUDIENCE,
                 leeway=JWT_LEEWAY_SECONDS,
-                options={"require": _JWT_REQUIRED_CLAIMS},
+                options={"require": _REFRESH_TOKEN_REQUIRED_CLAIMS},
             )
         except jwt.InvalidTokenError:
             return None
@@ -1061,9 +1348,269 @@ class AuthRBAC:
             session.close()
 
     @classmethod
+    def revoke_refresh_token(cls, token: str, reason: str = "refresh token revoked") -> None:
+        """Revoke a specific refresh token or an entire refresh family if reuse is detected."""
+        try:
+            payload = jwt.decode(
+                token,
+                _jwt_verification_key(token),
+                algorithms=[ALGORITHM],
+                issuer=JWT_ISSUER,
+                audience=JWT_AUDIENCE,
+                leeway=JWT_LEEWAY_SECONDS,
+                options={"verify_exp": False, "require": ["jti", "family_id"]},
+            )
+        except jwt.InvalidTokenError:
+            return
+        family_id = payload.get("family_id")
+        if not isinstance(family_id, str):
+            return
+        cls._revoke_refresh_family(family_id, reason)
+
+    @classmethod
+    def revoke_api_key(cls, key_id: str, tenant_id: str, reason: str = "api key revoked") -> None:
+        """Mark a tenant API key as no longer trusted."""
+        from models import ApiKeyRecord
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            record = session.query(ApiKeyRecord).filter_by(id=key_id, tenant_id=tenant_id).first()
+            if record is not None:
+                record.active = False
+                record.revoked_at = datetime.now(timezone.utc)
+                record.api_metadata = {**(record.api_metadata or {}), "revoked_reason": reason}
+                session.commit()
+        finally:
+            session.close()
+
+    @classmethod
+    def revoke_service_credential(cls, credential_id: str, tenant_id: str, reason: str = "service credential revoked") -> None:
+        """Mark a workload/service credential as revoked."""
+        from models import ServiceCredentialRecord
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            record = session.query(ServiceCredentialRecord).filter_by(id=credential_id, tenant_id=tenant_id).first()
+            if record is not None:
+                record.status = "revoked"
+                record.revoked_at = datetime.now(timezone.utc)
+                record.reason = reason
+                record.revoked_by = "system"
+                session.commit()
+        finally:
+            session.close()
+
+    @classmethod
+    def revoke_user_access(cls, user_id: str, tenant_id: str, reason: str = "user revocation") -> None:
+        """Terminate all sessions, refresh tokens, and per-user credentials for a user."""
+        from models import ApiKeyRecord, ServiceCredentialRecord, UserSession
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            now = datetime.now(timezone.utc)
+            for record in session.query(UserSession).filter_by(user_id=user_id, tenant_id=tenant_id).all():
+                record.active = False
+                record.state = "REVOKED"
+                record.revoked_at = now
+                try:
+                    cls.revoke_session_tokens(record.id, reason=reason)
+                except AuthenticationUnavailable:
+                    logger.warning("Unable to revoke refresh tokens for revoked session %s", record.id)
+            session.query(ApiKeyRecord).filter(
+                ApiKeyRecord.tenant_id == tenant_id,
+                ApiKeyRecord.active.is_(True),
+                ApiKeyRecord.api_metadata.isnot(None),
+            ).all()
+            for record in session.query(ApiKeyRecord).filter(
+                ApiKeyRecord.tenant_id == tenant_id,
+                ApiKeyRecord.active.is_(True),
+            ).all():
+                metadata = record.api_metadata or {}
+                if isinstance(metadata, dict) and metadata.get("owner_user_id") == user_id:
+                    record.active = False
+                    record.revoked_at = now
+            for record in session.query(ServiceCredentialRecord).filter(
+                ServiceCredentialRecord.tenant_id == tenant_id,
+                ServiceCredentialRecord.status == "active",
+            ).all():
+                metadata = record.credential_metadata or {}
+                if isinstance(metadata, dict) and metadata.get("owner_user_id") == user_id:
+                    record.status = "revoked"
+                    record.revoked_at = now
+                    record.reason = reason
+                    record.revoked_by = "system"
+            session.commit()
+        finally:
+            session.close()
+
+    @classmethod
+    def revoke_device_access(cls, device_id: str, tenant_id: str, reason: str = "device revocation") -> None:
+        """End all sessions and refresh tokens associated with a specific device."""
+        from models import UserSession
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            now = datetime.now(timezone.utc)
+            records = session.query(UserSession).filter_by(device_id=device_id, tenant_id=tenant_id, active=True).all()
+            for record in records:
+                record.active = False
+                record.state = "REVOKED"
+                record.revoked_at = now
+                cls.revoke_session_tokens(record.id, reason=reason)
+            session.commit()
+        finally:
+            session.close()
+
+    @classmethod
+    def revoke_session_access(cls, session_id: str, tenant_id: Optional[str] = None, reason: str = "session revocation") -> None:
+        """Close one specific user session and its refresh family."""
+        from models import UserSession
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            query = session.query(UserSession).filter_by(id=session_id)
+            if tenant_id is not None:
+                query = query.filter_by(tenant_id=tenant_id)
+            record = query.first()
+            if record is not None:
+                record.active = False
+                record.state = "REVOKED"
+                record.revoked_at = datetime.now(timezone.utc)
+                cls.revoke_session_tokens(record.id, reason=reason)
+                session.commit()
+        finally:
+            session.close()
+
+    @classmethod
+    def emergency_global_revocation(cls, reason: str = "emergency global revocation") -> None:
+        """Immediately disable all active sessions, refresh tokens, and trusted API credentials."""
+        from models import ApiKeyRecord, ServiceCredentialRecord, UserSession
+
+        _ensure_revocation_store_ready()
+        session = _RevocationSession()
+        try:
+            now = datetime.now(timezone.utc)
+            for record in session.query(UserSession).filter(UserSession.active.is_(True)).all():
+                record.active = False
+                record.state = "REVOKED"
+                record.revoked_at = now
+                cls.revoke_session_tokens(record.id, reason=reason)
+            for record in session.query(ApiKeyRecord).filter(ApiKeyRecord.active.is_(True)).all():
+                record.active = False
+                record.revoked_at = now
+            for record in session.query(ServiceCredentialRecord).filter(ServiceCredentialRecord.status == "active").all():
+                record.status = "revoked"
+                record.revoked_at = now
+                record.reason = reason
+            session.commit()
+        finally:
+            session.close()
+
+    @classmethod
     def check_permission(cls, user: User, required_permission: str) -> bool:
-        """Check if a User principal holds the specified permission string."""
-        return required_permission in user.permissions
+        """Check token scopes and active database-backed role assignments."""
+        if required_permission in user.permissions:
+            return True
+        if getattr(user, "principal_type", "") in {"api_key", "developer_api_key"}:
+            return False
+        return required_permission in cls._assigned_role_permissions(user)
+
+    @classmethod
+    def check_resource_permission(cls, user: User, required_permission: str, resource_id: str) -> bool:
+        """Check a permission granted for the exact resource or a broader active scope."""
+        if cls.check_permission(user, required_permission):
+            return True
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            return False
+        return required_permission in cls._assigned_role_permissions(user, resource_id=resource_id)
+
+    @classmethod
+    def _assigned_role_permissions(cls, user: User, resource_id: Optional[str] = None) -> set[str]:
+        """Resolve active tenant/organization/team/resource role bindings without trusting JWT role data."""
+        if getattr(user, "principal_type", "") in {"api_key", "developer_api_key"}:
+            return set()
+        try:
+            try:
+                from pesaguard_backend_pipeline.models import (
+                    IAMPermission,
+                    IAMRole,
+                    IAMRoleBinding,
+                    IAMRolePermission,
+                    OrganizationMembership,
+                )
+            except ImportError:
+                from models import IAMPermission, IAMRole, IAMRoleBinding, IAMRolePermission, OrganizationMembership
+
+            subject_type = getattr(user, "principal_type", "user")
+            scope_filters = [
+                and_(
+                    IAMRoleBinding.scope_type == "tenant",
+                    IAMRoleBinding.scope_id == user.tenant_id,
+                )
+            ]
+            if subject_type == "user":
+                _ensure_revocation_store_ready()
+                membership_session = _RevocationSession()
+                try:
+                    memberships = membership_session.query(OrganizationMembership).filter_by(
+                        tenant_id=user.tenant_id,
+                        user_id=user.user_id,
+                        active=True,
+                    ).all()
+                    for membership in memberships:
+                        scope_filters.append(and_(
+                            IAMRoleBinding.scope_type == "organization",
+                            IAMRoleBinding.scope_id == membership.organization_id,
+                        ))
+                        if membership.team_id:
+                            scope_filters.append(and_(
+                                IAMRoleBinding.scope_type == "team",
+                                IAMRoleBinding.scope_id == membership.team_id,
+                            ))
+                finally:
+                    membership_session.close()
+            if resource_id is not None:
+                scope_filters.append(and_(
+                    IAMRoleBinding.scope_type == "resource",
+                    IAMRoleBinding.scope_id == resource_id,
+                ))
+
+            _ensure_revocation_store_ready()
+            session = _RevocationSession()
+            try:
+                rows = session.query(IAMPermission.name).join(
+                    IAMRolePermission, IAMRolePermission.permission_id == IAMPermission.id
+                ).join(
+                    IAMRole, IAMRole.id == IAMRolePermission.role_id
+                ).join(
+                    IAMRoleBinding, IAMRoleBinding.role_id == IAMRole.id
+                ).filter(
+                    IAMRoleBinding.tenant_id == user.tenant_id,
+                    IAMRoleBinding.subject_type == subject_type,
+                    IAMRoleBinding.subject_id == user.user_id,
+                    IAMRoleBinding.status == "active",
+                    IAMRole.status == "active",
+                    or_(*scope_filters),
+                ).all()
+                permissions = set()
+                for (name,) in rows:
+                    try:
+                        permissions.add(cls.normalize_machine_scopes([name])[0])
+                    except ValueError:
+                        logger.warning("Ignoring malformed database role permission")
+                return permissions
+            finally:
+                session.close()
+        except AuthenticationUnavailable:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to resolve database-backed role permissions")
+            raise AuthenticationUnavailable("Authorization state is unavailable") from exc
 
     @classmethod
     def check_tenant_access(cls, user: User, tenant_id: str) -> bool:
@@ -1075,7 +1622,7 @@ class AuthRBAC:
     @classmethod
     def verify_api_key(cls, api_key: str) -> Optional[User]:
         """Verify a tenant-scoped API key and return a constrained principal."""
-        if not isinstance(api_key, str) or not api_key.startswith("pk_"):
+        if not isinstance(api_key, str) or not api_key.startswith(("pk_", "pgk_")):
             return None
 
         _ensure_revocation_store_ready()
@@ -1096,23 +1643,37 @@ class AuthRBAC:
             if record is None or (record.expires_at is not None and record.expires_at <= now):
                 return None
 
-            role = cls.normalize_role_name(record.role)
-            if role is None:
-                logger.warning("API key %s has an invalid role", record.id)
-                return None
-            role_permissions = set(cls._get_permissions_for_roles([role]))
             scopes = record.scopes or []
             if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
                 return None
-            permissions = sorted(role_permissions.intersection(scopes))
+            try:
+                normalized_scopes = cls.normalize_machine_scopes(scopes)
+            except (TypeError, ValueError):
+                logger.warning("API key %s contains invalid scopes", record.id)
+                return None
+            metadata = record.api_metadata or {}
+            if not isinstance(metadata, dict):
+                return None
+            is_developer_key = metadata.get("source") == "developer-platform"
+            if is_developer_key:
+                ip_allowlist = metadata.get("ip_allowlist", [])
+                if not isinstance(ip_allowlist, list) or not all(
+                    isinstance(network, str) for network in ip_allowlist
+                ):
+                    return None
+            # The role column is retained for compatibility and display only.
+            # Every API key is authorized solely by validated persisted scopes.
             record.last_used_at = now
             session.commit()
             return User(
                 user_id=record.id,
                 username=f"api-key:{record.key_prefix}",
                 tenant_id=record.tenant_id,
-                roles=[role],
-                permissions=permissions,
+                roles=[],
+                permissions=normalized_scopes,
+                organization_id=metadata.get("organization_id"),
+                principal_type="developer_api_key" if is_developer_key else "api_key",
+                api_key_ip_allowlist=metadata.get("ip_allowlist", []) if is_developer_key else [],
             )
         except Exception as exc:
             session.rollback()
@@ -1130,9 +1691,14 @@ def require_auth(required_permission: Optional[str] = None):
             authentication_required = auth_required()
             auth_header = request.headers.get("Authorization", "")
             api_key = request.headers.get("X-API-Key", "").strip()
+            bearer_token = parse_bearer_token(auth_header) if auth_header else None
+            if bearer_token and bearer_token.startswith("pgk_"):
+                if api_key:
+                    return jsonify({"error": "ambiguous_authentication", "message": "Use either bearer or API-key authentication, not both."}), 400
+                api_key = bearer_token
 
-            if not auth_header and api_key:
-                user = AuthRBAC.verify_api_key(api_key)
+            if api_key and (not auth_header or (bearer_token and bearer_token.startswith("pgk_"))):
+                user = getattr(g, "user", None) or AuthRBAC.verify_api_key(api_key)
                 if user is None:
                     _record_security_event()
                     return jsonify({"error": "invalid_api_key", "message": "API key is invalid, expired, or revoked."}), 401
@@ -1161,10 +1727,52 @@ def require_auth(required_permission: Optional[str] = None):
                 _record_security_event()
                 return jsonify({"error": "invalid_token", "message": "Token is invalid, expired, or revoked."}), 401
 
-            if required_permission and not AuthRBAC.check_permission(user, required_permission):
-                _record_security_event()
-                logger.warning("User %s denied access. Required permission: %s", user.user_id, required_permission)
-                return jsonify({"error": "insufficient_permissions", "message": "Forbidden: Insufficient privileges."}), 403
+            if getattr(user, "principal_type", "") == "developer_api_key" and user.api_key_ip_allowlist:
+                try:
+                    from security_helpers import get_client_ip
+
+                    client_ip = ipaddress.ip_address(get_client_ip(request))
+                    ip_permitted = any(
+                        client_ip in ipaddress.ip_network(network, strict=False)
+                        for network in user.api_key_ip_allowlist
+                    )
+                except ValueError:
+                    ip_permitted = False
+                if not ip_permitted:
+                    _record_security_event()
+                    return jsonify({"error": "ip_not_allowed", "message": "This API key is not allowed from this IP address."}), 403
+
+            if required_permission:
+                try:
+                    permitted = AuthRBAC.check_permission(user, required_permission)
+                except AuthenticationUnavailable:
+                    _record_security_event()
+                    return jsonify({
+                        "error": "authorization_unavailable",
+                        "message": "Authorization state is temporarily unavailable.",
+                    }), 503
+                if not permitted:
+                    _record_security_event()
+                    # Safe denial: internal reason stays server-side; the
+                    # caller learns only the mapped public error code.
+                    try:
+                        from pesaguard_backend_pipeline.authorization_policy import (
+                            safe_public_error,
+                        )
+                    except ImportError:
+                        from authorization_policy import safe_public_error
+                    internal_reason = (
+                        "missing_scope"
+                        if required_permission not in user.permissions
+                        else "resource_denied"
+                    )
+                    logger.warning(
+                        "authorization.denied reason=%s user=%s permission=%s",
+                        user.user_id, internal_reason, required_permission,
+                    )
+                    public_error = safe_public_error(internal_reason)
+                    status = 403
+                    return jsonify({"error": public_error, "message": "Access denied."}), status
 
             g.user = user
             try:
@@ -1174,6 +1782,7 @@ def require_auth(required_permission: Optional[str] = None):
                 logger.debug("Unable to bind authenticated observability context", exc_info=True)
             return f(*args, **kwargs)
 
+        setattr(decorated_function, "required_permission", required_permission)
         return decorated_function
 
     return decorator
@@ -1200,7 +1809,15 @@ def require_tenant_access():
             if not _valid_tenant_id(tenant_id):
                 return jsonify({"error": "invalid_tenant_id", "message": "tenant_id has an invalid format."}), 400
 
-            if not AuthRBAC.check_tenant_access(g.user, tenant_id):
+            try:
+                tenant_access = AuthRBAC.check_tenant_access(g.user, tenant_id)
+            except AuthenticationUnavailable:
+                _record_security_event()
+                return jsonify({
+                    "error": "authorization_unavailable",
+                    "message": "Authorization state is temporarily unavailable.",
+                }), 503
+            if not tenant_access:
                 _record_security_event()
                 logger.warning("Tenant access violation attempt by user %s on tenant %s", g.user.user_id, tenant_id)
                 return jsonify({"error": "tenant_access_denied", "message": "Access to this tenant scope is forbidden."}), 403
@@ -1209,6 +1826,44 @@ def require_tenant_access():
 
         return decorated_function
 
+    return decorator
+
+
+def require_resource_access(required_permission: str, resource_id_argument: str = "resource_id"):
+    """Enforce permission + tenant ownership bound to the exact resource ID.
+
+    Deny by default: missing auth -> 401 authentication_required; missing
+    scope -> 403 insufficient_scope; tenant/resource mismatch -> 404
+    resource_not_found (no existence oracle); internal details stay in logs.
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            user = getattr(g, "user", None)
+            resource_id = kwargs.get(resource_id_argument) or (request.view_args or {}).get(resource_id_argument)
+            if user is None:
+                return jsonify({"error": "authentication_required", "message": "Authentication is required."}), 401
+            if not isinstance(resource_id, str) or not resource_id.strip():
+                return jsonify({"error": "resource_not_found", "message": "The requested resource was not found."}), 404
+            try:
+                permitted = AuthRBAC.check_resource_permission(user, required_permission, resource_id)
+            except AuthenticationUnavailable:
+                _record_security_event()
+                return jsonify({
+                    "error": "authorization_unavailable",
+                    "message": "Authorization state is temporarily unavailable.",
+                }), 503
+            if not permitted:
+                _record_security_event()
+                logger.warning(
+                    "authorization.denied reason=resource_denied user=%s permission=%s",
+                    getattr(user, "user_id", "unknown"), required_permission,
+                )
+                if not AuthRBAC.check_permission(user, required_permission):
+                    return jsonify({"error": "insufficient_scope", "message": "The credential lacks the required scope."}), 403
+                return jsonify({"error": "resource_not_found", "message": "The requested resource was not found."}), 404
+            return f(*args, **kwargs)
+        return decorated_function
     return decorator
 
 

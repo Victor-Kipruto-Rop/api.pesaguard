@@ -1,0 +1,82 @@
+topics:
+  - name: pesaguard.transactions.raw
+    partitions: 6
+    retention_ms: 604800000
+  - name: pesaguard.transactions.validated
+    partitions: 6
+    retention_ms: 604800000
+  - name: pesaguard.transactions.normalized
+    partitions: 6
+    retention_ms: 604800000
+  - name: pesaguard.transactions.processed
+    partitions: 6
+    retention_ms: 2592000000
+  - name: pesaguard.transactions.completed
+    partitions: 6
+    retention_ms: 7776000000
+  - name: pesaguard.transactions.failed
+    partitions: 3
+    retention_ms: 7776000000
+  - name: pesaguard.transactions.rejected
+    partitions: 3
+    retention_ms: 7776000000
+  - name: pesaguard.reconciliation.requested
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.reconciliation.completed
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.reconciliation.exceptions
+    partitions: 3
+    retention_ms: 7776000000
+  - name: pesaguard.fraud.analysis
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.fraud.anomalies
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.fraud.decisions
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.notifications.requested
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.notifications.sent
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.notifications.failed
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.webhooks.received
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.batch.imports
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.batch.imports.completed
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.batch.imports.failed
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.audit.events
+    partitions: 3
+    retention_ms: 31536000000
+  - name: pesaguard.retries
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.dlq
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.data.processing
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.system.events
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.transactions.enriched
+    partitions: 3
+    retention_ms: 2592000000
+  - name: pesaguard.audit.communication
+    partitions: 3
+    retention_ms: 31536000000

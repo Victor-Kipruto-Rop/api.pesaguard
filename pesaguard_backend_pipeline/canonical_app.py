@@ -1,17 +1,18 @@
-"""Canonical PesaGuard dashboard API entry point."""
+"""Canonical PesaGuard API entry point."""
 
 from __future__ import annotations
 
 import os
 
-from .app_2 import create_app
+import uvicorn
 
-app = create_app()
+from .fastapi_app import app
 
 
 if __name__ == "__main__":
-    app.run(
-        host=os.getenv("PESAGUARD_BIND_HOST", "127.0.0.1"),
+    uvicorn.run(
+        "pesaguard_backend_pipeline.fastapi_app:app",
+        host=os.getenv("PESAGUARD_BIND_HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "5001")),
-        debug=os.getenv("FLASK_DEBUG", "false").lower() in {"true", "1", "yes"},
+        log_level=os.getenv("LOG_LEVEL", "info").lower(),
     )

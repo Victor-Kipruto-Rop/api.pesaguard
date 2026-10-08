@@ -28,6 +28,14 @@ logger = logging.getLogger("pesaguard.export_routes")
 bp = Blueprint("export_routes", __name__, url_prefix="/v1")
 
 
+def sanitize_csv_cell(value: Any) -> str:
+    """Prefix spreadsheet formula starters before emitting user-controlled CSV cells."""
+    if value is None:
+        return ""
+    text = str(value)
+    return f"'{text}" if text.lstrip(" \t\r\n")[:1] in {"=", "+", "-", "@"} else text
+
+
 def _get_db_session():
     """Lazily import and instantiate the database session factory."""
     try:
@@ -77,14 +85,14 @@ def export_csv():
 
         for item in items:
             writer.writerow({
-                "id": item.id,
-                "trans_id": item.trans_id,
-                "anomaly_type": item.anomaly_type,
-                "status": item.status,
-                "severity": item.severity,
+                "id": sanitize_csv_cell(item.id),
+                "trans_id": sanitize_csv_cell(item.trans_id),
+                "anomaly_type": sanitize_csv_cell(item.anomaly_type),
+                "status": sanitize_csv_cell(item.status),
+                "severity": sanitize_csv_cell(item.severity),
                 "resolved": "true" if item.resolved else "false",
-                "tenant_id": item.tenant_id,
-                "detected_at": item.detected_at.isoformat() if item.detected_at else "",
+                "tenant_id": sanitize_csv_cell(item.tenant_id),
+                "detected_at": sanitize_csv_cell(item.detected_at.isoformat() if item.detected_at else ""),
             })
 
         output.seek(0)

@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: ${KAFKA_ADVERTISED_LISTENERS_FULL:?KAFKA_ADVERTISED_LISTENERS_FULL must be set}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: python pesaguard_backend_pipeline/app.py
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_FULL:?KAFKA_BOOTSTRAP_SERVERS_FULL must be set}
+      PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+      - kafka
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: uvicorn pesaguard_backend_pipeline.fastapi_app:app --host 0.0.0.0 --port 5001
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:

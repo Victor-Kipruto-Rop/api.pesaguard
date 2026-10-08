@@ -212,7 +212,7 @@ if "login" not in app.view_functions:
             "username": username,
             "tenant_id": user["tenant_id"],
             "roles": user.get("roles", ["operator"]),
-            "expires_in": 86400,
+            "expires_in": AuthRBAC.ACCESS_TOKEN_TTL_MINUTES * 60,
         }), 200
 
 
@@ -874,4 +874,3 @@ if __name__ == "__main__":
         logger.warning("Running with debug=True â€” never do this in production.")
     port = int(os.getenv("PORT", 5002))
     app.run(debug=debug_mode, host=os.getenv("PESAGUARD_BIND_HOST", "127.0.0.1"), port=port)
-

@@ -102,7 +102,11 @@ def test_gateway_to_notification_trace_survives_every_boundary(monkeypatch, capl
     try:
         from models import AuditEvent, Transaction
 
-        transaction = session.query(Transaction).filter(Transaction.trans_id == transaction_id).one_or_none()
+        transaction = (
+            session.query(Transaction)
+            .filter(Transaction.trans_id == transaction_id.upper())
+            .one_or_none()
+        )
         assert transaction is not None, "gateway did not persist the transaction"
         audit_event = (
             session.query(AuditEvent)

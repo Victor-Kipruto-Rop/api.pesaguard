@@ -1,0 +1,22 @@
+[Unit]
+Description=PesaGuard PostgreSQL Daily Backup
+After=network.target postgresql.service
+Wants=pesaguard-backup.timer
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+# Required deployment file; optional backup-only overrides take precedence.
+EnvironmentFile=/etc/pesaguard/.env
+EnvironmentFile=-/etc/pesaguard/backup.env
+ExecStart=/usr/bin/python3 /opt/pesaguard/pesaguard_backend_pipeline/backup_postgres.py --backup
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pesaguard-backup
+
+# Retry on failure
+OnFailure=pesaguard-backup-failed.service
+
+[Install]
+WantedBy=multi-user.target

@@ -15,7 +15,12 @@ from models import (
     TenantConfiguration,
     TenantLimit,
     TenantUsage,
+    UserAccount,
 )
+
+
+class OrganizationOwnerNotFound(ValueError):
+    """Raised when an organization owner is not active in its tenant."""
 
 
 class TenantOrganizationService:
@@ -56,6 +61,17 @@ class TenantOrganizationService:
         slug = self._slugify(name)
         session = self._session()
         try:
+            if owner_user_id is not None:
+                owner = session.query(UserAccount).filter_by(
+                    id=str(owner_user_id),
+                    tenant_id=tenant_id,
+                    status="active",
+                ).first()
+                if owner is None:
+                    raise OrganizationOwnerNotFound(
+                        "Organization owner not found for tenant"
+                    )
+
             base_slug = slug
             suffix = 1
             while True:
@@ -94,10 +110,14 @@ class TenantOrganizationService:
     def create_team(self, organization_id: str, name: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         session = self._session()
         try:
-            org = session.query(Organization).filter_by(id=organization_id).first()
+            requested_tenant_id = str(tenant_id or "")
+            org_query = session.query(Organization).filter_by(id=organization_id)
+            if requested_tenant_id:
+                org_query = org_query.filter_by(tenant_id=requested_tenant_id)
+            org = org_query.first()
             if org is None:
                 raise ValueError(f"Organization {organization_id} not found")
-            resolved_tenant_id = str(tenant_id or org.tenant_id)
+            resolved_tenant_id = org.tenant_id
             slug = self._slugify(name)
             team = Team(
                 id=f"team_{uuid.uuid4().hex[:12]}",
@@ -123,12 +143,16 @@ class TenantOrganizationService:
     ) -> Dict[str, Any]:
         session = self._session()
         try:
-            org = session.query(Organization).filter_by(id=organization_id).first()
+            requested_tenant_id = str(tenant_id or "")
+            org_query = session.query(Organization).filter_by(id=organization_id)
+            if requested_tenant_id:
+                org_query = org_query.filter_by(tenant_id=requested_tenant_id)
+            org = org_query.first()
             if org is None:
                 raise ValueError(f"Organization {organization_id} not found")
-            resolved_tenant_id = str(tenant_id or org.tenant_id)
+            resolved_tenant_id = org.tenant_id
             if team_id:
-                team = session.query(Team).filter_by(id=team_id, organization_id=organization_id).first()
+                team = session.query(Team).filter_by(id=team_id, organization_id=organization_id, tenant_id=resolved_tenant_id).first()
                 if team is None:
                     raise ValueError(f"Team {team_id} not found for organization {organization_id}")
             dep = Department(
@@ -161,6 +185,9 @@ class TenantOrganizationService:
             org = session.query(Organization).filter_by(id=organization_id, tenant_id=str(tenant_id or "default")).first()
             if org is None:
                 raise ValueError(f"Organization {organization_id} not found for tenant {tenant_id}")
+            user = session.query(UserAccount).filter_by(id=str(user_id), tenant_id=str(tenant_id or "default"), status="active").first()
+            if user is None:
+                raise ValueError(f"User {user_id} not found for tenant {tenant_id}")
             if team_id:
                 team = session.query(Team).filter_by(id=team_id, organization_id=organization_id, tenant_id=str(tenant_id or "default")).first()
                 if team is None:

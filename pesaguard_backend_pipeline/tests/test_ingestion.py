@@ -1,4 +1,5 @@
 from ingestion import IngestionError, IngestionService, ProcessResult
+from connectors.registry import get_connector
 
 
 def mpesa_payload(reference="R-1"):
@@ -94,3 +95,147 @@ def test_safaricom_api_adapter_maps_provider_fields_at_boundary():
     assert result.envelope.canonical.provider == "safaricom"
     assert "transactionId" not in result.envelope.canonical.__dict__
     assert result.envelope.payload["TransID"] == "QWE123"
+
+
+def test_mpesa_canonical_amount_preserves_large_decimal_digits():
+    payload = mpesa_payload("large-decimal")
+    payload["TransAmount"] = "90071992547409.93"
+
+    result = IngestionService(FakeEventStore()).ingest("mpesa", payload, tenant_id="tenant-a")
+
+    assert result.envelope.canonical.amount == "90071992547409.93"
+    assert result.envelope.payload["TransAmount"] == "90071992547409.93"
+
+
+def test_successful_b2c_callback_is_rejected_without_account_mapping():
+    store = FakeEventStore()
+    service = IngestionService(store)
+
+    try:
+        service.ingest("mpesa", {"Result": {"ResultCode": 0}}, tenant_id="tenant-a")
+    except IngestionError as error:
+        assert "provider account mapping" in str(error)
+    else:
+        raise AssertionError("B2C result callbacks must not be persisted without account mapping")
+    assert store.calls == []
+
+
+def test_connector_enforces_source_contract_before_persistence():
+    store = FakeEventStore()
+    service = IngestionService(store)
+    connector = get_connector("mpesa", service)
+    payload = mpesa_payload()
+    payload["schema_version"] = "99.0"
+
+    try:
+        connector.ingest(payload, tenant_id="tenant-a")
+    except IngestionError as error:
+        assert "unsupported mpesa contract version" in str(error)
+    else:
+        raise AssertionError("unsupported source schema versions must be rejected")
+    assert store.calls == []
+
+
+def test_connector_emit_rejects_envelope_payload_tampering():
+    from dataclasses import replace
+
+    store = FakeEventStore()
+    service = IngestionService(store)
+    connector = get_connector("mpesa", service)
+    envelope = connector.transform(mpesa_payload(), tenant_id="tenant-a")
+    tampered_payload = {**envelope.payload, "TransAmount": "11.00"}
+
+    try:
+        service.emit(replace(envelope, payload=tampered_payload))
+    except IngestionError as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("tampered connector envelopes must not be persisted")
+    assert store.calls == []
+
+
+def test_connector_emit_accepts_sources_without_transaction_timestamp():
+    store = FakeEventStore()
+    service = IngestionService(store)
+    connector = get_connector("bank", service)
+    payload = {"transaction_id": "bank-no-time", "amount": "8.00", "account_id": "bank-acct"}
+    envelope = connector.transform(payload, tenant_id="tenant-a")
+
+    result = connector.emit(envelope)
+
+    assert result.envelope is envelope
+    assert envelope.observed_at == envelope.canonical.transaction_time
+    assert envelope.payload["TransTime"] == envelope.observed_at
+    assert len(store.calls) == 1
+
+
+def test_safaricom_connector_emit_accepts_response_without_transaction_timestamp():
+    store = FakeEventStore()
+    service = IngestionService(store)
+    connector = get_connector("safaricom-api", service)
+    payloads = (
+        {
+            "data": {
+                "transactionId": "QWE-no-time",
+                "amount": "10.00",
+                "accountId": "safaricom-account",
+            }
+        },
+        {
+            "data": {
+                "transactionId": "QWE-with-time",
+                "amount": "11.00",
+                "accountId": "safaricom-account",
+                "transactionTime": "2026-09-23T18:29:54Z",
+            }
+        },
+    )
+
+    envelopes = [connector.transform(payload, tenant_id="tenant-a") for payload in payloads]
+    results = [connector.emit(envelope) for envelope in envelopes]
+
+    assert all(result.envelope is envelope for result, envelope in zip(results, envelopes))
+    assert envelopes[0].observed_at == envelopes[0].canonical.transaction_time
+    assert envelopes[0].payload["TransTime"] == envelopes[0].observed_at
+    assert envelopes[1].observed_at == "2026-09-23T18:29:54Z"
+    assert envelopes[1].payload["TransTime"] == envelopes[1].observed_at
+    assert len(store.calls) == 2
+
+
+def test_generic_adapter_uses_transaction_time_alias_and_emit_preserves_it():
+    store = FakeEventStore()
+    service = IngestionService(store)
+    payload = {
+        "transaction_id": "api-tx-with-time",
+        "amount": "5.00",
+        "account_id": "api-account",
+        "transaction_time": "2026-09-23T18:29:54Z",
+    }
+    envelope = service.adapters["external-api"].normalize(payload, tenant_id="tenant-a")
+
+    result = service.emit(envelope)
+
+    assert result.envelope.canonical.transaction_time == "2026-09-23T18:29:54Z"
+    assert result.envelope.observed_at == "2026-09-23T18:29:54Z"
+    assert len(store.calls) == 1
+
+
+def test_connector_emit_rejects_inconsistent_generated_timestamp():
+    from dataclasses import replace
+
+    store = FakeEventStore()
+    service = IngestionService(store)
+    connector = get_connector("bank", service)
+    envelope = connector.transform(
+        {"transaction_id": "bank-timestamp-tamper", "amount": "8.00", "account_id": "bank-acct"},
+        tenant_id="tenant-a",
+    )
+    tampered_payload = {**envelope.payload, "TransTime": "2026-09-23T18:29:54Z"}
+
+    try:
+        service.emit(replace(envelope, payload=tampered_payload))
+    except IngestionError as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("inconsistent envelope timestamps must not be persisted")
+    assert store.calls == []

@@ -22,6 +22,7 @@ logger = logging.getLogger("pesaguard.observability")
 _otel_tracer = None
 _otel_initialized = False
 _otel_instrumented = False
+_otel_exporter_attached = False
 
 
 def _try_import_first(*module_names: str) -> Any:
@@ -42,7 +43,7 @@ def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
     and W3C traceparent fallback implemented in this module. OTel is therefore
     compatible but not required.
     """
-    global _otel_tracer, _otel_initialized, _otel_instrumented
+    global _otel_tracer, _otel_initialized, _otel_instrumented, _otel_exporter_attached
     if _otel_initialized:
         return _otel_tracer is not None
     _otel_initialized = True
@@ -77,6 +78,7 @@ def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
                     except TypeError:
                         exporter = exp_cls(endpoint=endpoint)
                     provider.add_span_processor(batch_cls(exporter))
+                    _otel_exporter_attached = True
                 except Exception:
                     logger.debug("OTLP exporter skipped", exc_info=True)
         try:
@@ -254,15 +256,12 @@ def otel_context_propagation_available() -> bool:
 
 
 def otel_exporter_reachable() -> bool:
-    """True when an OTLP span exporter was successfully attached during bootstrap.
+    """Return whether an OTLP span exporter was attached during bootstrap.
 
-    This is a best-effort check. A return value of False does not prove the
-    collector is unreachable; it only means the bootstrap did not attach an
-    exporter or the exporter constructor failed.
+    This does not probe network reachability. A return value of False means the
+    bootstrap did not attach an exporter or the exporter constructor failed.
     """
-    if _otel_tracer is None:
-        return False
-    return _otel_instrumented
+    return _otel_exporter_attached
 
 
 @contextmanager
@@ -278,6 +277,12 @@ def trace_span(name: str, **fields: Any):
 
     context = get_observability_context()
     traceparent = fields.pop("traceparent", None) or context.get("traceparent")
+    if not traceparent and context.get("trace_id"):
+        # HTTP handlers bind a valid incoming X-Trace-ID directly into the
+        # lightweight context. Preserve that trace when a nested span is opened.
+        current_trace_id = str(context["trace_id"])
+        if len(current_trace_id) == 32 and all(char in "0123456789abcdef" for char in current_trace_id):
+            traceparent = build_traceparent(current_trace_id, context.get("span_id") or new_span_id())
     if _otel_tracer is not None:
         parent_context = None
         if traceparent:
@@ -304,13 +309,39 @@ def trace_span(name: str, **fields: Any):
                 span_id=span_id,
                 **({"traceparent": build_traceparent(trace_id, span_id)} if traceparent is not None else {}),
             )
+            started = time.perf_counter()
+            logger.info(
+                "trace_span_started",
+                extra={"span_name": name, "span_id": span_id, "trace_id": trace_id, **fields},
+            )
             try:
                 yield trace_id
             except Exception as exc:
+                duration_ms = (time.perf_counter() - started) * 1000
                 span.record_exception(exc)
                 from opentelemetry.trace import Status, StatusCode
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
+                logger.exception(
+                    "trace_span_failed",
+                    extra={
+                        "span_name": name,
+                        "span_id": span_id,
+                        "trace_id": trace_id,
+                        "duration_ms": duration_ms,
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 raise
+            else:
+                logger.info(
+                    "trace_span_finished",
+                    extra={
+                        "span_name": name,
+                        "span_id": span_id,
+                        "trace_id": trace_id,
+                        "duration_ms": (time.perf_counter() - started) * 1000,
+                    },
+                )
         return
     parsed = parse_traceparent(traceparent) if traceparent else None
     trace_id = (parsed or {}).get("trace_id") or context.get("trace_id") or new_trace_id()
@@ -321,14 +352,31 @@ def trace_span(name: str, **fields: Any):
         **({"traceparent": build_traceparent(trace_id, span_id)} if traceparent is not None else {}),
     )
     started = time.perf_counter()
-    logger.info("trace_span_started", extra={"span_name": name, "span_id": span_id, **fields})
+    logger.info("trace_span_started", extra={"span_name": name, "span_id": span_id, "trace_id": trace_id, **fields})
     try:
         yield trace_id
     except Exception as exc:
-        logger.exception("trace_span_failed", extra={"span_name": name, "duration_ms": (time.perf_counter() - started) * 1000, "error_type": type(exc).__name__})
+        logger.exception(
+            "trace_span_failed",
+            extra={
+                "span_name": name,
+                "span_id": span_id,
+                "trace_id": trace_id,
+                "duration_ms": (time.perf_counter() - started) * 1000,
+                "error_type": type(exc).__name__,
+            },
+        )
         raise
     else:
-        logger.info("trace_span_finished", extra={"span_name": name, "duration_ms": (time.perf_counter() - started) * 1000})
+        logger.info(
+            "trace_span_finished",
+            extra={
+                "span_name": name,
+                "span_id": span_id,
+                "trace_id": trace_id,
+                "duration_ms": (time.perf_counter() - started) * 1000,
+            },
+        )
 def _load_dotenv_file(env_path: str | os.PathLike[str] | None = None) -> None:
     """Compatibility wrapper for the shared backend environment loader."""
     from environment import load_backend_env

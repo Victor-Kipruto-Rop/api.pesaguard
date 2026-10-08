@@ -31,7 +31,7 @@ logger = logging.getLogger("pesaguard.alerting")
 # Environment configurations
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 SMS_RECIPIENT = os.getenv("SMS_ALERT_RECIPIENT", "")
-EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "noreply@pesaguard.example")
+EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "no-reply@pesaguard.co.ke")
 SMTP_HOST = os.getenv("ALERT_SMTP_HOST")
 SMTP_PORT = int(os.getenv("ALERT_SMTP_PORT", "25"))
 SMTP_USER = os.getenv("ALERT_SMTP_USER")

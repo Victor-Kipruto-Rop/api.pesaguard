@@ -37,6 +37,9 @@ jsonschema==4.23.0
 requests==2.33.0
 PyJWT==2.13.0
 cryptography==50.0.1
+argon2-cffi==23.1.0
+webauthn==2.7.0
+qrcode[pil]==8.2
 python-dateutil==2.9.0.post0
 tzdata==2025.2
 

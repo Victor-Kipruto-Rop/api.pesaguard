@@ -13,10 +13,8 @@ def webhook_client(monkeypatch):
         monkeypatch.setenv("DATABASE_URL", f"sqlite:///{os.path.join(tmpdir, 'pesaguard_test.db')}")
         monkeypatch.setenv("DARAJA_ALLOWED_IPS", "127.0.0.1")
         monkeypatch.setenv("DARAJA_SHARED_SECRET", "test-secret")
-        # The webhook now refuses to process a callback for an unconfigured
-        # tenant (see app.py's TENANT_ID check); this suite is single-tenant.
-        monkeypatch.setenv("TENANT_ID", "tenant-a")
-        
+        monkeypatch.setenv("TENANT_ID", "tenant-test")
+
         # Import and reload app with test DB
         import app
         app = importlib.reload(app)
@@ -28,8 +26,26 @@ def webhook_client(monkeypatch):
         app_2 = importlib.reload(app_2)
         Base.metadata.create_all(app_2.primary_engine)
         
-        with app.app.test_client() as client:
-            yield client
+        try:
+            with app.app.test_client() as client:
+                yield client
+        finally:
+            # SQLite keeps file handles open on Windows; release every engine
+            # created by this fixture before TemporaryDirectory cleanup.
+            for engine in (
+                getattr(getattr(app, "event_store", None), "engine", None),
+                getattr(app_2, "engine", None),
+                getattr(app_2, "primary_engine", None),
+                getattr(getattr(getattr(app_2, "batch_import_service", None), "ingestion_service", None), "event_store", None),
+            ):
+                try:
+                    if engine is not None and hasattr(engine, "dispose"):
+                        engine.dispose()
+                except Exception:
+                    pass
+            nested_store = getattr(getattr(getattr(app_2, "batch_import_service", None), "ingestion_service", None), "event_store", None)
+            if nested_store is not None and hasattr(nested_store, "engine") and nested_store.engine is not None:
+                nested_store.engine.dispose()
 
 def test_redis_cache_used(webhook_client, monkeypatch):
     """Test that Redis cache is used for duplicate detection."""
@@ -43,6 +59,12 @@ def test_redis_cache_used(webhook_client, monkeypatch):
             self.store[key] = val
         def set(self, key, val, ex=None):
             self.store[key] = val
+
+        def pipeline(self):
+            return self
+
+        def execute(self):
+            return []
 
     fake_redis_instance = FakeRedis()
     import redis

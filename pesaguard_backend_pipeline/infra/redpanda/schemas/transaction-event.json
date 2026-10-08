@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pesaguard.example/schemas/transaction-event-1.0.json",
+  "title": "PesaGuard transaction event",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "schema_version",
+    "tenant_id",
+    "source",
+    "occurred_at",
+    "correlation_id",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "event_version": {"type": "integer", "const": 1},
+    "schema_version": {"type": "string", "const": "1.0"},
+    "tenant_id": {"type": "string", "minLength": 1},
+    "source": {"type": "string", "minLength": 1},
+    "source_event_id": {"type": "string"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": "string", "minLength": 1},
+    "causation_id": {"type": "string"},
+    "producer": {"type": "string", "minLength": 1},
+    "producer_version": {"type": "string", "minLength": 1},
+    "payload": {"type": "object"},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pesaguard.example/schemas/developer-api-key-lifecycle-1.0.json",
+  "title": "Developer API-key lifecycle event",
+  "description": "Safe lifecycle notifications emitted from the Developer Platform outbox. Never contains an API-key secret or digest.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "occurred_at",
+    "organization_id",
+    "project_id",
+    "environment_id",
+    "tenant_id",
+    "source",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "enum": [
+        "developer.api_key.created",
+        "developer.api_key.revoked",
+        "developer.api_key.suspended"
+      ]
+    },
+    "event_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "organization_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "environment_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string",
+      "pattern": "^dp_[0-9a-f]{64}$"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "developer-platform"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "sourceVersion",
+        "organizationId",
+        "projectId",
+        "environmentId"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ACTIVE",
+            "SUSPENDED",
+            "REVOKED",
+            "COMPROMISED",
+            "EXPIRED"
+          ]
+        },
+        "sourceVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "organizationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "projectId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "environmentId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "REVOKED"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["reason"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ACTIVE"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["name"]
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": true
+}

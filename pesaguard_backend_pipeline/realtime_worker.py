@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict
 
 from event_bus import EventEnvelope
-from producer import publish_versioned_event
+from producer import publish_versioned_event  # noqa: F401
 from realtime_pipeline import RealtimeTransactionPipeline
 from topics import TOPIC_TRANSACTIONS_ENRICHED, TOPIC_TRANSACTIONS_NORMALIZED, TOPIC_TRANSACTIONS_RAW, TOPIC_TRANSACTIONS_VALIDATED
 

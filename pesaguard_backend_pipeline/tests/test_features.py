@@ -48,6 +48,15 @@ def test_client(monkeypatch):
             now = datetime.now(timezone.utc)
             session.add_all(
                 [
+                    app_2.UserAccount(
+                        id="features-admin",
+                        tenant_id="default",
+                        username="features-admin",
+                        roles=["operations"],
+                        permissions=[],
+                        status="active",
+                        authorization_version=1,
+                    ),
                     # Open, unassigned, critical and old enough to auto-escalate.
                     app_2.Discrepancy(
                         id="test-1",

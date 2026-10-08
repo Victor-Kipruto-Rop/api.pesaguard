@@ -15,6 +15,8 @@ from functools import wraps
 from typing import Any, Dict, Optional, Tuple
 
 from flask import Response, g, jsonify, request
+from environment import runtime_environment
+from security_helpers import get_client_ip
 
 logger = logging.getLogger("pesaguard.rate_limiter")
 
@@ -23,7 +25,8 @@ _BUCKET_IDLE_TTL_SECONDS = 60
 # Redis connection environment defaults
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 ENABLE_REDIS_RATE_LIMITING = (
-    os.getenv("ENABLE_REDIS_RATE_LIMITING", "").strip().lower() in {"1", "true", "yes", "on"}
+    bool(os.getenv("REDIS_URL", "").strip())
+    or os.getenv("ENABLE_REDIS_RATE_LIMITING", "").strip().lower() in {"1", "true", "yes", "on"}
     or os.getenv("PESAGUARD_ENABLE_REDIS_RATE_LIMIT", "0") == "1"
 )
 
@@ -68,6 +71,7 @@ class TokenBucketRateLimiter:
 
     def __init__(self, default_max_per_minute: int = 30):
         self.buckets: Dict[str, Tuple[float, float]] = {}
+        self.distinct_values: Dict[str, Tuple[set[str], float, int]] = {}
         self.max_tokens_per_minute = default_max_per_minute
         self.refill_rate = default_max_per_minute / 60.0
         self._lock = threading.Lock()
@@ -85,6 +89,12 @@ class TokenBucketRateLimiter:
         ]
         for key in stale_keys:
             del self.buckets[key]
+        stale_distinct_keys = [
+            key for key, (_, last_seen, window_seconds) in self.distinct_values.items()
+            if current_time - last_seen > window_seconds
+        ]
+        for key in stale_distinct_keys:
+            del self.distinct_values[key]
 
     def is_allowed(self, client_id: str, endpoint: str, tokens_required: int = 1) -> Tuple[bool, Dict[str, Any]]:
         """Evaluate token availability for a request."""
@@ -121,6 +131,32 @@ class TokenBucketRateLimiter:
                 "reset_in": reset_in,
                 "retry_after": reset_in,
             }
+
+    def record_distinct(
+        self,
+        client_id: str,
+        endpoint: str,
+        value: str,
+        window_seconds: int,
+    ) -> int:
+        """Track distinct identifiers per client over a bounded detection window."""
+        key = f"{client_id}:{endpoint}"
+        now = time.time()
+        with self._lock:
+            current = self.distinct_values.get(key)
+            if current is None or now - current[1] >= current[2]:
+                values: set[str] = set()
+            else:
+                values = current[0]
+            values.add(value)
+            self.distinct_values[key] = (values, now, window_seconds)
+            return len(values)
+
+    def reset(self, client_id: str, endpoint: str) -> None:
+        """Clear one in-memory bucket, for example after an authorized unlock."""
+        key = f"{client_id}:{endpoint}"
+        with self._lock:
+            self.buckets.pop(key, None)
 
 
 class RedisRateLimiter:
@@ -166,12 +202,29 @@ class RedisRateLimiter:
             "retry_after": reset_in,
         }
 
+    def record_distinct(self, client_id: str, endpoint: str, value: str, window_seconds: int) -> int:
+        """Track distinct values atomically in Redis for distributed detection."""
+        key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
+        client = self._get_client()
+        pipe = client.pipeline(transaction=True)
+        pipe.sadd(key, value)
+        pipe.expire(key, window_seconds)
+        pipe.scard(key)
+        result = pipe.execute()
+        return int(result[2])
+
+    def reset(self, client_id: str, endpoint: str) -> None:
+        """Delete a distributed token bucket during an authorized account unlock."""
+        key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
+        self._get_client().delete(key)
+
 
 class RateLimiter:
     """Backward-compatible wrapper exposing set_limits/is_allowed for app webhook usage."""
 
-    def __init__(self, default_max_per_minute: int = 30):
+    def __init__(self, default_max_per_minute: int = 30, *, fail_closed: bool = False):
         self.max_requests_per_minute = default_max_per_minute
+        self.fail_closed = fail_closed
         self._memory = TokenBucketRateLimiter(default_max_per_minute=default_max_per_minute)
         self._redis = RedisRateLimiter() if ENABLE_REDIS_RATE_LIMITING else None
 
@@ -190,7 +243,47 @@ class RateLimiter:
                 )
             except Exception as exc:
                 logger.warning("Redis limiter failed, falling back to memory: %s", exc)
+                if self.fail_closed:
+                    _record_auth_limiter_unavailable()
+                    return False, {
+                        "remaining": 0,
+                        "limit": self.max_requests_per_minute,
+                        "reset_in": 1,
+                        "retry_after": 1,
+                        "unavailable": True,
+                    }
         return self._memory.is_allowed(client_id, endpoint, tokens_required=tokens_required)
+
+    def record_distinct(
+        self,
+        client_id: str,
+        endpoint: str,
+        value: str,
+        window_seconds: int,
+    ) -> int:
+        """Record a distinct value in the distributed store when configured."""
+        if ENABLE_REDIS_RATE_LIMITING and self._redis:
+            try:
+                    return self._redis.record_distinct(client_id, endpoint, value, window_seconds)
+            except Exception as exc:
+                    logger.warning("Redis distinct-attempt tracker failed: %s", exc)
+                    if self.fail_closed:
+                        _record_auth_limiter_unavailable()
+                        raise RuntimeError("Distributed rate limiter is unavailable") from exc
+        return self._memory.record_distinct(client_id, endpoint, value, window_seconds)
+
+    def reset(self, client_id: str, endpoint: str) -> None:
+        """Clear a client bucket in configured stores."""
+        if ENABLE_REDIS_RATE_LIMITING and self._redis:
+            try:
+                    self._redis.reset(client_id, endpoint)
+                    return
+            except Exception as exc:
+                    logger.warning("Redis rate-limiter reset failed: %s", exc)
+                    if self.fail_closed:
+                        _record_auth_limiter_unavailable()
+                        raise RuntimeError("Distributed rate limiter is unavailable") from exc
+        self._memory.reset(client_id, endpoint)
 
 
 # Global limiter instances
@@ -198,15 +291,21 @@ _memory_limiter = TokenBucketRateLimiter()
 _redis_limiter: Optional[RedisRateLimiter] = RedisRateLimiter() if ENABLE_REDIS_RATE_LIMITING else None
 
 
+def _record_auth_limiter_unavailable() -> None:
+    try:
+        from metrics import record_business_metric
+        record_business_metric("auth_rate_limiter_unavailable")
+    except Exception:
+        logger.debug("Unable to record auth rate-limiter outage metric", exc_info=True)
+
+
 def _get_client_identifier() -> str:
     """Extract authenticated user ID, tenant ID, or client IP safely."""
     if hasattr(g, "user") and getattr(g.user, "user_id", None):
         return f"user_{g.user.user_id}"
     
-    tenant_id = getattr(g, "tenant_id", None) or request.args.get("tenant_id")
-    
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.remote_addr or "127.0.0.1"
+    tenant_id = getattr(g, "tenant_id", None)
+    ip = get_client_ip(request) or "unknown"
 
     if tenant_id:
         return f"tenant_{tenant_id}_{ip}"
@@ -217,14 +316,28 @@ def rate_limit(
     max_requests_per_minute: int = 30,
     tokens_per_request: int = 1,
     endpoint_name: Optional[str] = None,
+    *,
+    fail_closed: Optional[bool] = None,
 ):
     """
-    Decorator enforcing rate limits on Flask route endpoints.
+    Enforce rate limits on Flask route endpoints.
     Emits standard RFC rate-limiting headers.
     """
     def decorator(func):
         @wraps(func)
         def decorated_function(*args, **kwargs):
+            production = runtime_environment() == "production"
+            require_distributed_limiter = production or fail_closed is True
+            if production and not ENABLE_REDIS_RATE_LIMITING:
+                _record_auth_limiter_unavailable()
+                response = jsonify({
+                    "error": "rate_limiter_unavailable",
+                    "message": "Request protection is temporarily unavailable.",
+                })
+                response.status_code = 503
+                response.headers["Retry-After"] = "1"
+                return response
+
             client_id = _get_client_identifier()
             endpoint = endpoint_name or request.endpoint or func.__name__
 
@@ -239,6 +352,21 @@ def rate_limit(
                     )
                 except Exception as exc:
                     logger.warning("Redis rate limiter unavailable, falling back to memory bucket: %s", exc)
+                    if require_distributed_limiter:
+                        try:
+                            from metrics import record_security_event
+                            record_security_event()
+                        except Exception:
+                            logger.debug("Unable to record auth rate-limit security event", exc_info=True)
+                        _record_auth_limiter_unavailable()
+                        resp = jsonify({
+                            "error": "rate_limiter_unavailable",
+                            "message": "Authentication is temporarily unavailable.",
+                            "retry_after": 1,
+                        })
+                        resp.status_code = 503
+                        resp.headers["Retry-After"] = "1"
+                        return resp
                     _memory_limiter.set_limits(max_requests_per_minute)
                     allowed, status = _memory_limiter.is_allowed(client_id, endpoint, tokens_per_request)
             else:

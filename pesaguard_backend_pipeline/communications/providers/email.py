@@ -29,21 +29,21 @@ class _BaseCloudEmailProvider(SmtpEmailProvider):
 class SesEmailProvider(_BaseCloudEmailProvider):
     name = "ses_email"
 
-    def __init__(self, client: Any, *, from_email: str = "noreply@pesaguard.local"):
+    def __init__(self, client: Any, *, from_email: str = "no-reply@pesaguard.co.ke"):
         super().__init__(client, from_email=from_email, provider_name=self.name)
 
 
 class SendGridEmailProvider(_BaseCloudEmailProvider):
     name = "sendgrid_email"
 
-    def __init__(self, client: Any, *, from_email: str = "noreply@pesaguard.local"):
+    def __init__(self, client: Any, *, from_email: str = "no-reply@pesaguard.co.ke"):
         super().__init__(client, from_email=from_email, provider_name=self.name)
 
 
 class MailgunEmailProvider(_BaseCloudEmailProvider):
     name = "mailgun_email"
 
-    def __init__(self, client: Any, *, from_email: str = "noreply@pesaguard.local"):
+    def __init__(self, client: Any, *, from_email: str = "no-reply@pesaguard.co.ke"):
         super().__init__(client, from_email=from_email, provider_name=self.name)
 
 
@@ -153,7 +153,7 @@ class EmailProviderConfig:
     """
 
     provider: str = "smtp_email"
-    from_email: str = "noreply@pesaguard.local"
+    from_email: str = "no-reply@pesaguard.co.ke"
     gateway_client: Any | None = None
 
 

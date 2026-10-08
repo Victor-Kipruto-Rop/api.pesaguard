@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY pesaguard_backend_pipeline/requirements_3.txt ./requirements_3.txt
+RUN pip install --no-cache-dir -r requirements_3.txt
+COPY . .
+WORKDIR /app/pesaguard_backend_pipeline
+CMD ["sh", "-c", "exec rq worker ${RQ_QUEUE_NAME:-transaction_events}"]

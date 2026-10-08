@@ -8,6 +8,7 @@ while still providing a correct W3C traceparent fallback when the SDK is absent.
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 import observability
 
@@ -58,3 +59,37 @@ def test_otel_exporter_reachable_is_stable_before_and_after_init():
     observability.init_opentelemetry()
     after = observability.otel_exporter_reachable()
     assert isinstance(after, bool)
+
+
+def test_flask_instrumentation_without_exporter_does_not_report_exporter_attached(monkeypatch):
+    class FakeTracerProvider:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeFlaskInstrumentor:
+        def instrument_app(self, _app):
+            pass
+
+    modules = {
+        "opentelemetry.trace": SimpleNamespace(
+            set_tracer_provider=lambda _provider: None,
+            get_tracer=lambda _name: object(),
+        ),
+        "opentelemetry.sdk.trace": SimpleNamespace(TracerProvider=FakeTracerProvider),
+        "opentelemetry.instrumentation.flask": SimpleNamespace(
+            FlaskInstrumentor=FakeFlaskInstrumentor
+        ),
+    }
+    monkeypatch.setattr(observability, "_otel_tracer", None)
+    monkeypatch.setattr(observability, "_otel_initialized", False)
+    monkeypatch.setattr(observability, "_otel_instrumented", False)
+    monkeypatch.setattr(observability, "_otel_exporter_attached", False)
+    monkeypatch.setattr(
+        observability,
+        "_try_import_first",
+        lambda *names: next((modules[name] for name in names if name in modules), None),
+    )
+
+    assert observability.init_opentelemetry(app=object()) is True
+
+    assert observability.otel_exporter_reachable() is False

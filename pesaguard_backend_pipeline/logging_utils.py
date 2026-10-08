@@ -109,6 +109,12 @@ def bind_observability_context(**fields: Optional[str]) -> Dict[str, str]:
     return current
 
 
+def clear_observability_context() -> None:
+    """Clear request/task-scoped traceability identifiers."""
+    _observability_context.set({})
+    _correlation_id.set("")
+
+
 def get_observability_context() -> Dict[str, str]:
     return dict(_observability_context.get())
 

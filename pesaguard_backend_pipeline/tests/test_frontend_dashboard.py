@@ -4,7 +4,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "communications"
+
+pytestmark = pytest.mark.skipif(
+    not FRONTEND.is_dir(),
+    reason=(
+        "retired communications-dashboard target is absent; restore "
+        "pesaguard_backend_pipeline/frontend/communications to reactivate this contract"
+    ),
+)
 
 
 def read(name: str) -> str:

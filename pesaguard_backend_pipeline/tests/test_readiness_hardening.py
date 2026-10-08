@@ -176,6 +176,49 @@ def test_webhook_accepts_valid_source_and_replays_are_ignored(webhook_client):
     assert "duplicate ignored" in duplicate_response.get_json()["ResultDesc"].lower()
 
 
+@pytest.mark.parametrize(
+    ("signature", "expected_status"),
+    [
+        ("valid", 200),
+        ("invalid", 403),
+    ],
+)
+def test_webhook_verifies_daraja_signature(
+    webhook_client, monkeypatch, signature, expected_status
+):
+    import json
+
+    from shared.daraja.validator import compute_hmac
+
+    monkeypatch.setenv("DARAJA_CONSUMER_SECRET", "consumer-secret")
+    payload = {
+        "TransactionType": "Pay Bill",
+        "TransID": f"signature-{signature}",
+        "TransTime": "20240101120000",
+        "TransAmount": "10",
+        "BusinessShortCode": "123456",
+        "MSISDN": "254700000000",
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    daraja_signature = (
+        compute_hmac("consumer-secret", body).hex()
+        if signature == "valid"
+        else "00" * 32
+    )
+
+    response = webhook_client.post(
+        "/webhook/mpesa/confirmation",
+        data=body,
+        content_type="application/json",
+        headers={
+            "X-Daraja-Shared-Secret": "test-secret",
+            "X-Daraja-Signature": daraja_signature,
+        },
+    )
+
+    assert response.status_code == expected_status
+
+
 def test_webhook_health_returns_ok_when_services_available(webhook_client, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -199,7 +242,7 @@ def test_dashboard_health_returns_ok_when_services_available(dashboard_client, m
     assert "checks" in response.json
 
 
-def test_public_status_is_public_sanitized_and_allows_status_site(dashboard_client, monkeypatch):
+def test_public_status_is_sanitized_and_allows_the_status_site(dashboard_client, monkeypatch):
     client, dashboard_app = dashboard_client
     monkeypatch.delenv("PESAGUARD_CORS_ALLOWED_ORIGINS", raising=False)
     import public_status
@@ -211,12 +254,12 @@ def test_public_status_is_public_sanitized_and_allows_status_site(dashboard_clie
         {"id": "status-site", "name": "Status website", "status": "operational"},
     ])
     monkeypatch.setattr(dashboard_app, "build_health_payload", lambda: {
-        "status": "ok",
+        "status": "degraded",
         "checks": {
             "database": {"status": "ok"},
-            "kafka": {"status": "ok"},
+            "kafka": {"status": "failed", "error": "private broker detail"},
             "redis": {"status": "ok"},
-            "daraja": {"status": "ok"},
+            "daraja": {"status": "degraded", "reason": "private provider detail"},
         },
     })
 
@@ -225,29 +268,49 @@ def test_public_status_is_public_sanitized_and_allows_status_site(dashboard_clie
         headers={"Origin": "https://status.pesaguard.victorkipruto.com"},
     )
 
-    assert response.status_code in (200, 503)
+    assert response.status_code == 503
     assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.get_json()["verified"] is True
+    assert "private broker detail" not in response.get_data(as_text=True)
+    assert "private provider detail" not in response.get_data(as_text=True)
+    payload = response.get_json()
+    assert payload["verified"] is True
+    assert payload["overall"]["status"] == "outage"
+    assert payload["generatedAt"].endswith("Z")
+    assert {service["id"]: service["status"] for service in payload["services"]} == {
+        "api": "degraded",
+        "database": "operational",
+        "kafka": "outage",
+        "redis": "operational",
+        "daraja": "degraded",
+        "public-website": "operational",
+        "dashboard-site": "operational",
+        "documentation-site": "operational",
+        "status-site": "operational",
+    }
 
 
-def test_public_status_subscription_cors_preflight_accepts_status_site(dashboard_client, monkeypatch):
+def test_public_status_cors_preflight_accepts_status_site(dashboard_client, monkeypatch):
     client, _ = dashboard_client
     monkeypatch.delenv("PESAGUARD_CORS_ALLOWED_ORIGINS", raising=False)
 
-    response = client.options(
-        "/public/status/subscriptions",
-        headers={
-            "Origin": "https://status.pesaguard.victorkipruto.com",
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-        },
-    )
+    for endpoint, method in (
+        ("/public/status", "GET"),
+        ("/public/status/subscriptions", "POST"),
+    ):
+        response = client.options(
+            endpoint,
+            headers={
+                "Origin": "https://status.pesaguard.victorkipruto.com",
+                "Access-Control-Request-Method": method,
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
 
-    assert response.status_code == 200
-    assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
-    assert "POST" in response.headers["Access-Control-Allow-Methods"]
-    assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
+        assert response.status_code == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
+        assert "POST" in response.headers["Access-Control-Allow-Methods"]
+        assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
 
 
 def test_check_kafka_connectivity_returns_failed_when_kafka_dependency_is_missing(monkeypatch):

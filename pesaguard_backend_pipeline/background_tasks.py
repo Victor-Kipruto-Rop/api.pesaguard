@@ -58,7 +58,7 @@ def handle_job_failure(job, connection, type, value, traceback) -> None:
     job_id = getattr(job, "id", "unknown")
     func_name = getattr(job, "func_name", "unknown")
     args = getattr(job, "args", [])
-    
+
     logger.error(
         "CRITICAL: Async job failed permanently. Job ID: %s, Function: %s, Error: %s",
         job_id, func_name, value, exc_info=(type, value, traceback)
@@ -158,6 +158,54 @@ def enqueue_transaction_event(topic: str, payload: dict) -> Dict[str, Any]:
         return {"status": "failed", "error": str(exc)}
 
 
+def enqueue_reconciliation_request(
+    tenant_id: str,
+    transaction_id: str,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    """Queue a tenant-scoped reconciliation job with a stable RQ identity."""
+    import hashlib
+
+    try:
+        import redis
+        import rq
+    except ImportError:
+        logger.exception("RQ or Redis dependencies are unavailable for reconciliation")
+        return {"status": "failed", "error": "queue_unavailable"}
+
+    job_identity = hashlib.sha256(
+        f"{tenant_id}\0{transaction_id}\0{idempotency_key}".encode("utf-8")
+    ).hexdigest(    )
+    job_id = f"reconciliation-{job_identity}"
+
+    try:
+        connection = redis.from_url(REDIS_URL, socket_connect_timeout=5, socket_timeout=5)
+        queue = rq.Queue(name=RQ_QUEUE_NAME, connection=connection)
+        existing = queue.fetch_job(job_id)
+        if existing is not None:
+            return {"status": "queued", "job_id": job_id, "queue": RQ_QUEUE_NAME}
+
+        enqueue_kwargs = {"job_id": job_id, "job_timeout": 300}
+        retry = getattr(rq, "Retry", None)
+        if retry is not None:
+            enqueue_kwargs["retry"] = retry(max=3, interval=[10, 30, 60])
+            enqueue_kwargs["on_failure"] = handle_job_failure
+        queue.enqueue(
+            "api_core_jobs.process_reconciliation_request",
+            tenant_id,
+            transaction_id,
+            **enqueue_kwargs,
+        )
+        return {"status": "queued", "job_id": job_id, "queue": RQ_QUEUE_NAME}
+    except Exception:
+        logger.exception(
+            "Failed to enqueue reconciliation for tenant_id=%s transaction_id=%s",
+            tenant_id,
+            transaction_id,
+        )
+        return {"status": "failed", "error": "queue_unavailable"}
+
+
 def enqueue_batch_import_drain() -> Dict[str, Any]:
     """Queue a bounded import drain for cron/systemd scheduled execution."""
     try:
@@ -232,14 +280,30 @@ def drain_transaction_outbox(limit: int = 100) -> Dict[str, Any]:
             _record_outbox_failure(store, row, exc)
 
     for topic, topic_rows in rows_by_topic.items():
-        outcomes = publish_transaction_batch_results(topic, [payload for _, payload in topic_rows])
+        try:
+            outcomes = publish_transaction_batch_results(topic, [payload for _, payload in topic_rows])
+        except Exception as exc:
+            logger.exception("Transaction outbox batch publish failed for topic=%s", topic)
+            outcomes = [False] * len(topic_rows)
+            failure_reason = exc
+        else:
+            failure_reason = "batch delivery failed"
+        if len(outcomes) != len(topic_rows):
+            logger.error(
+                "Transaction outbox publisher returned an invalid result count for topic=%s: expected=%s actual=%s",
+                topic,
+                len(topic_rows),
+                len(outcomes),
+            )
+            outcomes = list(outcomes[:len(topic_rows)])
+            outcomes.extend([False] * (len(topic_rows) - len(outcomes)))
         for (row, _), delivered in zip(topic_rows, outcomes):
             if delivered:
                 store.mark_outbox_published(row["id"])
                 published += 1
             else:
                 failed += 1
-                _record_outbox_failure(store, row, "batch delivery failed")
+                _record_outbox_failure(store, row, failure_reason)
 
     return {"status": "ok" if failed == 0 else "partial_failure", "claimed": len(claimed), "published": published, "failed": failed}
 

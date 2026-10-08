@@ -3,6 +3,8 @@ import sys
 import tempfile
 import json
 import importlib
+import csv
+import io
 from datetime import datetime, timezone
 
 # ensure package importable when running tests directly
@@ -29,7 +31,7 @@ def test_export_routes_and_deadletters_and_transactions(tmp_path):
     # Import app after env is set
     from pesaguard_backend_pipeline import app_2
     app_2 = importlib.reload(app_2)
-    from pesaguard_backend_pipeline.models import DeadLetter, Transaction, Report, UserAccount
+    from pesaguard_backend_pipeline.models import DeadLetter, Discrepancy, Transaction, Report, UserAccount
 
     # Ensure models are imported and tables exist in the test database
     import pesaguard_backend_pipeline.action_audit as _aa  # ensure audit model registered
@@ -46,6 +48,17 @@ def test_export_routes_and_deadletters_and_transactions(tmp_path):
         session.add(tx)
         rep = Report(id="r_test_1", tenant_id="t1", report_type="daily", period_start=datetime.now(timezone.utc), period_end=datetime.now(timezone.utc), content={})
         session.add(rep)
+        discrepancy = Discrepancy(
+            id="d_csv_test",
+            trans_id="=1+1",
+            tenant_id="t1",
+            anomaly_type="missing_payment",
+            status="needs_review",
+            severity="warning",
+            detected_at=datetime.now(timezone.utc),
+            notes='=HYPERLINK("https://example.invalid")',
+        )
+        session.add(discrepancy)
         user = UserAccount(
             id="test-user",
             tenant_id="t1",
@@ -69,6 +82,20 @@ def test_export_routes_and_deadletters_and_transactions(tmp_path):
         roles=["operator"],
     )
     auth_headers = {"Authorization": f"Bearer {token}"}
+
+    # Both registered CSV export paths must neutralize spreadsheet formulas.
+    dashboard_export = client.get("/discrepancies/export/csv", headers=auth_headers)
+    assert dashboard_export.status_code == 200
+    dashboard_rows = list(csv.DictReader(io.StringIO(dashboard_export.get_data(as_text=True))))
+    dashboard_row = next(row for row in dashboard_rows if row["id"] == "d_csv_test")
+    assert dashboard_row["trans_id"] == "'=1+1"
+    assert dashboard_row["notes"] == "'=HYPERLINK(\"https://example.invalid\")"
+
+    versioned_export = client.get("/v1/export/csv?tenant_id=t1", headers=auth_headers)
+    assert versioned_export.status_code == 200
+    versioned_rows = list(csv.DictReader(io.StringIO(versioned_export.get_data(as_text=True))))
+    versioned_row = next(row for row in versioned_rows if row["id"] == "d_csv_test")
+    assert versioned_row["trans_id"] == "'=1+1"
 
     # Deadletters
     r = client.get("/v1/customers/t1/deadletters", headers=auth_headers)

@@ -7,6 +7,36 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+_ENVIRONMENT_VARIABLES = (
+    "PESAGUARD_ENVIRONMENT",
+    "PESAGUARD_ENV",
+    "ENVIRONMENT",
+    "FLASK_ENV",
+)
+
+
+def runtime_environment() -> str:
+    """Resolve one consistent application environment across legacy aliases."""
+    configured = [
+        (name, os.getenv(name, "").strip().lower())
+        for name in _ENVIRONMENT_VARIABLES
+        if os.getenv(name, "").strip()
+    ]
+    normalized = {
+        "prod": "production",
+        "dev": "development",
+        "testing": "test",
+    }
+    values = [(name, normalized.get(value, value)) for name, value in configured]
+    if len({value for _, value in values}) > 1:
+        names = ", ".join(name for name, _ in values)
+        raise RuntimeError(f"Conflicting application environment variables are set: {names}")
+    if not values:
+        return "development"
+    value = values[0][1]
+    if value not in {"development", "test", "production", "staging"}:
+        raise RuntimeError("Application environment must be development, test, staging, or production")
+    return value
 
 
 def load_backend_env(env_path: str | os.PathLike[str] | None = None) -> bool:

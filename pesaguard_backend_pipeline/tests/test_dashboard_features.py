@@ -4,7 +4,7 @@ import pytest
 
 import app_2
 import auth_rbac
-from auth_rbac import AuthRBAC, _RevocationBase
+from auth_rbac import AuthRBAC, _RevocationBase, configure_revocation_store
 from auth_seed import seed_account
 from models import Base, Discrepancy
 from sqlalchemy import create_engine
@@ -19,18 +19,35 @@ def client(monkeypatch):
     _RevocationBase.metadata.create_all(engine)
 
     monkeypatch.setattr(app_2, "engine", engine)
+    monkeypatch.setattr(app_2, "primary_engine", engine)
     monkeypatch.setattr(app_2, "SessionLocal", SessionLocal)
-    # AuthRBAC's account/session/revocation checks bind to a DATABASE_URL-derived
-    # engine once per process and cache it (see _ensure_revocation_store_ready).
-    # Point that binding at this test's own in-memory engine instead, or whichever
-    # engine an earlier test file initialized it with would still be in effect.
-    monkeypatch.setattr(auth_rbac, "_revocation_engine", engine)
-    monkeypatch.setattr(auth_rbac, "_RevocationSession", SessionLocal)
-    monkeypatch.setattr(auth_rbac, "_revocation_store_checked", True)
+    from models import UserAccount
+
+    _RevocationBase.metadata.create_all(engine)
+    configure_revocation_store(engine, SessionLocal)
+    with SessionLocal() as session:
+        session.add(UserAccount(
+            id="dashboard-feature-user",
+            tenant_id="tenant-a",
+            username="feature-user",
+            roles=["operations"],
+            permissions=[],
+            status="active",
+            authorization_version=1,
+        ))
+        session.commit()
+    from auth_rbac import AuthRBAC
+
+    token = AuthRBAC.generate_token(
+        user_id="dashboard-feature-user",
+        username="feature-user",
+        tenant_id="tenant-a",
+        roles=["operations"],
+    )
     app_2.app.config["TESTING"] = True
 
     with app_2.app.test_client() as test_client:
-        yield test_client
+        yield test_client, {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -71,7 +88,8 @@ def seed_discrepancy(session, **overrides):
     return discrepancy
 
 
-def test_discrepancies_include_sla_metadata(client, auth_headers):
+def test_discrepancies_include_sla_metadata(client):
+    client, auth_headers = client
     with app_2.SessionLocal() as session:
         seed_discrepancy(session, id="disc-sla", severity="critical")
 
@@ -82,7 +100,8 @@ def test_discrepancies_include_sla_metadata(client, auth_headers):
     assert "sla_remaining_minutes" in data["items"][0]
 
 
-def test_activity_feed_and_assignment_queue_are_available(client, auth_headers):
+def test_activity_feed_and_assignment_queue_are_available(client):
+    client, auth_headers = client
     with app_2.SessionLocal() as session:
         seed_discrepancy(session, id="disc-feed", severity="warning")
 

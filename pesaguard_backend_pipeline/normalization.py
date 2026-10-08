@@ -15,12 +15,22 @@ class NormalizationError(ValueError):
 
 def normalize_amount(value: Any) -> str:
     try:
-        amount = Decimal(str(value).replace(",", "").strip()).quantize(Decimal("0.01"))
+        amount = Decimal(str(value).replace(",", "").strip())
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise NormalizationError("amount must be a valid decimal") from exc
+    if not amount.is_finite():
+        raise NormalizationError("amount must be finite")
+    try:
+        normalized = amount.quantize(Decimal("0.01"))
+    except InvalidOperation as exc:
+        raise NormalizationError("amount exceeds the supported transaction precision") from exc
     if amount <= 0:
         raise NormalizationError("amount must be greater than zero")
-    return f"{amount:.2f}"
+    if amount != normalized:
+        raise NormalizationError("amount must not have fractions smaller than one minor unit")
+    if normalized >= Decimal("10000000000000000"):
+        raise NormalizationError("amount exceeds the supported transaction precision")
+    return f"{normalized:.2f}"
 
 
 def normalize_timestamp(value: Any, *, default_timezone: str = "Africa/Nairobi") -> str:

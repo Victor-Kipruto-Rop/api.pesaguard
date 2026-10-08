@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import Base
+from models import Base, UserAccount
 from tenant_organization_service import TenantOrganizationService
 
 
@@ -15,6 +15,24 @@ def _build_service():
 
 def test_organization_service_supports_tenant_scoped_orgs_and_teams():
     service = _build_service()
+    with service._session() as session:
+        session.add(UserAccount(
+            id="user-1",
+            username="user-1",
+            tenant_id="tenant-a",
+            roles=["owner"],
+            permissions=[],
+            status="active",
+        ))
+        session.add(UserAccount(
+            id="user-2",
+            username="user-2",
+            tenant_id="tenant-a",
+            roles=["operator"],
+            permissions=[],
+            status="active",
+        ))
+        session.commit()
 
     org = service.create_organization(
         name="Acme Finance",
@@ -45,7 +63,7 @@ def test_organization_service_supports_tenant_scoped_orgs_and_teams():
 
 def test_organization_service_tracks_configuration_limits_and_usage():
     service = _build_service()
-    org = service.create_organization("Northwind", tenant_id="tenant-a", owner_user_id="user-1")
+    org = service.create_organization("Northwind", tenant_id="tenant-a")
 
     service.upsert_tenant_configuration("tenant-a", {"data_residency": "eu", "feature_flags": {"alerting": True}})
     service.set_limit("tenant-a", org["id"], "api_requests", 3, "monthly")
@@ -59,3 +77,28 @@ def test_organization_service_tracks_configuration_limits_and_usage():
     summary = service.get_usage_summary("tenant-a", org["id"])
     assert summary["usage"]["api_requests"]["current_usage"] == 3
     assert summary["config"]["data_residency"] == "eu"
+
+
+def test_organization_owner_must_belong_to_the_same_tenant():
+    service = _build_service()
+    with service._session() as session:
+        session.add(UserAccount(
+            id="user-b",
+            username="user-b",
+            tenant_id="tenant-b",
+            roles=["owner"],
+            permissions=[],
+            status="active",
+        ))
+        session.commit()
+
+    try:
+        service.create_organization(
+            "Cross Tenant Owner",
+            tenant_id="tenant-a",
+            owner_user_id="user-b",
+        )
+    except ValueError as error:
+        assert str(error) == "Organization owner not found for tenant"
+    else:
+        raise AssertionError("cross-tenant organization owner was accepted")

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from environment import required_env
+from environment import required_env, runtime_environment
 
 import csv
+import hashlib
+import hmac
 import io
+import ipaddress
 import json
 import logging
 import math
@@ -24,29 +27,40 @@ from flask import Flask, Response, g, has_request_context, jsonify, request, sen
 from werkzeug.exceptions import BadRequest, HTTPException
 
 from action_audit import ActionAuditRecord, AuditOutboxEntry, Base as AuditBase, persist_audit_event
-from auth_rbac import AuthenticationUnavailable, AuthRBAC, TENANT_ID_PATTERN, assert_auth_configuration, auth_required, configure_revocation_store, get_current_user, parse_bearer_token, require_auth
+from auth_rbac import AuthenticationUnavailable, AuthRBAC, TENANT_ID_PATTERN, assert_auth_configuration, auth_required, configure_revocation_store, developer_scope_tenant_id, get_current_user, parse_bearer_token, require_auth
 from batch_ingestion import BatchImportError, BatchImportService
 from data_catalog import CatalogError, load_catalog
 from event_store import EventStore
-from export_routes import bp as export_bp
+from export_routes import bp as export_bp, sanitize_csv_cell
 from ingestion import IngestionService
-from health import build_health_payload
+from health import build_health_payload, sanitize_health_payload
 from public_status import create_public_status_blueprint
-from logging_utils import configure_logging, get_correlation_id, set_correlation_id
+from logging_utils import (
+    bind_observability_context,
+    clear_observability_context,
+    configure_logging,
+    get_correlation_id,
+    get_observability_context,
+    set_correlation_id,
+)
 from metrics import build_metrics_payload, record_security_event
+from prometheus_auth import prometheus_token_matches
 from models import Base, DeadLetter, Discrepancy, DiscrepancyFilterPreset, ImportJob, LineageRecord, MerchantMetric, Transaction, UserAccount
 from provider_management_service import ProviderManagementService
-from rate_limiter import RateLimiter
+from rate_limiter import ENABLE_REDIS_RATE_LIMITING, RateLimiter
 from runtime_config import RuntimeConfig
 from security_helpers import get_client_ip, is_allowed_source, is_payload_within_limit
+from observability import build_traceparent, new_span_id, new_trace_id
+from otel_tracing import extract_trace_context
 from sqlalchemy import create_engine, func, text
-from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, InvalidRequestError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, IntegrityError, InterfaceError, InvalidRequestError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql.selectable import SelectBase
 from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.pool import NullPool, StaticPool
 from tenant_org_routes import bp as tenant_org_bp
 from tenant_settings import TenantSettingsStore
+from transaction_routes import create_transaction_blueprint
 
 configure_logging()
 logger = logging.getLogger("pesaguard.dashboard")
@@ -70,8 +84,22 @@ app = Flask(__name__)
 app.register_blueprint(tenant_org_bp)
 runtime_config = RuntimeConfig.from_env()
 PUBLIC_API_URL = runtime_config.public_api_url
-STATUS_SITE_ORIGIN = "https://status.pesaguard.victorkipruto.com"
-DEFAULT_CORS_ALLOWED_ORIGINS = f"{PUBLIC_API_URL},{STATUS_SITE_ORIGIN}"
+DEFAULT_CORS_ALLOWED_ORIGINS = ",".join((
+    PUBLIC_API_URL,
+    "https://app.pesaguard.co.ke",
+    "https://docs.pesaguard.co.ke",
+    "https://developers.pesaguard.co.ke",
+    "https://status.pesaguard.co.ke",
+    "https://status.pesaguard.victorkipruto.com",
+))
+DEFAULT_CORS_ALLOWED_HEADERS = (
+    "Authorization, Content-Type, Idempotency-Key, traceparent, "
+    "X-Correlation-ID, X-Request-ID"
+)
+DEFAULT_CORS_EXPOSED_HEADERS = (
+    "Retry-After, X-Correlation-ID, X-RateLimit-Limit, "
+    "X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID"
+)
 assert_auth_configuration()
 app.config["MAX_CONTENT_LENGTH"] = runtime_config.api_body_limit
 app.config["PESAGUARD_WEBHOOK_MAX_BODY_BYTES"] = runtime_config.webhook_body_limit
@@ -92,7 +120,70 @@ def create_app() -> Flask:
 api_rate_limiter = RateLimiter()
 api_rate_limiter.set_limits(runtime_config.api_rate_limit_per_minute)
 
-_environment = os.getenv("FLASK_ENV", os.getenv("ENVIRONMENT", os.getenv("PESAGUARD_ENV", "development"))).lower()
+_environment = runtime_environment()
+_internal_service_rate_limits = {
+    "resolve": ("PESAGUARD_INTERNAL_TENANT_RESOLVE_LIMIT_PER_MINUTE", 120),
+    "sync": ("PESAGUARD_INTERNAL_KEY_SYNC_LIMIT_PER_MINUTE", 600),
+    "revoke": ("PESAGUARD_INTERNAL_KEY_LIFECYCLE_LIMIT_PER_MINUTE", 120),
+    "suspend": ("PESAGUARD_INTERNAL_KEY_LIFECYCLE_LIMIT_PER_MINUTE", 120),
+}
+
+
+def _internal_limit_value(operation: str) -> int:
+    setting, default = _internal_service_rate_limits[operation]
+    raw_value = os.getenv(setting, str(default))
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{setting} must be a positive integer") from error
+    if not 1 <= value <= 100_000:
+        raise RuntimeError(f"{setting} must be between 1 and 100000")
+    return value
+
+
+internal_service_rate_limiters: dict[str, RateLimiter] = {}
+for _operation in _internal_service_rate_limits:
+    _internal_limiter = RateLimiter(fail_closed=True)
+    _internal_limiter.set_limits(_internal_limit_value(_operation))
+    internal_service_rate_limiters[_operation] = _internal_limiter
+
+
+def _internal_service_rate_limit_response(operation: str, service_claims):
+    if _environment in {"prod", "production"} and not ENABLE_REDIS_RATE_LIMITING:
+        logger.error("Distributed rate limiting is not configured for internal operation %s", operation)
+        return jsonify({
+            "error": "rate_limiter_unavailable",
+            "message": "Internal service protection is temporarily unavailable.",
+        }), 503
+
+    subject = (
+        service_claims.get("sub")
+        if isinstance(service_claims, dict)
+        else "svc-developer-platform-hmac"
+    )
+    allowed, status = internal_service_rate_limiters[operation].is_allowed(
+        f"service:{subject}",
+        f"internal_v1_{operation}",
+    )
+    if status.get("unavailable"):
+        logger.error("Distributed rate limiter unavailable for internal operation %s", operation)
+        return jsonify({
+            "error": "rate_limiter_unavailable",
+            "message": "Internal service protection is temporarily unavailable.",
+        }), 503
+    if not allowed:
+        record_security_event()
+        retry_after = max(1, int(status.get("retry_after", 1)))
+        response = jsonify({
+            "error": "rate_limit_exceeded",
+            "message": "Internal service request rate exceeded.",
+        })
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+    return None
+
+
 if not os.getenv("DATABASE_URL") and _environment not in {"development", "dev", "test", "testing"}:
     raise RuntimeError("DATABASE_URL must be configured outside development and test environments")
 DATABASE_URL = required_env("DATABASE_URL")
@@ -242,10 +333,11 @@ class _ReadOnlySession(Session):
     def execute(self, statement, params=None, *, execution_options=None, bind_arguments=None, **kwargs):
         if not self._is_read_statement(statement):
             raise InvalidRequestError("Read-only sessions only support SELECT statements")
+        read_options = {**(execution_options or {}), "autoflush": False}
         return super().execute(
             statement,
             params,
-            execution_options=execution_options,
+            execution_options=read_options,
             bind_arguments=bind_arguments,
             **kwargs,
         )
@@ -366,13 +458,16 @@ class _SessionLocalCompat:
             if engine_target is replica_engine:
                 factory_kwargs["fallback_bind"] = primary_engine
         factory = sessionmaker(**factory_kwargs)
-        return factory()
+        session = factory()
+        _bind_developer_key_query_scope(session)
+        return session
 
 
 SessionLocal = _SessionLocalCompat()
 configure_revocation_store(primary_engine, sessionmaker(bind=primary_engine, expire_on_commit=False))
 provider_management = ProviderManagementService(SessionLocal)
-batch_import_service = BatchImportService(IngestionService(EventStore(database_url=DATABASE_URL)))
+transaction_event_store = EventStore(database_url=DATABASE_URL)
+batch_import_service = BatchImportService(IngestionService(transaction_event_store))
 data_catalog = load_catalog()
 from pesaguard_backend_pipeline.communications.routes import create_webhook_blueprint
 from pesaguard_backend_pipeline.communications.product_routes import create_product_blueprint
@@ -410,6 +505,46 @@ def _open_session(read_only: Optional[bool] = None):
         return SessionLocal(read_only=read_only)
     except TypeError:
         return SessionLocal()
+
+
+app.register_blueprint(
+    create_transaction_blueprint(
+        transaction_event_store,
+        lambda: _open_session(read_only=True),
+        lambda: _open_session(read_only=False),
+    )
+)
+
+
+def _bind_developer_key_query_scope(session: Session) -> None:
+    """Attach project/environment tenant filtering only to this API-key request's session."""
+    if not has_request_context():
+        return
+    user = getattr(g, "user", None)
+    if user is None or getattr(user, "principal_type", "") != "developer_api_key":
+        return
+
+    from sqlalchemy import event
+    from sqlalchemy.orm import with_loader_criteria
+
+    tenant_id = user.tenant_id
+    scoped_models = [
+        mapper.class_ for mapper in Base.registry.mappers
+        if hasattr(mapper.class_, "tenant_id")
+    ]
+
+    @event.listens_for(session, "do_orm_execute")
+    def apply_tenant_scope(execute_state):
+        statement = execute_state.statement
+        for model in scoped_models:
+            statement = statement.options(
+                with_loader_criteria(
+                    model,
+                    lambda entity, tenant_id=tenant_id: entity.tenant_id == tenant_id,
+                    include_aliases=True,
+                )
+            )
+        execute_state.statement = statement
 
 
 def _current_tenant_id() -> Optional[str]:
@@ -899,12 +1034,46 @@ def provider_health(provider_id: str):
 
 @app.before_request
 def establish_correlation_context():
-    set_correlation_id(request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or "")
+    def valid_context_id(value: str) -> str:
+        normalized = value.strip()
+        return normalized if len(normalized) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", normalized) else ""
+
+    clear_observability_context()
+    request_id = valid_context_id(request.headers.get("X-Request-ID", "")) or str(uuid.uuid4())
+    correlation_id = (
+        valid_context_id(request.headers.get("X-Correlation-ID", ""))
+        or request_id
+    )
+    incoming_trace = extract_trace_context({
+        "traceparent": request.headers.get("traceparent", ""),
+    })
+    trace_id = (incoming_trace or {}).get("trace_id") or new_trace_id()
+    span_id = (incoming_trace or {}).get("span_id") or new_span_id()
+    set_correlation_id(correlation_id)
+    bind_observability_context(
+        request_id=request_id,
+        correlation_id=correlation_id,
+        trace_id=trace_id,
+        span_id=span_id,
+        traceparent=build_traceparent(trace_id, span_id),
+    )
 
 
 @app.after_request
 def inject_correlation_id(response: Response) -> Response:
     response.headers["X-Correlation-ID"] = get_correlation_id()
+    context = get_observability_context()
+    if context.get("request_id"):
+        response.headers["X-Request-ID"] = context["request_id"]
+        if response.status_code >= 400 and response.is_json:
+            error_payload = response.get_json(silent=True)
+            if isinstance(error_payload, dict) and "error" in error_payload:
+                error_payload.setdefault("request_id", context["request_id"])
+                response.set_data(app.json.dumps(error_payload))
+    if context.get("trace_id"):
+        response.headers["X-Trace-ID"] = context["trace_id"]
+    if context.get("traceparent"):
+        response.headers["traceparent"] = context["traceparent"]
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and response.status_code < 400:
         try:
             consistency_seconds = max(0, int(os.getenv("PESAGUARD_READ_AFTER_WRITE_SECONDS", "5")))
@@ -920,6 +1089,11 @@ def inject_correlation_id(response: Response) -> Response:
                 secure=request.is_secure,
             )
     return response
+
+
+@app.teardown_request
+def clear_dashboard_observability_context(_error=None):
+    clear_observability_context()
 
 
 def _ensure_test_tables() -> None:
@@ -978,6 +1152,12 @@ def enforce_api_security():
     client_identity = client_ip
     auth_header = request.headers.get("Authorization", "")
     token = _bearer_token(auth_header)
+    api_key = request.headers.get("X-API-Key", "").strip()
+    if token and token.startswith("pgk_"):
+        if api_key:
+            return jsonify({"error": "ambiguous_authentication", "message": "Use either bearer or API-key authentication, not both."}), 400
+        api_key = token
+        token = None
     user = getattr(g, "user", None)
     if token and user is None:
         try:
@@ -988,13 +1168,85 @@ def enforce_api_security():
                 "error": "authentication_unavailable",
                 "message": "Authentication state is temporarily unavailable.",
             }), 503
-    if _api_auth_required() and not request.path.startswith("/public/status"):
-        if not token:
+    if token and api_key:
+        return jsonify({"error": "ambiguous_authentication", "message": "Use either bearer or API-key authentication, not both."}), 400
+    if api_key and user is None:
+        try:
+            user = AuthRBAC.verify_api_key(api_key)
+        except AuthenticationUnavailable:
             record_security_event()
-            return jsonify({"error": "authentication_failed", "message": "Valid bearer authentication is required."}), 401
+            return jsonify({
+                "error": "authentication_unavailable",
+                "message": "API-key authentication state is temporarily unavailable.",
+            }), 503
+        if user is None:
+            record_security_event()
+            return jsonify({"error": "authentication_failed", "message": "API key is invalid, expired, or revoked."}), 401
+        g.developer_api_key = getattr(user, "principal_type", "") == "developer_api_key"
+        if g.developer_api_key:
+            if user.api_key_ip_allowlist:
+                try:
+                    client_ip = ipaddress.ip_address(get_client_ip(request))
+                    permitted = any(
+                        client_ip in ipaddress.ip_network(network, strict=False)
+                        for network in user.api_key_ip_allowlist
+                    )
+                except ValueError:
+                    permitted = False
+                if not permitted:
+                    record_security_event()
+                    return jsonify({"error": "ip_not_allowed", "message": "This API key is not allowed from this IP address."}), 403
+            allowed_endpoints = {
+                "list_providers", "providers", "get_provider", "provider_detail",
+                "provider_connection", "provider_health", "get_settings", "update_settings",
+                "create_import", "get_import", "merchant_metrics", "transaction_lineage",
+                "catalog_datasets", "catalog_dataset", "operations_outbox",
+                "replay_dead_letter", "discrepancies", "activity_feed", "assignment_queue",
+                "resolve_discrepancy", "bulk_resolve_discrepancies", "save_notes",
+                "assign_discrepancy", "analytics_sla_metrics", "analytics_resolution_times",
+                "analytics_operator_stats", "export_discrepancies_csv",
+                "analytics_incident_trends", "reconciliation_report",
+                "bulk_assign_incidents", "search_incidents",
+            }
+            if request.endpoint not in allowed_endpoints:
+                record_security_event()
+                return jsonify({
+                    "error": "project_environment_scope_required",
+                    "message": "This endpoint is not enabled for project/environment-scoped API keys.",
+                }), 403
+            requested_tenants = [
+                request.headers.get("X-Tenant-ID"),
+                request.args.get("tenant"),
+                request.args.get("tenant_id"),
+                (request.view_args or {}).get("tenant_id"),
+                (request.get_json(silent=True) or {}).get("tenant_id")
+                if request.is_json else None,
+                request.form.get("tenant_id"),
+            ]
+            if any(value and value != user.tenant_id for value in requested_tenants):
+                record_security_event()
+                return jsonify({"error": "tenant_access_denied", "message": "The API key is bound to another tenant scope."}), 403
+            g.user = user
+    internal_key_sync = request.path == "/internal/v1/developer-api-keys/sync"
+    internal_tenant_resolve = request.path == "/internal/v1/tenants/resolve"
+    internal_key_lifecycle = bool(
+        re.fullmatch(r"/internal/v1/keys/[^/]+/(?:revoke|suspend)", request.path)
+    )
+    if (
+        _api_auth_required()
+        and not request.path.startswith("/public/status")
+        and not internal_key_sync
+        and not internal_tenant_resolve
+        and not internal_key_lifecycle
+    ):
+        if not token and not api_key:
+            record_security_event()
+            return jsonify({"error": "authentication_failed", "message": "Bearer or API-key authentication is required."}), 401
         if not user:
             record_security_event()
-            return jsonify({"error": "authentication_failed", "message": "Valid bearer authentication is required."}), 401
+            return jsonify({"error": "authentication_failed", "message": "Valid bearer or API-key authentication is required."}), 401
+        g.user = user
+    elif user is not None:
         g.user = user
     if user:
         client_identity = user.user_id
@@ -1008,6 +1260,576 @@ def enforce_api_security():
         response.headers["Retry-After"] = str(status.get("retry_after", 60))
         return response
 
+
+class _InvalidDeveloperApiKeySyncPayload(ValueError):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+@app.get("/internal/v1/tenants/resolve")
+def resolve_developer_platform_tenant():
+    """Resolve the canonical Core tenant ID for a signed Developer Platform request."""
+    raw_body = request.get_data(cache=True)
+    signed_target = request.path.encode("ascii")
+    if request.query_string:
+        signed_target += b"?" + request.query_string
+    from internal_service_auth import ServiceAuthError, authenticate_internal_request
+
+    try:
+        service_jwt_claims = authenticate_internal_request(
+            method="GET",
+            raw_target=signed_target,
+            raw_body=raw_body,
+            required_scope="service:tenant:read",
+            operation="resolve",
+        )
+    except ServiceAuthError as error:
+        return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    limit_response = _internal_service_rate_limit_response("resolve", service_jwt_claims)
+    if limit_response is not None:
+        return limit_response
+
+    required_fields = {"organization_id", "project_id", "environment_id"}
+    if (
+        set(request.args.keys()) != required_fields
+        or any(len(request.args.getlist(field)) != 1 for field in required_fields)
+        or raw_body
+    ):
+        return jsonify({
+            "error": "invalid_request",
+            "message": "Exactly one organization_id, project_id, and environment_id are required.",
+        }), 400
+
+    try:
+        organization_id, project_id, environment_id = (
+            str(uuid.UUID(request.args[field]))
+            for field in ("organization_id", "project_id", "environment_id")
+        )
+        tenant_id = developer_scope_tenant_id(
+            organization_id, project_id, environment_id
+        )
+    except (AttributeError, TypeError, ValueError):
+        return jsonify({
+            "error": "invalid_request",
+            "message": "Organization, project, and environment IDs must be valid UUIDs.",
+        }), 400
+
+    return jsonify({"tenant_id": tenant_id}), 200
+
+
+def _validated_internal_idempotency_key() -> Optional[str]:
+    value = request.headers.get("Idempotency-Key", "")
+    if (
+        not value
+        or len(value) > 255
+        or not value.isascii()
+        or value.strip() != value
+        or any(ord(character) < 33 or ord(character) > 126 for character in value)
+    ):
+        return None
+    return value
+
+
+@app.post("/internal/v1/developer-api-keys/sync")
+def sync_developer_api_key():
+    """Synchronize a Developer Platform key using the mutually configured HMAC secret."""
+    raw_body = request.get_data(cache=True)
+    from internal_service_auth import (
+        ServiceAuthError,
+        authenticate_internal_request,
+        consume_service_jwt_replay,
+    )
+
+    try:
+        service_jwt_claims = authenticate_internal_request(
+            method="POST",
+            raw_target=b"/internal/v1/developer-api-keys/sync",
+            raw_body=raw_body,
+            required_scope="service:sync",
+            operation="sync",
+        )
+    except ServiceAuthError as error:
+        return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    limit_response = _internal_service_rate_limit_response("sync", service_jwt_claims)
+    if limit_response is not None:
+        return limit_response
+
+    idempotency_key = _validated_internal_idempotency_key()
+    if idempotency_key is None:
+        return jsonify({
+            "error": "invalid_idempotency_key",
+            "message": "A valid Idempotency-Key header is required.",
+        }), 400
+
+    try:
+        payload = request.get_json(force=True)
+        key_id = str(uuid.UUID(payload["key_id"]))
+        tenant_id = payload["tenant_id"]
+        organization_id = str(uuid.UUID(payload["organization_id"]))
+        project_id = str(uuid.UUID(payload["project_id"]))
+        environment_id = str(uuid.UUID(payload["environment_id"]))
+        source_version = payload["source_version"]
+        key_hash = payload.get("key_hash")
+        key_prefix = payload["key_prefix"]
+        scopes = payload["scopes"]
+        ip_allowlist = payload["ip_allowlist"]
+        status = payload["status"]
+        expires_at = payload.get("expires_at")
+        if isinstance(source_version, bool) or not isinstance(source_version, int) or source_version < 0:
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_source_version")
+        if not isinstance(tenant_id, str) or not TENANT_ID_PATTERN.fullmatch(tenant_id):
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_tenant_id")
+        if not isinstance(key_prefix, str) or not key_prefix.startswith("pgk_") or len(key_prefix) > 32:
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_key_prefix")
+        if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_scopes")
+        if not isinstance(ip_allowlist, list) or not all(isinstance(item, str) for item in ip_allowlist):
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_ip_allowlist")
+        for network in ip_allowlist:
+            try:
+                ipaddress.ip_network(network, strict=False)
+            except ValueError:
+                raise _InvalidDeveloperApiKeySyncPayload("invalid_ip_allowlist") from None
+        if status not in {"ACTIVE", "SUSPENDED", "REVOKED", "COMPROMISED", "EXPIRED"}:
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_status")
+        if key_hash is not None and (
+            not isinstance(key_hash, str) or len(key_hash) != 64
+            or any(character not in "0123456789abcdef" for character in key_hash)
+        ):
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_key_digest")
+        if expires_at is not None:
+            if not isinstance(expires_at, str):
+                raise _InvalidDeveloperApiKeySyncPayload("invalid_expiry")
+            try:
+                expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                raise _InvalidDeveloperApiKeySyncPayload("invalid_expiry") from None
+            if expires_at.tzinfo is None:
+                raise _InvalidDeveloperApiKeySyncPayload("invalid_expiry")
+            expires_at = expires_at.astimezone(timezone.utc)
+        try:
+            normalized_scopes = AuthRBAC.normalize_machine_scopes(scopes)
+        except (TypeError, ValueError):
+            raise _InvalidDeveloperApiKeySyncPayload("invalid_scopes") from None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        reason = getattr(error, "reason", "invalid_payload_fields")
+        return jsonify({
+            "error": "invalid_sync_payload",
+            "message": "The synchronization payload is invalid.",
+            "reason": reason,
+        }), 400
+    if tenant_id != developer_scope_tenant_id(organization_id, project_id, environment_id):
+        return jsonify({"error": "invalid_tenant_scope", "message": "Tenant scope does not match project/environment binding."}), 400
+
+    try:
+        consume_service_jwt_replay(service_jwt_claims)
+    except ServiceAuthError as error:
+        return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    requested_status = status
+    now = datetime.now(timezone.utc)
+    if status == "ACTIVE" and expires_at is not None and expires_at <= now:
+        status = "EXPIRED"
+    canonical_request = json.dumps(
+        {
+            "key_id": key_id,
+            "tenant_id": tenant_id,
+            "organization_id": organization_id,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "source_version": source_version,
+            "key_hash": key_hash,
+            "key_prefix": key_prefix,
+            "scopes": normalized_scopes,
+            "ip_allowlist": sorted(ip_allowlist),
+            "status": requested_status,
+            "expires_at": expires_at.isoformat() if expires_at is not None else None,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    request_hash = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    service_subject = (
+        service_jwt_claims.get("sub")
+        if service_jwt_claims is not None
+        else "svc-developer-platform"
+    )
+    session = _open_session(read_only=False)
+    try:
+        from models import ApiKeyLifecycleIdempotencyRecord, ApiKeyRecord
+
+        session.query(ApiKeyLifecycleIdempotencyRecord).filter(
+            ApiKeyLifecycleIdempotencyRecord.expires_at <= now
+        ).delete(synchronize_session=False)
+        session.commit()
+        prior_request = (
+            session.query(ApiKeyLifecycleIdempotencyRecord)
+            .filter_by(
+                service_subject=service_subject,
+                operation="sync",
+                key_id=key_id,
+                idempotency_key=idempotency_key,
+            )
+            .first()
+        )
+        if prior_request is not None:
+            if prior_request.request_hash != request_hash:
+                return jsonify({
+                    "error": "idempotency_key_reused",
+                    "message": "Idempotency-Key was already used for a different request.",
+                }), 409
+            return jsonify(prior_request.response), 200
+
+        record = session.query(ApiKeyRecord).filter_by(id=key_id).with_for_update().first()
+        if record is not None and record.tenant_id != tenant_id:
+            return jsonify({"error": "tenant_mismatch", "message": "Key identity is already bound to another tenant."}), 409
+        if record is not None and record.source_version >= source_version:
+            return jsonify({"status": "unchanged", "source_version": record.source_version}), 200
+
+        existing_status = (record.api_metadata or {}).get("source_status") if record is not None else None
+        terminal_statuses = {"REVOKED", "COMPROMISED", "EXPIRED"}
+        if existing_status in terminal_statuses and status != existing_status:
+            return jsonify({"error": "terminal_key_state", "message": "A terminal API key cannot be changed or reactivated."}), 409
+        if record is None:
+            if key_hash is None and status == "ACTIVE":
+                return jsonify({"error": "missing_key_digest", "message": "Initial active-key synchronization requires its digest."}), 400
+            record = ApiKeyRecord(
+                id=key_id,
+                tenant_id=tenant_id,
+                key_hash=key_hash or hashlib.sha256(f"revoked:{key_id}".encode("utf-8")).hexdigest(),
+                key_prefix=key_prefix,
+                role="admin",
+                scopes=normalized_scopes,
+                expires_at=expires_at,
+                active=False,
+                api_metadata={},
+            )
+            session.add(record)
+        elif key_hash is not None:
+            record.key_hash = key_hash
+
+        record.key_prefix = key_prefix
+        record.role = "admin"
+        record.scopes = normalized_scopes
+        record.expires_at = expires_at
+        record.active = status == "ACTIVE"
+        record.revoked_at = now if status in terminal_statuses else None
+        record.source_version = source_version
+        record.api_metadata = {
+            **(record.api_metadata or {}),
+            "source": "developer-platform",
+            "source_status": status,
+            "organization_id": organization_id,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "source_version": source_version,
+            "ip_allowlist": ip_allowlist,
+        }
+        response_body = {"status": "synchronized", "source_version": source_version}
+        session.add(ApiKeyLifecycleIdempotencyRecord(
+            id=str(uuid.uuid4()),
+            service_subject=service_subject,
+            operation="sync",
+            key_id=key_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=response_body,
+            created_at=now,
+            expires_at=now + timedelta(hours=24),
+        ))
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raced_request = (
+                session.query(ApiKeyLifecycleIdempotencyRecord)
+                .filter_by(
+                    service_subject=service_subject,
+                    operation="sync",
+                    key_id=key_id,
+                    idempotency_key=idempotency_key,
+                )
+                .first()
+            )
+            if raced_request is None:
+                raise
+            if raced_request.request_hash != request_hash:
+                return jsonify({
+                    "error": "idempotency_key_reused",
+                    "message": "Idempotency-Key was already used for a different request.",
+                }), 409
+            return jsonify(raced_request.response), 200
+        return jsonify(response_body), 200
+    except Exception:
+        session.rollback()
+        logger.exception("Developer API-key synchronization failed for key id %s", key_id)
+        return jsonify({"error": "key_sync_failed", "message": "The key could not be synchronized."}), 503
+    finally:
+        session.close()
+
+
+def _apply_developer_api_key_lifecycle(key_id: str, operation: str):
+    raw_body = request.get_data(cache=True)
+    try:
+        raw_target = request.path.encode("ascii")
+    except UnicodeEncodeError:
+        return jsonify({
+            "error": "invalid_request",
+            "message": "The key lifecycle request target is invalid.",
+        }), 400
+    if request.query_string:
+        raw_target += b"?" + request.query_string
+
+    from internal_service_auth import (
+        SERVICE_JWT_SUBJECT,
+        ServiceAuthError,
+        authenticate_internal_request,
+        consume_service_jwt_replay,
+    )
+
+    required_scope = f"service:key:{operation}"
+    try:
+        service_jwt_claims = authenticate_internal_request(
+            method="POST",
+            raw_target=raw_target,
+            raw_body=raw_body,
+            required_scope=required_scope,
+            operation=f"key_{operation}",
+        )
+    except ServiceAuthError as error:
+        return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    limit_response = _internal_service_rate_limit_response(operation, service_jwt_claims)
+    if limit_response is not None:
+        return limit_response
+
+    idempotency_key = _validated_internal_idempotency_key()
+    if idempotency_key is None:
+        return jsonify({
+            "error": "invalid_idempotency_key",
+            "message": "A valid Idempotency-Key header is required.",
+        }), 400
+
+    try:
+        payload = request.get_json(force=True)
+        required_fields = {
+            "organization_id",
+            "project_id",
+            "environment_id",
+            "tenant_id",
+            "source_version",
+        }
+        if (
+            request.query_string
+            or not isinstance(payload, dict)
+            or set(payload) != required_fields
+        ):
+            raise ValueError("invalid_lifecycle_payload")
+        normalized_key_id = str(uuid.UUID(key_id))
+        organization_id = str(uuid.UUID(payload["organization_id"]))
+        project_id = str(uuid.UUID(payload["project_id"]))
+        environment_id = str(uuid.UUID(payload["environment_id"]))
+        tenant_id = payload["tenant_id"]
+        source_version = payload["source_version"]
+        if (
+            not isinstance(tenant_id, str)
+            or not TENANT_ID_PATTERN.fullmatch(tenant_id)
+            or isinstance(source_version, bool)
+            or not isinstance(source_version, int)
+            or source_version < 1
+            or source_version > 2_147_483_647
+        ):
+            raise ValueError("invalid_lifecycle_payload")
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return jsonify({
+            "error": "invalid_lifecycle_payload",
+            "message": "The key lifecycle payload is invalid.",
+        }), 400
+
+    expected_tenant_id = developer_scope_tenant_id(
+        organization_id, project_id, environment_id
+    )
+    if tenant_id != expected_tenant_id:
+        return jsonify({
+            "error": "invalid_tenant_scope",
+            "message": "Tenant scope does not match project/environment binding.",
+        }), 400
+
+    try:
+        consume_service_jwt_replay(service_jwt_claims)
+    except ServiceAuthError as error:
+        return jsonify({"error": error.code, "message": error.message}), error.status_code
+
+    canonical_request = json.dumps(
+        {
+            "operation": operation,
+            "key_id": normalized_key_id,
+            "organization_id": organization_id,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "tenant_id": tenant_id,
+            "source_version": source_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    request_hash = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    service_subject = (
+        service_jwt_claims.get("sub")
+        if service_jwt_claims is not None
+        else SERVICE_JWT_SUBJECT
+    )
+    now = datetime.now(timezone.utc)
+    session = _open_session(read_only=False)
+    try:
+        from models import ApiKeyLifecycleIdempotencyRecord, ApiKeyRecord
+
+        session.query(ApiKeyLifecycleIdempotencyRecord).filter(
+            ApiKeyLifecycleIdempotencyRecord.expires_at <= now
+        ).delete(synchronize_session=False)
+        session.commit()
+        record = (
+            session.query(ApiKeyRecord)
+            .filter_by(id=normalized_key_id)
+            .with_for_update()
+            .first()
+        )
+        if record is None:
+            return jsonify({"error": "key_not_found", "message": "API key was not found."}), 404
+
+        metadata = record.api_metadata or {}
+        if (
+            record.tenant_id != tenant_id
+            or metadata.get("source") != "developer-platform"
+            or metadata.get("organization_id") != organization_id
+            or metadata.get("project_id") != project_id
+            or metadata.get("environment_id") != environment_id
+        ):
+            return jsonify({
+                "error": "tenant_mismatch",
+                "message": "Key identity is not bound to the supplied tenant scope.",
+            }), 409
+
+        prior_request = (
+            session.query(ApiKeyLifecycleIdempotencyRecord)
+            .filter_by(
+                service_subject=service_subject,
+                operation=operation,
+                key_id=normalized_key_id,
+                idempotency_key=idempotency_key,
+            )
+            .first()
+        )
+        if prior_request is not None:
+            if prior_request.request_hash != request_hash:
+                return jsonify({
+                    "error": "idempotency_key_reused",
+                    "message": "Idempotency-Key was already used for a different request.",
+                }), 409
+            return jsonify(prior_request.response), 200
+
+        if source_version <= record.source_version:
+            return jsonify({
+                "error": "stale_source_version",
+                "message": "The key lifecycle source version must be newer.",
+                "source_version": record.source_version,
+            }), 409
+
+        source_status = metadata.get("source_status")
+        is_terminal = source_status in {"REVOKED", "COMPROMISED", "EXPIRED"} or record.revoked_at is not None
+        if operation == "suspend" and is_terminal:
+            return jsonify({
+                "error": "terminal_key_state",
+                "message": "A terminal API key cannot be suspended or reactivated.",
+            }), 409
+
+        previous_status = source_status or ("ACTIVE" if record.active else "INACTIVE")
+        record.active = False
+        record.source_version = source_version
+        if operation == "revoke":
+            record.revoked_at = record.revoked_at or now
+            metadata["source_status"] = "REVOKED"
+            result_status = "revoked"
+        else:
+            metadata["source_status"] = "SUSPENDED"
+            result_status = "suspended"
+        record.api_metadata = {
+            **metadata,
+            "source": "developer-platform",
+            "organization_id": organization_id,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "source_version": source_version,
+        }
+        response_body = {
+            "status": result_status,
+            "key_id": normalized_key_id,
+            "source_version": source_version,
+            "active": False,
+        }
+        idempotency_record_id = str(uuid.uuid4())
+        session.add(ApiKeyLifecycleIdempotencyRecord(
+            id=idempotency_record_id,
+            service_subject=service_subject,
+            operation=operation,
+            key_id=normalized_key_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=response_body,
+            created_at=now,
+            expires_at=now + timedelta(hours=24),
+        ))
+        persist_audit_event(session, ActionAuditRecord(
+            tenant_id=tenant_id,
+            actor=service_subject,
+            actor_type="service",
+            actor_id=service_subject,
+            actor_authentication_method="service_jwt" if service_jwt_claims else "hmac",
+            action=f"api_key.{operation}",
+            category="security",
+            resource_type="api_key",
+            resource_id=normalized_key_id,
+            outcome="success",
+            details={
+                "previous_status": previous_status,
+                "status": result_status.upper(),
+                "source_version": source_version,
+                "idempotency_key_sha256": hashlib.sha256(
+                    idempotency_key.encode("ascii")
+                ).hexdigest(),
+            },
+            idempotency_key=f"api-key-lifecycle:{idempotency_record_id}",
+        ))
+        session.commit()
+        return jsonify(response_body), 200
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "Developer API-key %s operation failed for key id %s",
+            operation,
+            normalized_key_id,
+        )
+        return jsonify({
+            "error": "key_lifecycle_failed",
+            "message": "The key lifecycle operation could not be completed.",
+        }), 503
+    finally:
+        session.close()
+
+
+@app.post("/internal/v1/keys/<key_id>/revoke")
+def revoke_developer_api_key(key_id: str):
+    """Terminally revoke a Developer Platform API key."""
+    return _apply_developer_api_key_lifecycle(key_id, "revoke")
+
+
+@app.post("/internal/v1/keys/<key_id>/suspend")
+def suspend_developer_api_key(key_id: str):
+    """Temporarily suspend a Developer Platform API key."""
+    return _apply_developer_api_key_lifecycle(key_id, "suspend")
 
 
 @app.after_request
@@ -1028,7 +1850,8 @@ def _inject_security_headers(response: Response) -> Response:
     if origin in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Correlation-ID"
+        response.headers["Access-Control-Allow-Headers"] = DEFAULT_CORS_ALLOWED_HEADERS
+        response.headers["Access-Control-Expose-Headers"] = DEFAULT_CORS_EXPOSED_HEADERS
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -1074,6 +1897,7 @@ def handle_internal_error(error: Exception) -> Response:
 @app.route("/health", methods=["GET"])
 def health():
     payload = build_health_payload()
+    payload = sanitize_health_payload(payload)
     status_code = 200 if payload.get("status") == "ok" else 503
     return jsonify(payload), status_code
 
@@ -1129,21 +1953,21 @@ def _load_spec(filename: str):
 
 @app.route("/openapi.json", methods=["GET"])
 def openapi_spec():
-    """Implemented API surface, generated from the registered routes.
-
-    docs/api/openapi.implemented.json is refreshed by the sync-docs workflow
-    (scripts live in the docs repository) and mirrors what the docs site
-    publishes at api-reference/openapi.json.
-    """
-    return _load_spec("openapi.implemented.json")
+    """Return the implemented API surface with mounted dashboard routes."""
+    spec = json.loads((_API_SPEC_DIR / "openapi.implemented.json").read_text(encoding="utf-8"))
+    spec["servers"] = [{"url": "/api/v1"}]
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/v1"):
+            continue
+        path = re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", rule.rule)
+        if path in spec.get("paths", {}):
+            spec["paths"][path]["servers"] = [{"url": "/"}]
+    return jsonify(spec), 200
 
 
 @app.route("/openapi.contract.json", methods=["GET"])
 def openapi_contract():
-    """Target public contract, including endpoints not implemented yet.
-
-    Hand-maintained; guarded by the breaking-change gate in CI.
-    """
+    """Return the public target contract, including routes not yet implemented."""
     return _load_spec("openapi.json")
 
 
@@ -1174,9 +1998,8 @@ def docs():
     return Response(html, mimetype="text/html"), 200
 
 
-@app.route("/metrics", methods=["GET"])
 @require_auth("read:metrics")
-def metrics():
+def _authenticated_metrics():
     if "text/plain" in request.headers.get("Accept", ""):
         return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
 
@@ -1221,8 +2044,16 @@ def metrics():
         session.close()
 
 
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    if prometheus_token_matches(request):
+        return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
+    return _authenticated_metrics()
+    return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
+
+
 @app.route("/api/v1/imports", methods=["POST"])
-@require_auth(required_permission="read:analytics")
+@require_auth(required_permission="write:transactions")
 def create_import():
     """Store a tenant-scoped import object and create a queued batch job."""
     tenant_id = get_current_user().tenant_id
@@ -1258,7 +2089,7 @@ def create_import():
 
 
 @app.route("/api/v1/imports/<import_id>", methods=["GET"])
-@require_auth(required_permission="read:analytics")
+@require_auth(required_permission="read:transactions")
 def get_import(import_id: str):
     """Return tenant-scoped import progress and validation counters."""
     tenant_id = get_current_user().tenant_id
@@ -2008,17 +2839,17 @@ def export_discrepancies_csv():
         writer.writeheader()
         for item in items:
             writer.writerow({
-                "id": item.id,
-                "trans_id": item.trans_id,
-                "anomaly_type": item.anomaly_type,
-                "severity": item.severity,
-                "status": item.status,
+                "id": sanitize_csv_cell(item.id),
+                "trans_id": sanitize_csv_cell(item.trans_id),
+                "anomaly_type": sanitize_csv_cell(item.anomaly_type),
+                "severity": sanitize_csv_cell(item.severity),
+                "status": sanitize_csv_cell(item.status),
                 "resolved": "Yes" if item.resolved else "No",
-                "tenant_id": item.tenant_id or "N/A",
-                "assignee": item.assignee or "Unassigned",
-                "detected_at": item.detected_at.isoformat() if item.detected_at else "",
-                "resolved_at": item.resolved_at.isoformat() if item.resolved_at else "",
-                "notes": item.notes or "",
+                "tenant_id": sanitize_csv_cell(item.tenant_id or "N/A"),
+                "assignee": sanitize_csv_cell(item.assignee or "Unassigned"),
+                "detected_at": sanitize_csv_cell(item.detected_at.isoformat() if item.detected_at else ""),
+                "resolved_at": sanitize_csv_cell(item.resolved_at.isoformat() if item.resolved_at else ""),
+                "notes": sanitize_csv_cell(item.notes or ""),
             })
 
         buffer = io.BytesIO(text_buf.getvalue().encode("utf-8"))

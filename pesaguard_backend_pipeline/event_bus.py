@@ -506,10 +506,10 @@ class EventDeliveryController:
         self._completed.update(self._state_client.smembers(f"{self._state_prefix}:completed"))
         for encoded in self._state_client.lrange(f"{self._state_prefix}:retries", 0, -1):
             value = json.loads(encoded)
-            self.retry_queue.append(RetryTask(EventEnvelope(**value["event"]), value["available_at"], value["reason"]))
+            self.retry_queue.append(RetryTask(EventEnvelope.from_dict(value["event"]), value["available_at"], value["reason"]))
         for encoded in self._state_client.lrange(f"{self._state_prefix}:dlq", 0, -1):
             value = json.loads(encoded)
-            self.dlq.append(DeadLetterEvent(EventEnvelope(**value["event"]), value["reason"], value["failed_at"]))
+            self.dlq.append(DeadLetterEvent(EventEnvelope.from_dict(value["event"]), value["reason"], value["failed_at"]))
 
     def _persist_retry(self, task: RetryTask) -> None:
         if self._state_client is not None:
@@ -576,14 +576,18 @@ class EventDeliveryController:
     def replay(self, dead_letter: DeadLetterEvent, handler: Callable[[EventEnvelope], Any], *, lag: int = 0) -> DeliveryResult:
         """Replay a DLQ event from attempt one without changing its event identity."""
         replay_event = EventEnvelope.from_dict({**dead_letter.event.to_dict(), "attempt": 1})
+        result = self.deliver(replay_event, handler, lag=lag)
+        if result.status == "backpressured":
+            return result
+
         with self._lock:
-            self.dlq = [entry for entry in self.dlq if entry.event.event_id != replay_event.event_id]
+            self.dlq = [entry for entry in self.dlq if entry is not dead_letter]
             if self._state_client is not None:
                 key = f"{self._state_prefix}:dlq"
                 self._state_client.delete(key)
                 for entry in self.dlq:
                     self._persist_dead_letter(entry)
-        return self.deliver(replay_event, handler, lag=lag)
+        return result
 
     def due_retries(self, now: Optional[float] = None) -> list[RetryTask]:
         current = time.time() if now is None else now

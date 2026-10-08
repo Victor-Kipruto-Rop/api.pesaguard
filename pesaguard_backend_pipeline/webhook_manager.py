@@ -171,6 +171,7 @@ class WebhookManager:
         delivery_id = f"delivery_{uuid.uuid4().hex[:12]}"
         delivery = WebhookDelivery(
             id=delivery_id,
+            tenant_id=webhook.tenant_id,
             webhook_id=webhook.id,
             event_type=event_type,
             payload=payload,
@@ -324,4 +325,3 @@ class WebhookManager:
             }
             for d in deliveries
         ]
-

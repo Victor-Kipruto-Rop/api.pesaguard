@@ -1,0 +1,39 @@
+version: '3.9'
+
+# Data residency (Addendum III): keep DEPLOYMENT_REGION, BACKUP_REGION, and LOG_REGION
+# consistent with docs/product/DATA_RESIDENCY.md. Pilot default is ke-1 (Kenya / East Africa).
+
+x-residency-env: &residency-env
+  DEPLOYMENT_REGION: ${DEPLOYMENT_REGION:-ke-1}
+  BACKUP_REGION: ${BACKUP_REGION:-ke-1}
+  LOG_REGION: ${LOG_REGION:-ke-1}
+
+services:
+  postgres-staging:
+    image: postgres:16
+    environment:
+      <<: *residency-env
+      POSTGRES_DB: ${STAGING_POSTGRES_DB:?STAGING_POSTGRES_DB must be set}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    ports:
+      - "5433:5432"
+  kafka-staging:
+    image: bitnami/kafka:3.7
+    environment:
+      <<: *residency-env
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: ${STAGING_KAFKA_ADVERTISED_LISTENERS:?STAGING_KAFKA_ADVERTISED_LISTENERS must be set}
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka-staging:9093
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+  redis-staging:
+    image: redis:7
+    environment:
+      <<: *residency-env
+    ports:
+      - "6380:6379"

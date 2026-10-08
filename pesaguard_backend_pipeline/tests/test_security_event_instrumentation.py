@@ -9,6 +9,8 @@ OTP verification failure.
 from __future__ import annotations
 
 import hashlib
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import flask
@@ -49,6 +51,37 @@ def test_record_security_event_increments_shared_business_counter():
     metrics.record_security_event()
     metrics.record_security_event()
     assert _security_count() >= before + 2
+
+
+def test_auth_risk_metrics_use_bounded_decision_and_signal_labels():
+    before = metrics.telemetry_snapshot()["business"].get("auth_risk_high_block", 0)
+    metrics.record_auth_risk_decision(
+        "high",
+        "block",
+        {"credential_compromise": True, "attacker_controlled_label": True},
+    )
+    after = metrics.telemetry_snapshot()["business"]
+    assert after["auth_risk_high_block"] == before + 1
+
+
+    def test_telemetry_failure_does_not_break_auth_limiter_fail_closed(monkeypatch) -> None:
+        import rate_limiter
+
+        class BrokenRedisLimiter:
+            def is_allowed(self, *args, **kwargs):
+                raise ConnectionError("redis unavailable")
+
+        def broken_metric(*args, **kwargs):
+            raise RuntimeError("metrics backend unavailable")
+
+        monkeypatch.setattr(rate_limiter, "ENABLE_REDIS_RATE_LIMITING", True)
+        monkeypatch.setattr(metrics, "record_business_metric", broken_metric)
+        limiter = rate_limiter.RateLimiter(default_max_per_minute=5, fail_closed=True)
+        limiter._redis = BrokenRedisLimiter()
+        allowed, status = limiter.is_allowed("account-hash", "auth-login")
+        assert allowed is False
+        assert status["unavailable"] is True
+    assert "auth_risk_signal_attacker_controlled_label" not in after
 
 
 def test_alertmanager_secret_mismatch_records_security_event(monkeypatch):
@@ -207,4 +240,87 @@ def test_rate_limit_denial_increments_security_metric() -> None:
     before = _security_count()
     metrics.record_security_event()
     assert _security_count() >= before + 1
+
+
+def test_rate_limiter_can_fail_closed_when_redis_is_unavailable(monkeypatch) -> None:
+    import rate_limiter
+
+    class BrokenRedisLimiter:
+        def is_allowed(self, *args, **kwargs):
+            raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(rate_limiter, "ENABLE_REDIS_RATE_LIMITING", True)
+    secure_limiter = rate_limiter.RateLimiter(default_max_per_minute=5, fail_closed=True)
+    secure_limiter._redis = BrokenRedisLimiter()
+    allowed, status = secure_limiter.is_allowed("account-hash", "auth-login")
+    assert allowed is False
+    assert status["unavailable"] is True
+
+    fallback_limiter = rate_limiter.RateLimiter(default_max_per_minute=5)
+    fallback_limiter._redis = BrokenRedisLimiter()
+    fallback_allowed, fallback_status = fallback_limiter.is_allowed("webhook-client", "webhook")
+    assert fallback_allowed is True
+    assert "unavailable" not in fallback_status
+
+
+@pytest.mark.skipif(
+    os.getenv("PESAGUARD_RUN_REDIS_INTEGRATION") != "1" or not os.getenv("REDIS_URL"),
+    reason="set PESAGUARD_RUN_REDIS_INTEGRATION=1 and REDIS_URL to test shared limiter state",
+)
+def test_redis_rate_limit_state_is_shared_across_instances() -> None:
+    from rate_limiter import RedisRateLimiter
+
+    endpoint = f"auth-load-test-{uuid.uuid4().hex}"
+    client_id = f"account-hash-{uuid.uuid4().hex}"
+    first = RedisRateLimiter(os.environ["REDIS_URL"])
+    second = RedisRateLimiter(os.environ["REDIS_URL"])
+    assert first.is_allowed(client_id, endpoint, max_per_minute=1)[0] is True
+    assert second.is_allowed(client_id, endpoint, max_per_minute=1)[0] is False
+
+
+def test_fail_closed_rate_limit_decorator_returns_503(monkeypatch) -> None:
+    import rate_limiter
+
+    class BrokenRedisLimiter:
+        def is_allowed(self, *args, **kwargs):
+            raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(rate_limiter, "ENABLE_REDIS_RATE_LIMITING", True)
+    monkeypatch.setattr(rate_limiter, "_redis_limiter", BrokenRedisLimiter())
+    app = flask.Flask("rate-limit-outage-test")
+
+    @app.route("/login", methods=["POST"])
+    @rate_limiter.rate_limit(max_requests_per_minute=5, fail_closed=True)
+    def login():
+        return {"status": "should_not_run"}, 200
+
+    response = app.test_client().post("/login")
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "rate_limiter_unavailable"
+    assert response.headers["Retry-After"] == "1"
+
+
+def test_rate_limit_decorator_returns_503_when_metrics_also_fail(monkeypatch) -> None:
+    import rate_limiter
+
+    class BrokenRedisLimiter:
+        def is_allowed(self, *args, **kwargs):
+            raise ConnectionError("redis unavailable")
+
+    def broken_metric(*args, **kwargs):
+        raise RuntimeError("metrics backend unavailable")
+
+    monkeypatch.setattr(rate_limiter, "ENABLE_REDIS_RATE_LIMITING", True)
+    monkeypatch.setattr(rate_limiter, "_redis_limiter", BrokenRedisLimiter())
+    monkeypatch.setattr(metrics, "record_business_metric", broken_metric)
+    app = flask.Flask("rate-limit-metrics-outage-test")
+
+    @app.route("/login", methods=["POST"])
+    @rate_limiter.rate_limit(max_requests_per_minute=5, fail_closed=True)
+    def login():
+        return {"status": "should_not_run"}, 200
+
+    response = app.test_client().post("/login")
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "rate_limiter_unavailable"
 

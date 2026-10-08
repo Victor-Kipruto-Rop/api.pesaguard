@@ -11,15 +11,16 @@ import redis
 from flask import Flask, Response, abort, jsonify, request, g
 from werkzeug.exceptions import HTTPException
 
-from observability import init_opentelemetry, init_sentry, new_trace_id, trace_span
+from observability import build_traceparent, init_opentelemetry, init_sentry, new_span_id, new_trace_id, trace_span
 from otel_tracing import extract_trace_context
 
 from background_tasks import enqueue_transaction_outbox_drain
 from event_store import EventStore, ProcessResult, provider_account_id
 from health import build_health_payload
 from idempotency import derive_idempotency_key
-from logging_utils import bind_observability_context, configure_logging, get_correlation_id, get_observability_context, set_correlation_id
+from logging_utils import bind_observability_context, clear_observability_context, configure_logging, get_correlation_id, get_observability_context, set_correlation_id
 from metrics import build_metrics_payload, record_http_request, record_business_metric, record_pipeline_event, record_security_event
+from prometheus_auth import prometheus_token_matches
 from rate_limiter import RateLimiter
 from security_helpers import (
     get_client_ip,
@@ -32,7 +33,7 @@ from tenant_settings import TenantSettingsStore
 from validators import validate_daraja_payload
 from ingestion import IngestionError, IngestionService
 from auth_rbac import AuthRBAC, get_current_user, require_auth
-from api_validation import ApiContractError, validate_transaction_create, validate_transaction_response
+from transaction_routes import create_transaction_blueprint
 
 configure_logging()
 logger = logging.getLogger("pesaguard.webhook")
@@ -46,6 +47,17 @@ event_store = EventStore()
 ingestion_service = IngestionService(event_store)
 webhook_rate_limiter = RateLimiter()
 webhook_rate_limiter.set_limits(int(os.getenv("PESAGUARD_WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")))
+
+
+def _transaction_read_session():
+    event_store._ensure_ready()
+    return event_store.Session()
+
+
+app.register_blueprint(
+    create_transaction_blueprint(event_store, _transaction_read_session)
+)
+
 
 tenant_store = TenantSettingsStore()
 
@@ -195,16 +207,23 @@ def handle_internal_error(error):
 
 @app.before_request
 def setup_request_context():
-    """Set up per-request context including correlation ID for tracing."""
+    """Set up a fresh per-request context including correlation ID for tracing."""
+    clear_observability_context()
     request_id = request.headers.get("X-Request-ID") or str(__import__("uuid").uuid4())
     correlation_id = request.headers.get("X-Correlation-ID") or request_id
     incoming_trace = extract_trace_context({"traceparent": request.headers.get("traceparent", "")})
-    trace_id = (incoming_trace or {}).get("trace_id") or request.headers.get("X-Trace-ID") or new_trace_id()
+    header_trace_id = request.headers.get("X-Trace-ID", "").strip()
+    valid_header_trace = len(header_trace_id) == 32 and all(char in "0123456789abcdef" for char in header_trace_id)
+    trace_id = (incoming_trace or {}).get("trace_id") or (header_trace_id if valid_header_trace else new_trace_id())
+    span_id = (incoming_trace or {}).get("span_id") or new_span_id()
+    traceparent = build_traceparent(trace_id, span_id)
     set_correlation_id(correlation_id)
     bind_observability_context(
         request_id=request_id,
         correlation_id=correlation_id,
         trace_id=trace_id,
+        span_id=span_id,
+        traceparent=traceparent,
         tenant_id=request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", ""),
     )
     g.request_started = __import__("time").perf_counter()
@@ -225,6 +244,13 @@ def add_correlation_id_header(response):
         timeout=response.status_code == 504,
     )
     return response
+
+
+
+
+@app.teardown_request
+def clear_request_context(_error=None):
+    clear_observability_context()
 
 
 @app.before_request
@@ -277,10 +303,16 @@ def enforce_webhook_security():
                 return jsonify({"ResultCode": 1, "ResultDesc": "Invalid signature"}), 403
 
 
-@app.route("/metrics", methods=["GET"])
 @require_auth("read:metrics")
-def metrics():
+def _authenticated_metrics():
     return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
+
+
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    if prometheus_token_matches(request):
+        return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
+    return _authenticated_metrics()
 
 
 def _verify_daraja_signature(request_body: bytes, signature: str) -> None:
@@ -389,48 +421,8 @@ def mpesa_confirmation():
     return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
 
 
-@app.route("/api/v1/transactions", methods=["POST"])
-@require_auth()
-def create_transaction():
-    """Create one financial transaction under an explicit HTTP idempotency key."""
-    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
-    current_user = get_current_user()
-    header_tenant_id = request.headers.get("X-Tenant-ID", "").strip()
-    tenant_id = str(getattr(current_user, "tenant_id", "") or header_tenant_id).strip()
-    payload = request.get_json(silent=True)
-    try:
-        validate_transaction_create(payload)
-    except ApiContractError as exc:
-        return jsonify({"error": "invalid_request", "message": str(exc)}), 400
-    if not idempotency_key or len(idempotency_key) > 255:
-        return jsonify({"error": "Idempotency-Key header is required"}), 400
-    if not tenant_id:
-        return jsonify({"error": "X-Tenant-ID header is required"}), 400
-    if current_user is not None and header_tenant_id and header_tenant_id != tenant_id:
-        record_security_event()
-        return jsonify({"error": "tenant access denied"}), 403
-    provider_transaction_id = str(payload.get("provider_transaction_id") or payload.get("TransID") or "").strip()
-    provider_account = str(payload.get("provider_account_id") or payload.get("BusinessShortCode") or "").strip()
-    if not provider_transaction_id or not provider_account:
-        return jsonify({"error": "provider_transaction_id and provider_account_id are required"}), 400
-    normalized = dict(payload)
-    normalized.setdefault("TransID", provider_transaction_id)
-    normalized.setdefault("BusinessShortCode", provider_account)
-    normalized.setdefault("provider", "mpesa")
-    result = event_store.mark_processed(
-        normalized,
-        tenant_id=tenant_id,
-        idempotency_key_override=idempotency_key,
-    )
-    if result == ProcessResult.ERROR:
-        return jsonify({"error": "transaction could not be persisted"}), 500
-    response_payload = {"status": "accepted", "duplicate": result == ProcessResult.DUPLICATE, "idempotency_key": idempotency_key}
-    validate_transaction_response(response_payload)
-    return jsonify(response_payload), 200
-
-
 @app.route("/api/v1/ingest/safaricom", methods=["POST"])
-@require_auth()
+@require_auth("write:transactions")
 def ingest_safaricom_api_transaction():
     """Accept a Safaricom API response through its provider adapter boundary."""
     payload = request.get_json(silent=True)

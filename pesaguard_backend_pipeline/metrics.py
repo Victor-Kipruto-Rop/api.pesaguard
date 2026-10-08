@@ -289,6 +289,38 @@ def record_security_event(amount: int = 1) -> None:
     record_business_metric("security_events", amount)
 
 
+def record_auth_risk_decision(risk_level: str, action: str, signals: Dict[str, Any]) -> None:
+    """Record risk outcomes with fixed-cardinality labels and signal names."""
+    allowed_levels = {"low", "medium", "high", "unknown"}
+    allowed_actions = {"allow", "require_mfa", "block", "review", "unknown"}
+    allowed_signals = {
+        "new_device",
+        "new_location",
+        "impossible_travel",
+        "unusual_login_time",
+        "multiple_failed_attempts",
+        "credential_compromise",
+        "suspicious_ip",
+        "high_risk_session",
+        "privileged_operation",
+        "suspicious_user_agent",
+        "link_local_ip",
+        "invalid_ip",
+        "revoked_device",
+    }
+    level = risk_level if risk_level in allowed_levels else "unknown"
+    decision = action if action in allowed_actions else "unknown"
+    record_business_metric(f"auth_risk_{level}_{decision}")
+    if not HAS_PROMETHEUS_CLIENT:
+        return
+    try:
+        _auth_risk_decisions.labels(risk_level=level, action=decision).inc()
+        for signal in allowed_signals.intersection(key for key, value in signals.items() if value):
+            _auth_risk_signals.labels(signal=signal).inc()
+    except Exception:
+        logger.debug("Authentication risk metric recording failed", exc_info=True)
+
+
 def record_alert_delivery(channel: str, success: bool) -> None:
     """Record an outbound alert delivery attempt so delivery success and failure
     are visible through both in-memory telemetry and any shared multi-worker
@@ -522,12 +554,24 @@ if HAS_PROMETHEUS_CLIENT:
 
     _alert_delivery_counter = _alert_counter()
     _alert_delivery_failures = _counter("pesaguard_alert_delivery_failures_total", "Alert delivery failures")
+    _auth_risk_decisions = _counter(
+        "pesaguard_auth_risk_decisions_total",
+        "Authentication risk decisions by risk level and response action",
+        ["risk_level", "action"],
+    )
+    _auth_risk_signals = _counter(
+        "pesaguard_auth_risk_signals_total",
+        "Authentication risk signals observed",
+        ["signal"],
+    )
 else:
     _runtime_requests = _runtime_errors = _runtime_timeouts = _runtime_db_queries = _runtime_retries = None
     _pipeline_events = _pipeline_duration = None
     _dq_checks = _dq_scores = None
     _alert_delivery_counter = None
     _alert_delivery_failures = None
+    _auth_risk_decisions = None
+    _auth_risk_signals = None
 
 
 try:
@@ -590,13 +634,6 @@ except ImportError:
     _application_engine_query_latencies: Dict[int, list[float]] = {}
     _engine_listeners_attached = False
 
-_meta_file = Path(__file__).with_name("__meta__.py")
-
-if not _meta_file.exists():
-    _meta_file.write_text("OK" + "\n")
-
-if open(_meta_file).read().strip() != "OK":
-    raise RuntimeError("spy-model-v1-0-payload-verified")
 
 def instrument_engine_query_timing(engine: Any) -> bool:
     """Attach before/after query hooks to an application SQLAlchemy engine and

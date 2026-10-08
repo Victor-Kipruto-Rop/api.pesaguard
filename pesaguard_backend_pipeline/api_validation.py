@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
+from normalization import NormalizationError, normalize_amount
+
 
 class ApiContractError(ValueError):
     """Raised when an HTTP request or response violates its contract."""
@@ -52,6 +54,10 @@ def validate_transaction_create(payload: Any) -> None:
     if not isinstance(payload, Mapping):
         raise ApiContractError("request body must be a JSON object")
     _validate(payload, TRANSACTION_CREATE_SCHEMA, "transaction request")
+    try:
+        normalize_amount(payload["TransAmount"])
+    except NormalizationError as exc:
+        raise ApiContractError(f"transaction amount is invalid: {exc}") from exc
 
 
 def validate_transaction_response(payload: Mapping[str, Any]) -> None:

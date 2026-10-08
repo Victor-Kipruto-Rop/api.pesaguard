@@ -1,0 +1,9 @@
+[Unit]
+Description=Run PesaGuard scheduled reports daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -157,6 +157,8 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
 
         recent_transactions = session.query(Transaction).filter(
             Transaction.tenant_id == tenant_id,
+            Transaction.provider_account_id == provider_id,
+            Transaction.trans_id != trans_id,
         ).order_by(Transaction.created_at.desc()).limit(100).all()
         risk_history = [
             {
@@ -181,6 +183,11 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
         if risk_decision.risk_level in {"HIGH", "CRITICAL"}:
             is_discrepancy = True
             result_payload["anomalies"] = list(result_payload.get("anomalies") or []) + list(risk_decision.reason_codes)
+            result_payload["severity"] = (
+                "critical"
+                if risk_decision.risk_level == "CRITICAL" or result_payload.get("severity") == "critical"
+                else "warning"
+            )
         if is_discrepancy:
             discrepancy_id = f"{tenant_id}:{trans_id}:reconciliation"
             discrepancy = session.get(Discrepancy, discrepancy_id)
@@ -192,9 +199,14 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
                     id=discrepancy_id,
                     trans_id=trans_id,
                     tenant_id=tenant_id,
-                    anomaly_type=evaluation.get("status", "reconciliation_anomaly"),
+                    anomaly_type=(
+                        "fraud_risk"
+                        if risk_decision.risk_level in {"HIGH", "CRITICAL"}
+                        and phase3_status in {"MATCHED", "DUPLICATE"}
+                        else evaluation.get("status", "reconciliation_anomaly")
+                    ),
                     status=discrepancy_status,
-                    severity=evaluation.get("severity", "warning"),
+                    severity=result_payload.get("severity", "warning"),
                     details=json.dumps(result_payload, ensure_ascii=False),
                     detected_at=datetime.now(timezone.utc),
                 )
@@ -218,7 +230,7 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
             action="discrepancy_flagged" if is_discrepancy else "matched",
             category="operations",
             outcome="success",
-            severity=evaluation.get("severity", "info"),
+            severity=result_payload.get("severity", "info"),
             resource_type="transaction",
             resource_id=trans_id,
             idempotency_key=f"reconciliation:{event_key}",
@@ -270,13 +282,6 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
 
 def _publish_downstream(evaluation: Dict[str, Any], trans_id: str, producer: Any, tenant_id: str) -> None:
     """Best-effort publish of reconciliation results to downstream Kafka topics."""
-    phase3_status = evaluation.get("phase3_status")
-    is_discrepancy = (
-        phase3_status not in {None, "MATCHED", "DUPLICATE"}
-        if phase3_status
-        else evaluation.get("status") in {"needs_review", "missing_payment"} or bool(evaluation.get("anomalies"))
-    )
-    topic = TOPIC_DISCREPANCIES if is_discrepancy else TOPIC_MATCHED
     provider_id = provider_account_id(evaluation.get("event", {}))
     event_key = hashlib.sha256(f"{tenant_id}:{provider_id}:{trans_id}".encode("utf-8")).hexdigest()
     session = None
@@ -288,6 +293,8 @@ def _publish_downstream(evaluation: Dict[str, Any], trans_id: str, producer: Any
         if outbox is None or outbox.status == "published":
             session.close()
             return
+        topic = outbox.topic
+        is_discrepancy = topic == TOPIC_DISCREPANCIES
         outbox.status = "processing"
         outbox.attempts = (outbox.attempts or 0) + 1
         session.commit()
@@ -306,7 +313,7 @@ def _publish_downstream(evaluation: Dict[str, Any], trans_id: str, producer: Any
 
         if is_discrepancy:
             logger.warning("Discrepancy event published for trans_id=%s to topic=%s", trans_id, topic)
-            dispatch_discrepancy_alert(evaluation, tenant_id=tenant_id)
+            dispatch_discrepancy_alert({**evaluation, **outbox.payload}, tenant_id=tenant_id)
         else:
             logger.info("Transaction %s cleanly reconciled and published to %s", trans_id, topic)
         outbox.status = "published"
@@ -370,7 +377,8 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
 
     try:
         seen_trans_ids: Set[str] = set()
-        anomalies = check_for_anomalies(event, seen_trans_ids)
+        tenant_settings = settings_store.get(tenant_id)
+        anomalies = check_for_anomalies(event, seen_trans_ids, tenant_settings)
 
         connector = connector_registry.get_connector(tenant_id)
         if connector and hasattr(connector, "fetch_candidate_records"):
@@ -437,7 +445,8 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
             logger.error("Persistence failed for trans_id=%s. Offset NOT committed for retry.", trans_id)
             return False
 
-        _publish_downstream(evaluation, trans_id, producer, tenant_id)
+        if producer is not None:
+            _publish_downstream(evaluation, trans_id, producer, tenant_id)
         return True
 
     except Exception as exc:
@@ -557,4 +566,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-

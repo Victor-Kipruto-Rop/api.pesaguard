@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from event_bus import EventContractError, EventDeliveryController, RetryPolicy, build_event, event_fingerprint, validate_event
+from event_bus import DeadLetterEvent, EventContractError, EventDeliveryController, RetryPolicy, build_event, event_fingerprint, validate_event
 from event_consumer import ConsumerGroup, EventConsumer
 from producer import publish_versioned_event
 
@@ -27,6 +27,43 @@ def test_versioned_event_contract_and_topic_routing():
     assert sent_kwargs["value"]["source"] == "pesaguard"
     with pytest.raises(EventContractError):
         build_event("unsupported.event", "tenant-a", "tx-1", {})
+
+    trace_id = "a" * 32
+    span_id = "b" * 16
+    from logging_utils import bind_observability_context, clear_observability_context
+    from observability import build_traceparent, extract_trace_context
+
+    clear_observability_context()
+    bind_observability_context(
+        trace_id=trace_id,
+        span_id=span_id,
+        traceparent=build_traceparent(trace_id, span_id),
+    )
+    event = build_event(
+        "transaction.received",
+        "tenant-a",
+        "tx-durable-trace",
+        {"TransID": "tx-durable-trace", "amount": "10.00"},
+        event_id="evt-durable-trace",
+        correlation_id="corr-durable-trace",
+        metadata={"traceparent": build_traceparent(trace_id, span_id)},
+    )
+    clear_observability_context()
+
+    sent = {}
+
+    class CapturingProducer:
+        def send(self, topic, key=None, value=None, headers=None):
+            sent.update(topic=topic, headers=headers or [])
+            return object()
+
+    publish_versioned_event(event, producer=CapturingProducer())
+    trace_headers = {
+        str(name): value.decode("ascii") if isinstance(value, bytes) else value
+        for name, value in sent["headers"]
+    }
+    assert extract_trace_context({"traceparent": trace_headers["traceparent"]})["trace_id"] == trace_id
+
 
 def test_event_catalog_accepts_required_transaction_and_operational_events():
     for event_type in (
@@ -252,3 +289,76 @@ def test_network_failure_is_retried_then_dead_lettered():
         retry = controller.due_retries(now=time.time() + 10)[0].event
         result = consumer.consume(retry)
     assert result.status == "dead_lettered"
+
+
+def test_durable_retry_and_dlq_state_loads_timestamp_alias(monkeypatch):
+    import json
+    import sys
+    import types
+
+    event = _event(event_id="durable-state")
+
+    class FakeRedis:
+        def ping(self):
+            return True
+
+        def smembers(self, key):
+            return set()
+
+        def lrange(self, key, start, end):
+            if key.endswith(":retries"):
+                return [json.dumps({
+                    "event": event.to_dict(),
+                    "available_at": 100.0,
+                    "reason": "retry",
+                })]
+            if key.endswith(":dlq"):
+                return [json.dumps({
+                    "event": event.to_dict(),
+                    "reason": "exhausted",
+                    "failed_at": "2026-09-23T12:00:00Z",
+                })]
+            return []
+
+    redis_client = FakeRedis()
+    monkeypatch.setitem(
+        sys.modules,
+        "redis",
+        types.SimpleNamespace(from_url=lambda *args, **kwargs: redis_client),
+    )
+    monkeypatch.setenv("PESAGUARD_EVENT_STATE_REDIS_URL", "redis://event-state-test")
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "test")
+
+    controller = EventDeliveryController()
+
+    assert controller.retry_queue[0].event.event_id == event.event_id
+    assert controller.dlq[0].event.event_id == event.event_id
+
+
+def test_replay_retains_dead_letter_when_backpressured():
+    controller = EventDeliveryController(max_lag=5)
+    event = _event(event_id="backpressured-replay")
+    dead_letter = DeadLetterEvent(event, "previous failure", "2026-09-23T12:00:00Z")
+    controller.dlq.append(dead_letter)
+
+    result = controller.replay(dead_letter, lambda _: None, lag=6)
+
+    assert result.status == "backpressured"
+    assert controller.dlq == [dead_letter]
+
+
+def test_replay_without_registered_handler_preserves_dead_letter():
+    controller = EventDeliveryController()
+    event = _event(event_id="missing-replay-handler")
+    dead_letter = DeadLetterEvent(event, "previous failure", "2026-09-23T12:00:00Z")
+    controller.dlq.append(dead_letter)
+    consumer = EventConsumer(
+        ConsumerGroup("audit", frozenset({"transaction.received"})),
+        controller=controller,
+    )
+
+    result = consumer.replay_dead_letters()[0]
+
+    assert result.status == "dead_lettered"
+    assert result.reason == "no_handler_registered"
+    assert controller.dlq == [dead_letter]

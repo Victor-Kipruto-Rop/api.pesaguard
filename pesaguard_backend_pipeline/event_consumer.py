@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from event_bus import DeliveryResult, EventContractError, EventDeliveryController, EventEnvelope, validate_event
 
@@ -50,7 +50,16 @@ class EventConsumer:
     def replay_dead_letters(self, *, limit: int = 100) -> list[DeliveryResult]:
         results = []
         for dead_letter in list(self.controller.dlq)[:max(0, limit)]:
-            results.append(self.controller.replay(dead_letter, self.handlers[dead_letter.event.event_type]))
+            handler = self.handlers.get(dead_letter.event.event_type)
+            if handler is None:
+                results.append(DeliveryResult(
+                    "dead_lettered",
+                    dead_letter.event.event_id,
+                    dead_letter.event.attempt,
+                    reason="no_handler_registered",
+                ))
+                continue
+            results.append(self.controller.replay(dead_letter, handler))
         return results
 
     def lag_snapshot(self, partition_lags: Dict[int, int]) -> Dict[str, Any]:
@@ -61,13 +70,77 @@ class EventConsumer:
         return snapshot
 
 
+def validate_no_consumer_conflicts(
+    groups: Iterable[ConsumerGroup],
+    *,
+    event_type_topics: Optional[Dict[str, str]] = None,
+) -> None:
+    """Raise ValueError when two consumer groups collide on a topic or handler.
+
+    Confusions that are illegal:
+      * Two groups subscribing to the same Kafka topic (same group_id-like semantics
+        for the same physical topic) — this produces duplicated processing unless
+        the topic is partitioned and groups are intentionally distinct, which we do
+        not permit implicitly.
+      * Two groups claiming the same event_type with the same handler signature
+        (evil-twin handlers) — the same logical work would be performed by two
+        unrelated groups.
+    """
+    event_type_topics = event_type_topics or {}
+    topic_to_groups: Dict[str, list[str]] = defaultdict(list)
+    type_to_handlers: Dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+    for group in groups:
+        topic = event_type_topics.get(group.name)
+        if topic is None:
+            continue
+        topic_to_groups[topic].append(group.name)
+        # In the generic case handlers are registered individually; conflicts
+        # are asserted at registration time instead. We only detect structural
+        # duplicates here:
+        for event_type in group.event_types:
+            type_to_handlers[event_type].append((group.name, event_type))
+
+    # Structural topic collisions
+    collisions: list[tuple[str, list[str]]] = [
+        (topic, names) for topic, names in topic_to_groups.items() if len(names) > 1
+    ]
+    if collisions:
+        raise ValueError(
+            "consumer groups share Kafka topics: " +
+            "; ".join(f"{topic} -> {names}" for topic, names in collisions)
+        )
+
+    # Structural event-type overlaps between groups
+    overlaps: list[tuple[str, list[str]]] = [
+        (et, names) for et, names in type_to_handlers.items() if len(names) > 1
+    ]
+    if overlaps:
+        raise ValueError(
+            "event types are claimed by multiple consumer groups: " +
+            "; ".join(f"{et} -> {names}" for et, names in overlaps)
+        )
+
+
 def default_consumer_groups() -> tuple[ConsumerGroup, ...]:
     return (
         ConsumerGroup("transaction-validation", frozenset({"transaction.received"})),
         ConsumerGroup("transaction-normalization", frozenset({"transaction.validated"})),
         ConsumerGroup("transaction-processors", frozenset({"transaction.normalized"})),
-        ConsumerGroup("fraud", frozenset({"transaction.received", "transaction.validated", "transaction.fraud_detected"})),
-        ConsumerGroup("reconciliation", frozenset({"transaction.received", "transaction.validated", "transaction.reconciled", "transaction.exception_created"})),
-        ConsumerGroup("audit", frozenset({"transaction.received", "transaction.validated", "transaction.normalized", "transaction.processed", "transaction.reconciled", "transaction.exception_created", "transaction.fraud_detected", "notification.requested"})),
+        ConsumerGroup(
+            "fraud",
+            frozenset(
+                {
+                    "transaction.received",
+                    "transaction.validated",
+                    "transaction.fraud_detected",
+                    "fraud.analysis.completed",
+                    "fraud.anomaly_detected",
+                    "fraud.decision_created",
+                    "fraud.anomaly.reviewed",
+                }
+            ),
+        ),
+        ConsumerGroup("audit", frozenset({"transaction.received", "transaction.validated", "transaction.normalized", "transaction.processed", "transaction.reconciled", "transaction.exception_created", "transaction.fraud_detected", "notification.requested", "audit.event.created"})),
         ConsumerGroup("alerts", frozenset({"transaction.exception_created", "transaction.fraud_detected", "notification.requested"})),
     )

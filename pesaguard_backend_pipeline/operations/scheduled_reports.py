@@ -93,6 +93,7 @@ def generate_report_for_tenant(
             total_transactions = (
                 session.query(func.count(Transaction.trans_id))
                 .filter(
+                    Transaction.tenant_id == tenant_id,
                     Transaction.created_at >= period_start,
                     Transaction.created_at <= period_end,
                 )
@@ -153,6 +154,8 @@ def get_all_active_tenants() -> List[str]:
     with Session() as session:
         disc_tenants = session.query(distinct(Discrepancy.tenant_id)).filter(Discrepancy.tenant_id.isnot(None)).all()
         tenants = {t[0] for t in disc_tenants if t[0]}
+        transaction_tenants = session.query(distinct(Transaction.tenant_id)).filter(Transaction.tenant_id.isnot(None)).all()
+        tenants.update(t[0] for t in transaction_tenants if t[0])
         if not tenants:
             tenants.add("default")
         return sorted(list(tenants))

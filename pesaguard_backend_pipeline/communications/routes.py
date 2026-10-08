@@ -90,7 +90,7 @@ def create_webhook_blueprint(
             provider = email_provider_factory() if email_provider_factory is not None else None
             config = EmailProviderConfig(
                 provider=str(payload.get("provider", "smtp_email")).lower(),
-                from_email=str(payload.get("from_email") or "noreply@pesaguard.local"),
+                from_email=str(payload.get("from_email") or "no-reply@pesaguard.co.ke"),
             )
             email_service = EmailService(
                 session,

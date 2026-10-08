@@ -17,14 +17,14 @@ import metrics
 from alerting_service import AlertingService
 from models import Base
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
 def alerts_yaml() -> dict:
     import yaml
 
-    content = (REPO_ROOT / "monitoring" / "alerts.yml").read_text(encoding="utf-8")
+    content = (BACKEND_ROOT / "monitoring" / "alerts.yml").read_text(encoding="utf-8")
     return yaml.safe_load(content)
 
 
@@ -32,7 +32,7 @@ def alerts_yaml() -> dict:
 def alertmanager_yaml() -> dict:
     import yaml
 
-    content = (REPO_ROOT / "monitoring" / "alertmanager.yml").read_text(encoding="utf-8")
+    content = (BACKEND_ROOT / "monitoring" / "alertmanager.yml").read_text(encoding="utf-8")
     return yaml.safe_load(content)
 
 
@@ -61,7 +61,7 @@ def test_alertmanager_routes_cover_both_severities_and_receivers_exist(alertmana
 def test_prometheus_points_at_alertmanager():
     import yaml
 
-    content = (REPO_ROOT / "monitoring" / "prometheus.yml").read_text(encoding="utf-8")
+    content = (BACKEND_ROOT / "monitoring" / "prometheus.yml").read_text(encoding="utf-8")
     config = yaml.safe_load(content)
     managers = config.get("alerting", {}).get("alertmanagers", [])
     assert any("alertmanager" in str(manager) for manager in managers)

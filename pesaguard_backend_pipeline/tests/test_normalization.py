@@ -1,4 +1,7 @@
+import pytest
+
 from normalization import (
+    NormalizationError,
     normalize_amount,
     normalize_currency,
     normalize_phone,
@@ -21,3 +24,10 @@ def test_normalizes_provider_type_and_status_aliases():
     assert normalize_provider("Mpesa") == "mpesa"
     assert normalize_transaction_type("STK Push") == "PAYMENT"
     assert normalize_status("successful") == "COMPLETED"
+
+
+def test_amount_normalization_rejects_rounding_and_unsupported_precision():
+    with pytest.raises(NormalizationError, match="minor unit"):
+        normalize_amount("1.005")
+    with pytest.raises(NormalizationError, match="precision"):
+        normalize_amount("10000000000000000.00")

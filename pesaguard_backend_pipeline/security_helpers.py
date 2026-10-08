@@ -41,10 +41,13 @@ def get_client_ip(request: Request) -> str:
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
             hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
-            if len(hops) >= trusted_proxy_count:
-                index = len(hops) - trusted_proxy_count
-                if index > 0:
-                    return hops[index - 1]
+            client_index = len(hops) - trusted_proxy_count
+            if client_index >= 0:
+                candidate = hops[client_index]
+                try:
+                    return str(ipaddress.ip_address(candidate))
+                except ValueError:
+                    logger.warning("Ignoring invalid trusted-proxy client address")
 
     return request.remote_addr or ""
 

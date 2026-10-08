@@ -13,14 +13,15 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency install
     raise RuntimeError("FastAPI control plane requires fastapi and uvicorn dependencies") from exc
 
 from .api.dashboard_app import create_app as create_dashboard_app
-from .health import build_health_payload
+from .health import build_health_payload, sanitize_health_payload
 
 
 app = FastAPI(
     title="PesaGuard Control Plane",
     version=os.getenv("PESAGUARD_RELEASE", "1"),
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
@@ -36,18 +37,43 @@ def livez() -> Dict[str, str]:
 
 @app.get("/health")
 def health() -> JSONResponse:
-    """Expose the platform health contract through the ASGI control plane.
-
-    The body is unchanged. The HTTP status now reflects it: 503 when the
-    database is unreachable (overall status "failed"), 200 otherwise, so a load
-    balancer or orchestrator probing this endpoint can see a broken instance.
-    "degraded" (an optional dependency is down) stays 200 so a Kafka, Redis or
-    Daraja outage does not take every instance out of rotation.
-    """
-    payload = build_health_payload()
+    """Expose sanitized dependency states and signal database failures to probes."""
+    payload = sanitize_health_payload(build_health_payload())
     return JSONResponse(payload, status_code=503 if payload.get("status") == "failed" else 200)
 
 
-# The Flask application remains the implementation owner for existing routes.
-# Mounting it keeps the migration incremental while FastAPI owns the process.
+class _RestoreMountPrefix:
+    """Preserve the mounted prefix for legacy Flask routes that include it."""
+
+    def __init__(self, app, prefix: str) -> None:
+        self.app = app
+        self.prefix = prefix
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            scope = dict(scope)
+            path = scope.get("path", "/")
+            root_path = scope.get("root_path", "").rstrip("/")
+            if root_path and path.startswith(root_path):
+                path = path[len(root_path):] or "/"
+            path = f"{self.prefix.rstrip('/')}/{path.lstrip('/')}"
+            scope["path"] = path
+            scope["root_path"] = ""
+            scope["raw_path"] = scope["path"].encode("utf-8")
+        await self.app(scope, receive, send)
+
+
+# Authentication routes remain in their legacy Flask module; mount only their
+# path prefix so their existing request hooks and security decorators execute.
+from . import app_4_advanced_features as _advanced_features  # noqa: E402
+
+app.mount(
+    "/auth",
+    _RestoreMountPrefix(WSGIMiddleware(_advanced_features.app), "/auth"),
+)
+app.mount(
+    "/api/v1/auth",
+    _RestoreMountPrefix(WSGIMiddleware(_advanced_features.app), "/auth"),
+)
+# The dashboard Flask application owns the remaining dashboard API routes.
 app.mount("/", WSGIMiddleware(create_dashboard_app()))

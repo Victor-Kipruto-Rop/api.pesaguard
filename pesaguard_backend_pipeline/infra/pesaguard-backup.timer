@@ -1,0 +1,16 @@
+[Unit]
+Description=PesaGuard PostgreSQL Daily Backup Timer
+Requires=pesaguard-backup.service
+
+[Timer]
+# Run daily at 02:00 UTC (low traffic time for most of Africa)
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+Unit=pesaguard-backup.service
+
+# Randomize by ±5 minutes to avoid thundering herd
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

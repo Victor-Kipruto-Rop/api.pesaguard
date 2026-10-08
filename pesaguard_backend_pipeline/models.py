@@ -762,6 +762,320 @@ class UserAccount(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class UserIdentity(Base):
+    """Canonical human identity record, separate from credentials and sessions."""
+
+    __tablename__ = "iam_user_identities"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "external_id", name="uq_iam_user_identity_external_id"),
+        UniqueConstraint("tenant_id", "email", name="uq_iam_user_identity_email"),
+        Index("ix_iam_user_identity_tenant_status", "tenant_id", "status"),
+        CheckConstraint(
+            "status IN ('INVITED', 'PENDING_VERIFICATION', 'ACTIVE', 'SUSPENDED', 'LOCKED', 'DEACTIVATED', 'DELETED')",
+            name="ck_iam_user_identity_status",
+        ),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_user_identity_tenant_nonempty"),
+    )
+
+    user_id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    external_id = Column(String(255), nullable=False)
+    email = Column(String, nullable=True)
+    email_verified = Column(Boolean, nullable=False, default=False, server_default="false")
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    phone = Column(String(64), nullable=True)
+    phone_verified = Column(Boolean, nullable=False, default=False, server_default="false")
+    phone_verified_at = Column(DateTime(timezone=True), nullable=True)
+    first_name = Column(String(128), nullable=True)
+    last_name = Column(String(128), nullable=True)
+    display_name = Column(String(255), nullable=True)
+    status = Column(String(32), nullable=False, default="PENDING_VERIFICATION", server_default="PENDING_VERIFICATION")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PasswordCredential(Base):
+    """Versioned password credential; authentication state is not identity data."""
+
+    __tablename__ = "iam_password_credentials"
+    __table_args__ = (
+        Index("ix_iam_password_credential_user_status", "tenant_id", "user_id", "status"),
+        CheckConstraint("status IN ('ACTIVE', 'REVOKED', 'EXPIRED', 'COMPROMISED')", name="ck_iam_password_credential_status"),
+        CheckConstraint("algorithm = 'argon2id'", name="ck_iam_password_credential_algorithm"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_password_credential_tenant_nonempty"),
+    )
+
+    credential_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    tenant_id = Column(String, nullable=False)
+    password_hash = Column(Text, nullable=False)
+    algorithm = Column(String(32), nullable=False, default="argon2id", server_default="argon2id")
+    parameters = Column(JSON, nullable=False, default=dict, server_default="{}")
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    status = Column(String(32), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    changed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_reason = Column(String(255), nullable=True)
+
+
+class PasswordHistory(Base):
+    """Immutable password hash history used to prevent credential reuse."""
+
+    __tablename__ = "iam_password_history"
+    __table_args__ = (
+        Index("ix_iam_password_history_user_created", "tenant_id", "user_id", "created_at"),
+        CheckConstraint("algorithm = 'argon2id'", name="ck_iam_password_history_algorithm"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_password_history_tenant_nonempty"),
+    )
+
+    history_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    tenant_id = Column(String, nullable=False)
+    password_hash = Column(Text, nullable=False)
+    algorithm = Column(String(32), nullable=False, default="argon2id", server_default="argon2id")
+    parameters = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class PasswordResetState(Base):
+    """Hashed, single-use password reset state with explicit lifecycle."""
+
+    __tablename__ = "iam_password_reset_states"
+    __table_args__ = (
+        Index("ix_iam_password_reset_user_status", "tenant_id", "user_id", "status"),
+        CheckConstraint("status IN ('PENDING', 'USED', 'EXPIRED', 'REVOKED')", name="ck_iam_password_reset_status"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_password_reset_tenant_nonempty"),
+    )
+
+    reset_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False)
+    tenant_id = Column(String, nullable=False)
+    token_hash = Column(String(128), nullable=False, unique=True)
+    status = Column(String(32), nullable=False, default="PENDING", server_default="PENDING")
+    requested_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+class PasswordPolicy(Base):
+    """Configurable password-age policy at platform, organization, or tenant scope."""
+
+    __tablename__ = "iam_password_policies"
+    __table_args__ = (
+        UniqueConstraint("scope_type", "scope_id", name="uq_iam_password_policy_scope"),
+        CheckConstraint("scope_type IN ('platform', 'organization', 'tenant')", name="ck_iam_password_policy_scope_type"),
+        CheckConstraint("max_age_days IS NULL OR max_age_days >= 0", name="ck_iam_password_policy_max_age"),
+        CheckConstraint("privileged_max_age_days IS NULL OR privileged_max_age_days >= 0", name="ck_iam_password_policy_privileged_age"),
+        CheckConstraint("notify_before_days >= 0", name="ck_iam_password_policy_notify_before"),
+    )
+
+    policy_id = Column(String, primary_key=True)
+    scope_type = Column(String(32), nullable=False)
+    scope_id = Column(String(255), nullable=False)
+    tenant_id = Column(String, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    max_age_days = Column(Integer, nullable=True)
+    privileged_max_age_days = Column(Integer, nullable=True)
+    notify_before_days = Column(Integer, nullable=False, default=14, server_default="14")
+    force_change = Column(Boolean, nullable=False, default=True, server_default="true")
+    emergency_rotation_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class PlatformIdentity(Base):
+    """Platform-level identity and lifecycle boundary above tenant accounts."""
+
+    __tablename__ = "iam_platforms"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_iam_platform_slug"),
+        CheckConstraint("status IN ('active', 'suspended', 'decommissioned')", name="ck_iam_platform_status"),
+    )
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    slug = Column(String(128), nullable=False)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    attributes = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class TenantRecord(Base):
+    """Durable tenant identity, ownership, residency, and lifecycle state."""
+
+    __tablename__ = "iam_tenants"
+    __table_args__ = (
+        UniqueConstraint("platform_id", "slug", name="uq_iam_tenant_platform_slug"),
+        Index("ix_iam_tenants_platform_status", "platform_id", "status"),
+        CheckConstraint("status IN ('provisioning', 'active', 'suspended', 'deleting', 'deleted')", name="ck_iam_tenant_status"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_tenant_identity_nonempty"),
+    )
+
+    tenant_id = Column(String, primary_key=True)
+    platform_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    slug = Column(String(128), nullable=False)
+    owner_user_id = Column(String, nullable=True)
+    residency_region = Column(String(64), nullable=False, default="ke-central", server_default="ke-central")
+    status = Column(String(32), nullable=False, default="provisioning", server_default="provisioning")
+    attributes = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ServiceIdentity(Base):
+    """Tenant-owned non-human identity for services and workload credentials."""
+
+    __tablename__ = "iam_service_identities"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_iam_service_identity_tenant_name"),
+        Index("ix_iam_service_identity_scope_status", "tenant_id", "status"),
+        CheckConstraint("status IN ('active', 'suspended', 'revoked', 'decommissioned')", name="ck_iam_service_identity_status"),
+        CheckConstraint("identity_type IN ('service', 'workload', 'machine')", name="ck_iam_service_identity_type"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_service_identity_tenant_nonempty"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    name = Column(String(128), nullable=False)
+    identity_type = Column(String(32), nullable=False, default="service", server_default="service")
+    owner_user_id = Column(String, nullable=True)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    scopes = Column(JSON, nullable=False, default=list, server_default="[]")
+    attributes = Column(JSON, nullable=False, default=dict, server_default="{}")
+    authorization_version = Column(Integer, nullable=False, default=1, server_default="1")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ApiClientIdentity(Base):
+    """Tenant-owned application identity that may represent a human or service client."""
+
+    __tablename__ = "iam_api_clients"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "client_identifier", name="uq_iam_api_client_identifier"),
+        Index("ix_iam_api_client_tenant_status", "tenant_id", "status"),
+        CheckConstraint("status IN ('active', 'suspended', 'revoked', 'expired')", name="ck_iam_api_client_status"),
+        CheckConstraint("client_type IN ('confidential', 'public', 'service')", name="ck_iam_api_client_type"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_api_client_tenant_nonempty"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    client_identifier = Column(String(128), nullable=False)
+    name = Column(String(128), nullable=False)
+    client_type = Column(String(32), nullable=False, default="confidential", server_default="confidential")
+    service_identity_id = Column(String, nullable=True)
+    owner_user_id = Column(String, nullable=True)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    scopes = Column(JSON, nullable=False, default=list, server_default="[]")
+    redirect_uris = Column(JSON, nullable=False, default=list, server_default="[]")
+    attributes = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ExternalIdentity(Base):
+    """Stable tenant-scoped link between an external IdP subject and a local user."""
+
+    __tablename__ = "iam_external_identities"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "issuer", "subject", name="uq_iam_external_identity_subject"),
+        Index("ix_iam_external_identity_user", "tenant_id", "user_id"),
+        CheckConstraint("status IN ('active', 'disabled', 'unlinked')", name="ck_iam_external_identity_status"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_external_identity_tenant_nonempty"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    provider_id = Column(String, nullable=True)
+    issuer = Column(String(512), nullable=False)
+    subject = Column(String(512), nullable=False)
+    email = Column(String, nullable=True)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    claims = Column(JSON, nullable=False, default=dict, server_default="{}")
+    linked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class IAMRole(Base):
+    """Database-backed role authority for tenant and organization authorization."""
+
+    __tablename__ = "iam_roles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_iam_role_tenant_name"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_role_tenant_nonempty"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    managed = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class IAMPermission(Base):
+    """Canonical action/resource permission catalog."""
+
+    __tablename__ = "iam_permissions"
+    __table_args__ = (UniqueConstraint("name", name="uq_iam_permission_name"),)
+
+    id = Column(String, primary_key=True)
+    name = Column(String(128), nullable=False)
+    resource = Column(String(128), nullable=False)
+    action = Column(String(64), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class IAMRolePermission(Base):
+    """Many-to-many role permission binding."""
+
+    __tablename__ = "iam_role_permissions"
+    __table_args__ = (UniqueConstraint("role_id", "permission_id", name="uq_iam_role_permission"),)
+
+    id = Column(String, primary_key=True)
+    role_id = Column(String, nullable=False)
+    permission_id = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class IAMRoleBinding(Base):
+    """Scoped assignment of a role to a user, service, or API client."""
+
+    __tablename__ = "iam_role_bindings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "subject_type", "subject_id", "role_id", "scope_type", "scope_id", name="uq_iam_role_binding"),
+        Index("ix_iam_role_binding_subject", "tenant_id", "subject_type", "subject_id"),
+        CheckConstraint("subject_type IN ('user', 'service', 'api_client')", name="ck_iam_role_binding_subject_type"),
+        CheckConstraint("scope_type IN ('tenant', 'organization', 'team', 'resource')", name="ck_iam_role_binding_scope_type"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_iam_role_binding_tenant_nonempty"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    subject_type = Column(String(32), nullable=False)
+    subject_id = Column(String, nullable=False)
+    role_id = Column(String, nullable=False)
+    scope_type = Column(String(32), nullable=False, default="tenant", server_default="tenant")
+    scope_id = Column(String, nullable=False)
+    status = Column(String(32), nullable=False, default="active", server_default="active")
+    granted_by = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Organization(Base):
     """Top-level SaaS organization or customer tenant container."""
 
@@ -1000,18 +1314,55 @@ class UserSession(Base):
     __tablename__ = "user_sessions"
     __table_args__ = (
         CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_user_sessions_tenant_id_nonempty"),
+        Index("ix_user_sessions_owner_activity", "tenant_id", "user_id", "last_activity_at"),
     )
 
     id = Column(String, primary_key=True)
     tenant_id = Column(String, nullable=False, default="default")
     user_id = Column(String, nullable=True)
+    organization_id = Column(String, nullable=True)
     device_id = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
     ip_address = Column(String, nullable=True)
+    location_info = Column(JSON, nullable=True, default=dict)
+    state = Column(String(16), nullable=False, default="ACTIVE", server_default="ACTIVE")
     active = Column(Boolean, nullable=False, default=True)
     issued_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_activity_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    absolute_expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    authentication_method = Column(String(64), nullable=True)
+    mfa_verified = Column(Boolean, nullable=False, default=False, server_default="false")
     session_metadata = Column(JSON, nullable=True, default=dict)
+
+
+class DeviceIdentity(Base):
+    """Tenant- and user-scoped identity and revocation state for a client device."""
+
+    __tablename__ = "user_devices"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", "device_id", name="uq_user_devices_owner_device"),
+        Index("ix_user_devices_owner_last_seen", "tenant_id", "user_id", "last_seen_at"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_user_devices_tenant_id_nonempty"),
+        CheckConstraint("session_count >= 0", name="ck_user_devices_session_count_nonnegative"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f"dev_{uuid.uuid4().hex}")
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    device_id = Column(String(255), nullable=False)
+    device_name = Column(String(128), nullable=False, default="Unknown device")
+    browser = Column(String(128), nullable=True)
+    operating_system = Column(String(128), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    first_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_ip_address = Column(String(64), nullable=True)
+    session_count = Column(Integer, nullable=False, default=0, server_default="0")
+    trusted = Column(Boolean, nullable=False, default=False, server_default="false")
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    risk_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
 
 
 class OIDCProvider(Base):
@@ -1090,7 +1441,63 @@ class ApiKeyRecord(Base):
     rotated_from_id = Column(String, nullable=True)
     api_metadata = Column("api_metadata", JSON, nullable=True, default=dict)
     active = Column(Boolean, nullable=False, default=True)
+    source_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ApiKeyLifecycleIdempotencyRecord(Base):
+    """Short-lived durable replay records for internal API-key operations."""
+
+    __tablename__ = "api_key_lifecycle_idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "service_subject",
+            "operation",
+            "key_id",
+            "idempotency_key",
+            name="uq_api_key_lifecycle_idempotency",
+        ),
+        Index(
+            "ix_api_key_lifecycle_idempotency_expiry",
+            "expires_at",
+        ),
+        CheckConstraint(
+            "operation IN ('sync', 'revoke', 'suspend')",
+            name="ck_api_key_lifecycle_idempotency_operation",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True)
+    service_subject = Column(String(128), nullable=False)
+    operation = Column(String(16), nullable=False)
+    key_id = Column(String(255), nullable=False)
+    idempotency_key = Column(String(255), nullable=False)
+    request_hash = Column(String(64), nullable=False)
+    response = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class ServiceCredentialRecord(Base):
+    """M2M or workload credential record subject to revocation and rotation."""
+
+    __tablename__ = "service_credential_records"
+    __table_args__ = (
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_service_credential_records_tenant_id_nonempty"),
+        CheckConstraint("status IN ('active', 'revoked', 'expired')", name="ck_service_credential_records_status"),
+    )
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, default="default")
+    service_name = Column(String, nullable=False)
+    credential_type = Column(String(32), nullable=False, default="workload")
+    credential_hash = Column(String(128), nullable=False, unique=True, index=True)
+    status = Column(String(16), nullable=False, default="active", server_default="active")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(String, nullable=True)
+    reason = Column(String, nullable=True)
+    credential_metadata = Column(JSON, nullable=True, default=dict)
 
 
 class MFAChallenge(Base):
@@ -1099,16 +1506,117 @@ class MFAChallenge(Base):
     __tablename__ = "mfa_challenges"
     __table_args__ = (
         CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_mfa_challenges_tenant_id_nonempty"),
+        Index("ix_mfa_challenges_owner_status", "tenant_id", "user_id", "status"),
     )
 
     id = Column(String, primary_key=True)
     user_id = Column(String, nullable=False)
     tenant_id = Column(String, nullable=False)
     code_hash = Column(String(128), nullable=False)
+    challenge_type = Column(String(64), nullable=False, default="email_verification", server_default="email_verification")
+    factor_id = Column(String, nullable=True)
+    challenge_data = Column(JSON, nullable=False, default=dict, server_default="{}")
     status = Column(String, nullable=False, default="pending")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     attempts = Column(Integer, nullable=False, default=0)
+
+
+class MFAFactor(Base):
+    """A separately managed, tenant-scoped authentication factor."""
+
+    __tablename__ = "mfa_factors"
+    __table_args__ = (
+        Index("ix_mfa_factors_owner_state", "tenant_id", "user_id", "status"),
+        UniqueConstraint("credential_id", name="uq_mfa_factors_credential_id"),
+        CheckConstraint(
+            "factor_type IN ('totp', 'webauthn')",
+            name="ck_mfa_factors_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'active', 'revoked', 'locked')",
+            name="ck_mfa_factors_status",
+        ),
+        CheckConstraint("failed_attempts >= 0", name="ck_mfa_factors_failed_attempts"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_mfa_factors_tenant_id_nonempty"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f"mfa_factor_{uuid.uuid4().hex}")
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    factor_type = Column(String(32), nullable=False)
+    factor_kind = Column(String(32), nullable=False, default="totp")
+    display_name = Column(String(128), nullable=False, default="Authenticator")
+    secret_encrypted = Column(Text, nullable=True)
+    credential_id = Column(String(1024), nullable=True)
+    credential_public_key = Column(Text, nullable=True)
+    sign_count = Column(Integer, nullable=False, default=0, server_default="0")
+    last_used_counter = Column(Integer, nullable=True)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")
+    failed_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class MFARecovery(Base):
+    """One-time hashed recovery code; plaintext is never persisted."""
+
+    __tablename__ = "mfa_recovery_codes"
+    __table_args__ = (
+        Index("ix_mfa_recovery_owner_unused", "tenant_id", "user_id", "used_at"),
+        UniqueConstraint("code_hash", name="uq_mfa_recovery_code_hash"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_mfa_recovery_tenant_id_nonempty"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f"mfa_recovery_{uuid.uuid4().hex}")
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    code_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class MFAPolicy(Base):
+    """Versioned tenant policy for factors, enforcement, and challenge controls."""
+
+    __tablename__ = "mfa_policies"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_mfa_policies_tenant"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_mfa_policies_tenant_id_nonempty"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f"mfa_policy_{uuid.uuid4().hex}")
+    tenant_id = Column(String, nullable=False)
+    policy = Column(JSON, nullable=False, default=dict)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class MFAEvent(Base):
+    """Append-only security audit record for MFA factor and challenge activity."""
+
+    __tablename__ = "mfa_events"
+    __table_args__ = (
+        Index("ix_mfa_events_owner_time", "tenant_id", "user_id", "created_at"),
+        CheckConstraint("tenant_id IS NOT NULL AND tenant_id <> ''", name="ck_mfa_events_tenant_id_nonempty"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f"mfa_event_{uuid.uuid4().hex}")
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    factor_id = Column(String, nullable=True)
+    challenge_id = Column(String, nullable=True)
+    event_type = Column(String(96), nullable=False)
+    outcome = Column(String(32), nullable=False)
+    details = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class PasswordlessChallenge(Base):

@@ -20,6 +20,13 @@ TOPIC_TRANSACTIONS_VALIDATED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_VALIDATED
 TOPIC_TRANSACTIONS_NORMALIZED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_NORMALIZED", "pesaguard.transactions.normalized")
 TOPIC_TRANSACTIONS_ENRICHED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_ENRICHED", "pesaguard.transactions.enriched")
 TOPIC_TRANSACTIONS_PROCESSED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_PROCESSED", "pesaguard.transactions.processed")
+# Terminal transaction outcomes. Each terminal state gets its own topic so that a
+# consumer of a stage topic (raw/validated/normalized/enriched/processed) never
+# receives a terminal outcome, and so rejected/failed records stay independently
+# replayable for audit and dispute investigation.
+TOPIC_TRANSACTIONS_COMPLETED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_COMPLETED", "pesaguard.transactions.completed")
+TOPIC_TRANSACTIONS_FAILED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_FAILED", "pesaguard.transactions.failed")
+TOPIC_TRANSACTIONS_REJECTED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_REJECTED", "pesaguard.transactions.rejected")
 TOPIC_TRANSACTIONS_MATCHED = os.getenv("PESAGUARD_TOPIC_TRANSACTIONS_MATCHED", "pesaguard.reconciliation.completed")
 TOPIC_DISCREPANCIES = os.getenv("PESAGUARD_TOPIC_DISCREPANCIES", "pesaguard.reconciliation.exceptions")
 TOPIC_RECONCILIATION_REQUESTED = os.getenv("PESAGUARD_TOPIC_RECONCILIATION_REQUESTED", "pesaguard.reconciliation.requested")
@@ -58,6 +65,9 @@ ALL_TOPICS: List[str] = [
     TOPIC_TRANSACTIONS_NORMALIZED,
     TOPIC_TRANSACTIONS_ENRICHED,
     TOPIC_TRANSACTIONS_PROCESSED,
+    TOPIC_TRANSACTIONS_COMPLETED,
+    TOPIC_TRANSACTIONS_FAILED,
+    TOPIC_TRANSACTIONS_REJECTED,
     TOPIC_TRANSACTIONS_MATCHED,
     TOPIC_DISCREPANCIES,
     TOPIC_RECONCILIATION_REQUESTED,
@@ -82,6 +92,7 @@ ALL_TOPICS: List[str] = [
 ]
 
 EVENT_TYPE_TOPICS = {
+    # Transaction lifecycle: stage transitions
     "transaction.created": TOPIC_TRANSACTION_RECEIVED,
     "transaction.received": TOPIC_TRANSACTION_RECEIVED,
     "transaction.validated": TOPIC_TRANSACTION_VALIDATED,
@@ -91,22 +102,51 @@ EVENT_TYPE_TOPICS = {
     "transaction.reconciled": TOPIC_TRANSACTION_RECONCILED,
     "transaction.exception_created": TOPIC_TRANSACTION_EXCEPTION,
     "transaction.fraud_detected": TOPIC_TRANSACTION_FRAUD,
+    # Transaction lifecycle: terminal outcomes
+    "transaction.completed": TOPIC_TRANSACTIONS_COMPLETED,
+    "transaction.failed": TOPIC_TRANSACTIONS_FAILED,
+    "transaction.rejected": TOPIC_TRANSACTIONS_REJECTED,
+    # Reconciliation run lifecycle (requested -> started -> failed)
     "reconciliation.requested": TOPIC_RECONCILIATION_REQUESTED,
+    "reconciliation.started": TOPIC_RECONCILIATION_REQUESTED,
+    "reconciliation.failed": TOPIC_RECONCILIATION_REQUESTED,
+    # Reconciliation outcomes
     "reconciliation.completed": TOPIC_TRANSACTIONS_MATCHED,
     "reconciliation.exception": TOPIC_DISCREPANCIES,
+    "reconciliation.exception.detected": TOPIC_DISCREPANCIES,
+    "reconciliation.exception.resolved": TOPIC_DISCREPANCIES,
+    # Fraud analysis lifecycle
     "fraud.analysis_requested": TOPIC_FRAUD_ANALYSIS,
+    "fraud.analysis.requested": TOPIC_FRAUD_ANALYSIS,
+    "fraud.analysis.started": TOPIC_FRAUD_ANALYSIS,
+    "fraud.analysis.completed": TOPIC_FRAUD_ANALYSIS,
+    # Fraud anomaly lifecycle
     "fraud.anomaly_detected": TOPIC_FRAUD_ANOMALIES,
+    "fraud.anomaly.detected": TOPIC_FRAUD_ANOMALIES,
+    "fraud.anomaly.reviewed": TOPIC_FRAUD_ANOMALIES,
     "fraud.decision_created": TOPIC_FRAUD_DECISIONS,
+    # Notifications. The "sent" topic carries successful delivery; the "failed"
+    # topic carries the unsuccessful-delivery lifecycle (failed -> retry -> exhausted).
     "notification.requested": TOPIC_NOTIFICATION_EVENTS,
     "notification.sent": TOPIC_NOTIFICATION_STATUS,
     "notification.failed": TOPIC_NOTIFICATION_FAILED,
+    "notification.retry": TOPIC_NOTIFICATION_FAILED,
+    "notification.exhausted": TOPIC_NOTIFICATION_FAILED,
+    # Ingestion
     "webhook.received": TOPIC_WEBHOOKS_RECEIVED,
+    # Batch import lifecycle (received -> started -> completed/failed, per-record rejection)
     "batch_import.received": TOPIC_BATCH_IMPORTS,
+    "batch.import.started": TOPIC_BATCH_IMPORTS,
     "batch_import.completed": TOPIC_BATCH_IMPORTS_COMPLETED,
+    "batch.import.completed": TOPIC_BATCH_IMPORTS_COMPLETED,
     "batch_import.failed": TOPIC_BATCH_IMPORTS_FAILED,
+    "batch.import.failed": TOPIC_BATCH_IMPORTS_FAILED,
+    "batch.record.rejected": TOPIC_BATCH_IMPORTS_FAILED,
+    # Platform
     "event.retry_scheduled": TOPIC_RETRIES,
     "system.event": TOPIC_SYSTEM_EVENTS,
     "data_processing.event": TOPIC_DATA_PROCESSING,
+    "audit.event.created": TOPIC_AUDIT_EVENTS,
 }
 
 # Production Topic Provisioning Specifications
@@ -145,6 +185,32 @@ TOPIC_SPECIFICATIONS: Dict[str, Dict[str, Any]] = {
         "num_partitions": int(os.getenv("KAFKA_PARTITIONS_PROCESSED", "6")),
         "replication_factor": KAFKA_REPLICATION_FACTOR,
         "configs": {"retention.ms": "2592000000", "cleanup.policy": "delete"},
+    },
+    # Terminal transaction outcomes. 90-day retention aligns these financial
+    # outcome records with the discrepancy retention window used for disputes.
+    TOPIC_TRANSACTIONS_COMPLETED: {
+        "num_partitions": int(os.getenv("KAFKA_PARTITIONS_COMPLETED", "6")),
+        "replication_factor": KAFKA_REPLICATION_FACTOR,
+        "configs": {
+            "retention.ms": "7776000000",  # 90 Days retention
+            "cleanup.policy": "delete",
+        },
+    },
+    TOPIC_TRANSACTIONS_FAILED: {
+        "num_partitions": int(os.getenv("KAFKA_PARTITIONS_FAILED", "3")),
+        "replication_factor": KAFKA_REPLICATION_FACTOR,
+        "configs": {
+            "retention.ms": "7776000000",  # 90 Days retention
+            "cleanup.policy": "delete",
+        },
+    },
+    TOPIC_TRANSACTIONS_REJECTED: {
+        "num_partitions": int(os.getenv("KAFKA_PARTITIONS_REJECTED", "3")),
+        "replication_factor": KAFKA_REPLICATION_FACTOR,
+        "configs": {
+            "retention.ms": "7776000000",  # 90 Days retention
+            "cleanup.policy": "delete",
+        },
     },
     TOPIC_DISCREPANCIES: {
         "num_partitions": int(os.getenv("KAFKA_PARTITIONS_DISCREPANCIES", "3")),

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import hashlib
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 from typing import Any, Dict, Mapping, Optional
 
 from event_store import EventStore, ProcessResult, provider_account_id
@@ -112,6 +112,8 @@ class MpesaAdapter(ProviderAdapter):
 
     def normalize(self, payload: Mapping[str, Any], *, tenant_id: str) -> IngestionEnvelope:
         source = dict(payload)
+        if "Result" in source:
+            raise IngestionError("B2C result callbacks require an explicit provider account mapping")
         try:
             source["TransAmount"] = normalize_amount(source.get("TransAmount"))
         except NormalizationError as exc:
@@ -240,7 +242,12 @@ class GenericProviderAdapter(ProviderAdapter):
             currency=normalize_currency(source.get("currency") or source.get("Currency") or "KES"),
             transaction_type=normalize_transaction_type(source.get("transaction_type") or "PAYMENT"),
             status=normalize_status(source.get("status") or "RECEIVED"),
-            transaction_time=normalize_timestamp(source.get("timestamp") or source.get("TransTime") or datetime.now(timezone.utc).isoformat()),
+            transaction_time=normalize_timestamp(
+                source.get("timestamp")
+                or source.get("TransTime")
+                or source.get("transaction_time")
+                or datetime.now(timezone.utc).isoformat()
+            ),
             phone_number=normalize_phone(source.get("phone_number") or source.get("msisdn") or "unknown"),
             source=normalize_provider(self.provider),
             metadata={"location": normalize_location(source.get("location"))},
@@ -359,6 +366,75 @@ class IngestionService:
 
     def emit(self, envelope: IngestionEnvelope) -> IngestionResult:
         """Persist an already-transformed envelope at the connector boundary."""
+        if not isinstance(envelope, IngestionEnvelope):
+            raise IngestionError("connector output must be an ingestion envelope")
+        if not isinstance(envelope.canonical, CanonicalTransaction):
+            raise IngestionError("ingestion envelope must contain a canonical transaction")
+        if not isinstance(envelope.raw_payload, Mapping) or not isinstance(envelope.payload, Mapping):
+            raise IngestionError("ingestion envelope payloads must be objects")
+        if type(envelope.schema_version) is not int or envelope.schema_version != 1:
+            raise IngestionError(f"unsupported ingestion envelope schema version: {envelope.schema_version}")
+
+        matching_adapters = [
+            (source, adapter)
+            for source, adapter in self.adapters.items()
+            if adapter.provider == envelope.provider
+        ]
+        if len(matching_adapters) != 1:
+            raise IngestionError(f"ingestion envelope provider is unsupported or ambiguous: {envelope.provider}")
+        source, adapter = matching_adapters[0]
+        try:
+            validate_source_payload(source, envelope.raw_payload)
+            expected = adapter.normalize(envelope.raw_payload, tenant_id=envelope.tenant_id)
+        except SourceContractError as exc:
+            raise IngestionError(str(exc)) from exc
+
+        actual_canonical = asdict(envelope.canonical)
+        expected_canonical = asdict(expected.canonical)
+        for fields in (actual_canonical, expected_canonical):
+            fields.pop("created_at", None)
+            fields.pop("updated_at", None)
+        actual_payload = dict(envelope.payload)
+        expected_payload = dict(expected.payload)
+        for fields in (actual_payload, expected_payload):
+            fields.pop("created_at", None)
+            fields.pop("updated_at", None)
+        source_payload = envelope.raw_payload
+        if source == "safaricom-api":
+            source_payload = source_payload.get("data") or source_payload.get("transaction") or source_payload
+            has_transaction_time = bool(
+                source_payload.get("transactionTime")
+                or source_payload.get("TransTime")
+            )
+        else:
+            has_transaction_time = bool(
+                source_payload.get("timestamp")
+                or source_payload.get("TransTime")
+                or source_payload.get("transaction_time")
+            )
+        if not has_transaction_time:
+            actual_canonical.pop("transaction_time", None)
+            expected_canonical.pop("transaction_time", None)
+            actual_payload.pop("TransTime", None)
+            expected_payload.pop("TransTime", None)
+
+        if (
+            actual_canonical != expected_canonical
+            or actual_payload != expected_payload
+            or envelope.tenant_id != expected.tenant_id
+            or envelope.provider != expected.provider
+            or envelope.provider_account_id != expected.provider_account_id
+            or envelope.external_reference != expected.external_reference
+            or envelope.idempotency_key != expected.idempotency_key
+            or not (
+                envelope.observed_at
+                == envelope.canonical.transaction_time
+                == envelope.payload.get("TransTime")
+            )
+            or (has_transaction_time and envelope.observed_at != expected.observed_at)
+        ):
+            raise IngestionError("ingestion envelope does not match its source payload")
+
         result = self.event_store.mark_processed(
             envelope.payload,
             tenant_id=envelope.tenant_id,

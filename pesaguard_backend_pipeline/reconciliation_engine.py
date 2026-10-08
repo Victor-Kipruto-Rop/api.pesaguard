@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 import time
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Iterable
 
 from event_store import ProcessResult
+from normalization import NormalizationError, normalize_amount
 from reconciliation_scoring import score_match
 
 # Import normalization helpers (added in feat/phase1-reconciliation-systematic)
@@ -169,12 +170,9 @@ class ReconciliationEngine:
     @staticmethod
     def _amount(value: Any) -> Decimal:
         try:
-            amount = Decimal(str(value)).quantize(Decimal("0.01"))
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            raise ValueError("invalid monetary amount") from exc
-        if amount <= 0:
-            raise ValueError("amount must be greater than zero")
-        return amount
+            return Decimal(normalize_amount(value))
+        except NormalizationError as exc:
+            raise ValueError(str(exc)) from exc
 
     def _tolerance(self, amount: Decimal) -> Decimal:
         return max(Decimal("0.01"), abs(amount) * self.tolerance_percent / Decimal("100"))
@@ -330,6 +328,10 @@ def evaluate_transaction(
     Returns:
         Structured evaluation outcome dict
     """
+    original_amount = event.get("TransAmount")
+    if original_amount is None:
+        original_amount = event.get("amount")
+
     # Normalize incoming event into canonical keys without discarding original keys.
     # This preserves backwards compatibility while centralizing parsing/format logic.
     try:
@@ -339,6 +341,9 @@ def evaluate_transaction(
     # Merge normalized canonical keys into the event for the rest of the engine to use.
     merged_event = dict(event or {})
     merged_event.update(norm or {})
+    if original_amount is not None:
+        merged_event["TransAmount"] = original_amount
+        merged_event["amount"] = original_amount
     event = merged_event
 
     trans_id = str(event.get("TransID") or event.get("trans_id") or "unknown").strip()
@@ -494,9 +499,8 @@ def _coerce_amount(value: Any) -> Optional[Decimal]:
     if value is None:
         return None
     try:
-        val = Decimal(str(value)).quantize(Decimal("0.01"))
-        return val if val >= 0 else None
-    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(normalize_amount(value))
+    except NormalizationError:
         return None
 
 

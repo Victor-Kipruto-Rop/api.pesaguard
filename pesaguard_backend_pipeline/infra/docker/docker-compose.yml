@@ -1,0 +1,240 @@
+# Data residency (Addendum III): set DEPLOYMENT_REGION, BACKUP_REGION, and LOG_REGION
+# to the chosen hosting jurisdiction before go-live. See docs/product/DATA_RESIDENCY.md.
+# Pilot default: ke-1 (Kenya / East Africa). Backups must stay in BACKUP_REGION.
+
+x-residency-env: &residency-env
+  DEPLOYMENT_REGION: ${DEPLOYMENT_REGION:-ke-1}
+  BACKUP_REGION: ${BACKUP_REGION:-ke-1}
+  LOG_REGION: ${LOG_REGION:-ke-1}
+
+x-observability-env: &observability-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel_collector:4317}
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-pesaguard}
+  PESAGUARD_SHARED_METRICS: ${PESAGUARD_SHARED_METRICS:-1}
+  PROMETHEUS_MULTIPROC_DIR: /tmp/pesaguard-prometheus
+  KAFKA_LAG_TOPICS: ${KAFKA_LAG_TOPICS:-pesaguard.transactions.raw,pesaguard.reconciliation.exceptions,pesaguard.notifications.requested}
+  KAFKA_LAG_GROUPS: ${KAFKA_LAG_GROUPS:-reconciliation,communications}
+  PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET: ${PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET:-}
+  PYTHONPATH: /app:/app/pesaguard_backend_pipeline
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    secrets:
+      - dashboard_metrics_token
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    depends_on:
+      - webhook_receiver
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  otel_collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8888:8888"
+      - "8889:8889"
+    volumes:
+      - ../../monitoring/otel-collector.yaml:/etc/otel-collector.yaml:ro
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.2.2
+    container_name: pesaguard-redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092,PLAINTEXT://localhost:19092
+      - --pandaproxy-addr=PLAINTEXT://0.0.0.0:8082
+      - --advertise-pandaproxy-addr=PLAINTEXT://redpanda:8082
+    ports:
+      - "19092:19092"
+      - "8082:8082"
+      - "9644:9644"
+    environment:
+      <<: *residency-env
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+
+  postgres:
+    image: postgres:16
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=60s
+      - -c
+      - archive_command=${POSTGRES_ARCHIVE_COMMAND:-test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f}
+    environment:
+      <<: *residency-env
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - wal_archive:/var/lib/postgresql/wal_archive
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  webhook_receiver:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["python", "pesaguard_backend_pipeline/app.py"]
+    ports:
+      - "5000:5000"
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
+      PESAGUARD_BIND_HOST: ${PESAGUARD_BIND_HOST_DOCKER:?PESAGUARD_BIND_HOST_DOCKER must be set}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      PESAGUARD_PROMETHEUS_TOKEN_FILE: /run/secrets/dashboard_metrics_token
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
+    secrets:
+      - dashboard_metrics_token
+    depends_on:
+      - redpanda
+
+  reconciliation_job:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["python", "pesaguard_backend_pipeline/reconciliation_job.py"]
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
+    depends_on:
+      - redpanda
+      - postgres
+
+  dashboard_api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["uvicorn", "pesaguard_backend_pipeline.fastapi_app:app", "--host", "0.0.0.0", "--port", "5001"]
+    ports:
+      - "5001:5001"
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
+      PESAGUARD_PIPELINE_KEY_SYNC_SECRET: ${PESAGUARD_PIPELINE_KEY_SYNC_SECRET:-}
+      PESAGUARD_PROMETHEUS_TOKEN_FILE: /run/secrets/dashboard_metrics_token
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
+    secrets:
+      - dashboard_metrics_token
+    depends_on:
+      - postgres
+
+  rq_worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["/bin/sh", "pesaguard_backend_pipeline/worker_entrypoint.sh"]
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
+      REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
+      RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-transaction_events}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
+    depends_on:
+      - redis
+      - postgres
+      - redpanda
+
+  communications_worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.worker
+    command: ["python", "-m", "pesaguard_backend_pipeline.communications.worker"]
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
+      PESAGUARD_NOTIFICATION_TOPIC: ${PESAGUARD_NOTIFICATION_TOPIC:-pesaguard.notifications.requested}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
+    depends_on:
+      - redpanda
+      - postgres
+
+volumes:
+  pgdata:
+  wal_archive:
+  redpanda_data:
+
+secrets:
+  dashboard_metrics_token:
+    file: ${PESAGUARD_PROMETHEUS_TOKEN_FILE:?PESAGUARD_PROMETHEUS_TOKEN_FILE must point to a protected token file}

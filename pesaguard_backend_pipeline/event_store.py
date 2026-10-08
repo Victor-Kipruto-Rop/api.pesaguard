@@ -14,7 +14,7 @@ import threading
 import uuid
 import hashlib
 import json
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from lifecycle import transition_data_lifecycle, transition_transaction
 from event_bus import build_event
 from idempotency import derive_idempotency_key
+from normalization import normalize_amount
 from models import AuditEvent, Base, IdempotencyRecord, ProcessedTransaction, ReconciliationOutbox, Transaction, TransactionEvent, TransactionOutbox
 from transformation_store import record_transformation_stage
 from lineage import record_lineage
@@ -54,10 +55,7 @@ VALID_PROVIDERS = frozenset(
 
 def _money(value: Any) -> Decimal:
     """Normalize provider amounts without binary floating-point conversion."""
-    try:
-        amount = Decimal(str(value)).quantize(Decimal("0.01"))
-    except (InvalidOperation, TypeError, ValueError):
-        raise ValueError("transaction amount must be a valid decimal")
+    amount = Decimal(normalize_amount(value))
     if amount <= 0:
         raise ValueError("transaction amount must be greater than zero")
     return amount
@@ -277,13 +275,27 @@ class EventStore:
         if not trans_id or not provider or provider == "unknown" or not account_id:
             logger.error("mark_processed() called with missing TransID in payload")
             return ProcessResult.ERROR
+        from logging_utils import get_observability_context
+        from observability import extract_trace_context
+
+        event_context = get_observability_context()
+        candidate_traceparent = str(event_context.get("traceparent") or "").strip()
+        event_metadata = {}
+        if extract_trace_context({"traceparent": candidate_traceparent}):
+            event_metadata["traceparent"] = candidate_traceparent
+        event_correlation_id = str(
+            payload.get("correlation_id")
+            or event_context.get("correlation_id")
+            or idempotency_key
+        )
         event_payload = build_event(
             "transaction.received",
             tenant_id,
             trans_id,
             payload,
             event_id=idempotency_key,
-            correlation_id=str(payload.get("correlation_id") or idempotency_key),
+            correlation_id=event_correlation_id,
+            metadata=event_metadata,
         ).to_dict()
         event_payload["TransID"] = trans_id
         from logging_utils import bind_observability_context
@@ -467,13 +479,27 @@ class EventStore:
         if not trans_id or not provider or provider == "unknown" or not account_id:
             logger.error("mark_processed_in_session() called with missing TransID in payload")
             return ProcessResult.ERROR
+        from logging_utils import get_observability_context
+        from observability import extract_trace_context
+
+        event_context = get_observability_context()
+        candidate_traceparent = str(event_context.get("traceparent") or "").strip()
+        event_metadata = {}
+        if extract_trace_context({"traceparent": candidate_traceparent}):
+            event_metadata["traceparent"] = candidate_traceparent
+        event_correlation_id = str(
+            payload.get("correlation_id")
+            or event_context.get("correlation_id")
+            or idempotency_key
+        )
         event_payload = build_event(
             "transaction.received",
             tenant_id,
             trans_id,
             payload,
             event_id=idempotency_key,
-            correlation_id=str(payload.get("correlation_id") or idempotency_key),
+            correlation_id=event_correlation_id,
+            metadata=event_metadata,
         ).to_dict()
         event_payload["TransID"] = trans_id
 

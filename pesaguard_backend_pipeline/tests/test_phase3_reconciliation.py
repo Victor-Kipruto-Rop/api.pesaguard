@@ -2,7 +2,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from reconciliation_engine import ENGINE_VERSION, ReconciliationEngine, measure_reconciliation
+import pytest
+
+from reconciliation_engine import ENGINE_VERSION, ReconciliationEngine, evaluate_transaction, measure_reconciliation
 from models import Base, ReconciliationGroundTruth
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -82,10 +84,35 @@ def test_invalid_input_is_exception_and_pending_candidate_is_not_silent():
 
     pending = ENGINE.reconcile(
         transaction("pending", amount="100.00"),
-        [{"internal_ref": "order-pending", "amount": "100.00"}],
+        [{"internal_ref": "order-pending", "amount": "100.00", "timestamp": "2026-09-13T12:00:00Z"}],
     )
     assert pending["status"] == "MATCHED"
     assert pending["evidence"]["matched_record"]["internal_ref"] == "order-pending"
+
+
+@pytest.mark.parametrize("amount", ["1.005", "1.001"])
+def test_reconciliation_rejects_amounts_below_minor_unit_precision(amount):
+    result = ENGINE.reconcile(transaction("sub-cent", amount=amount), [record("sub-cent", amount="1.00")])
+
+    assert result["status"] == "EXCEPTION"
+    assert "minor unit" in result["reason"]
+
+
+def test_reconciliation_rejects_sub_minor_internal_amounts():
+    result = ENGINE.reconcile(transaction("bad-record"), [record("bad-record", amount="100.001")])
+
+    assert result["status"] == "EXCEPTION"
+    assert "minor unit" in result["reason"]
+
+
+def test_legacy_reconciliation_does_not_round_sub_cent_amount_into_a_match():
+    event = transaction("legacy-sub-cent", amount="1.005")
+    internal_record = record("legacy-sub-cent", amount="1.00")
+
+    result = evaluate_transaction(event, [internal_record], seen_trans_ids=set())
+
+    assert result["status"] != "matched"
+    assert "invalid_or_zero_amount" in result["anomalies"]
 
 
 def test_tolerance_match_records_rule_and_confidence():

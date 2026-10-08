@@ -4,7 +4,10 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, g, jsonify, request
 from auth_rbac import AuthRBAC, get_current_user, require_auth
-from tenant_organization_service import TenantOrganizationService
+from tenant_organization_service import (
+    OrganizationOwnerNotFound,
+    TenantOrganizationService,
+)
 from models import Organization, OrganizationApproval, OrganizationMembership, Department, Team
 
 bp = Blueprint("tenant_org_routes", __name__, url_prefix="/api/v1")
@@ -62,12 +65,20 @@ def list_organizations():
 def create_organization():
     payload = request.get_json(silent=True) or {}
     tenant_id = _tenant_scope()
-    org = _get_service().create_organization(
-        name=payload.get("name"),
-        tenant_id=tenant_id,
-        owner_user_id=payload.get("owner_user_id"),
-        settings=payload.get("settings") or {},
-    )
+    owner_user_id = payload.get("owner_user_id")
+    if owner_user_id is None:
+        owner_user_id = str(get_current_user().user_id)
+    elif not isinstance(owner_user_id, str) or not owner_user_id.strip():
+        return jsonify({"error": "invalid_owner"}), 400
+    try:
+        org = _get_service().create_organization(
+            name=payload.get("name"),
+            tenant_id=tenant_id,
+            owner_user_id=owner_user_id.strip(),
+            settings=payload.get("settings") or {},
+        )
+    except OrganizationOwnerNotFound:
+        return jsonify({"error": "owner_not_found"}), 404
     return jsonify({"status": "created", "organization": org}), 201
 
 
@@ -164,7 +175,7 @@ def add_member(organization_id: str):
     payload = request.get_json(silent=True) or {}
     membership = _get_service().add_user_to_organization(
         user_id=payload.get("user_id"),
-        tenant_id=payload.get("tenant_id") or _tenant_scope(),
+        tenant_id=_tenant_scope(),
         organization_id=organization_id,
         team_id=payload.get("team_id"),
         department_id=payload.get("department_id"),
@@ -186,9 +197,17 @@ def create_approval(organization_id: str):
     payload = request.get_json(silent=True) or {}
     session = _resolve_session_factory()()
     try:
+        tenant_id = _tenant_scope()
+        organization = session.query(Organization).filter_by(
+            id=organization_id,
+            tenant_id=tenant_id,
+        ).first()
+        if organization is None:
+            return jsonify({"error": "not_found"}), 404
+
         approval = OrganizationApproval(
             id=f"approval_{__import__('uuid').uuid4().hex[:12]}",
-            tenant_id=_tenant_scope(),
+            tenant_id=tenant_id,
             organization_id=organization_id,
             request_type=payload.get("request_type", "create"),
             requested_by=str(get_current_user().user_id),

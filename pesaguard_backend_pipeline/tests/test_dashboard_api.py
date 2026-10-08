@@ -17,18 +17,25 @@ def dashboard_app(monkeypatch):
 
         app_2 = importlib.reload(app_2)
         app_2.Base.metadata.create_all(app_2.engine)
+        from action_audit import Base as AuditBase
         from auth_rbac import _RevocationBase
-        from action_audit import ActionAuditEntry
 
+        AuditBase.metadata.create_all(app_2.primary_engine)
         _RevocationBase.metadata.create_all(app_2.primary_engine)
-        # .metadata, not .__table__: resolve/bulk-resolve also write to
-        # AuditOutboxEntry (transactional outbox), sharing this declarative base.
-        ActionAuditEntry.metadata.create_all(app_2.primary_engine, checkfirst=True)
         app_2.app.config.update(TESTING=True)
 
         session = app_2.SessionLocal()
         try:
             session.add_all([
+                app_2.UserAccount(
+                    id="test-admin",
+                    tenant_id="tenant-a",
+                    username="admin",
+                    roles=["admin"],
+                    permissions=[],
+                    status="active",
+                    authorization_version=1,
+                ),
                 app_2.Discrepancy(
                     id="tx-1-missing",
                     trans_id="tx-1",
@@ -143,6 +150,71 @@ def test_dashboard_supports_pagination_and_bulk_resolve(dashboard_app, dashboard
         assert all(item.resolution_note == "Bulk resolved" for item in resolved_items)
     finally:
         session.close()
+
+
+def test_organization_approval_rejects_organization_from_another_tenant(
+    dashboard_app, dashboard_auth_token
+):
+    client, app_module = dashboard_app
+    from models import Organization, OrganizationApproval
+
+    session = app_module.SessionLocal()
+    try:
+        session.add(Organization(
+            id="org-tenant-b",
+            tenant_id="tenant-b",
+            name="Tenant B",
+            slug="tenant-b",
+            status="active",
+            settings={},
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        "/api/v1/organizations/org-tenant-b/approvals",
+        headers={"Authorization": "Bearer " + dashboard_auth_token},
+        json={"request_type": "update"},
+    )
+
+    assert response.status_code == 404
+    with app_module.SessionLocal() as session:
+        assert session.query(OrganizationApproval).filter_by(
+            tenant_id="tenant-a",
+            organization_id="org-tenant-b",
+        ).count() == 0
+
+
+def test_create_organization_rejects_owner_from_another_tenant(
+    dashboard_app, dashboard_auth_token
+):
+    client, app_module = dashboard_app
+    from models import Organization, UserAccount
+
+    with app_module.SessionLocal() as session:
+        session.add(UserAccount(
+            id="foreign-owner",
+            username="foreign-owner",
+            tenant_id="tenant-b",
+            roles=["owner"],
+            permissions=[],
+            status="active",
+        ))
+        session.commit()
+
+    response = client.post(
+        "/api/v1/organizations",
+        headers={"Authorization": "Bearer " + dashboard_auth_token},
+        json={"name": "Tenant A Organization", "owner_user_id": "foreign-owner"},
+    )
+
+    assert response.status_code == 404
+    with app_module.SessionLocal() as session:
+        assert session.query(Organization).filter_by(
+            tenant_id="tenant-a",
+            name="Tenant A Organization",
+        ).count() == 0
 
 
 def test_dashboard_exposes_openapi_docs(dashboard_app):
@@ -405,8 +477,10 @@ def test_replica_health_circuit_recovers_after_probe():
 
 def test_locale_lookup_rejects_unknown_or_cross_user_ids(dashboard_app, dashboard_auth_token):
     client, app_module = dashboard_app
-    # dashboard_auth_token already seeds a UserAccount for "test-admin"/"tenant-a".
+    from models import UserAccount
 
+    # The fixture already creates this active user; the requests below verify
+    # unknown, whitespace-normalized, and tenant-scoped user lookups.
     unknown = client.get(
         "/tenant/current/locale?user_id=missing-user",
         headers={"Authorization": f"Bearer {dashboard_auth_token}"},

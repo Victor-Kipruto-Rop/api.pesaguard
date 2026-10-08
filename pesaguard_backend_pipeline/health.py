@@ -201,3 +201,20 @@ def build_health_payload() -> Dict[str, Any]:
             "daraja": daraja_result["daraja"],
         },
     }
+
+
+def sanitize_health_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove dependency details before returning health data to unauthenticated callers."""
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        return {"status": payload.get("status", "unknown"), "service": "pesaguard", "checks": {}}
+    return {
+        "status": payload.get("status", "unknown"),
+        "service": "pesaguard",
+        "checks": {
+            name: {"status": check.get("status", "unknown")}
+            if isinstance(check, dict)
+            else {"status": "unknown"}
+            for name, check in checks.items()
+        },
+    }

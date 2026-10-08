@@ -13,6 +13,7 @@
     "common-1.0.json",
     "error-1.0.json",
     "event-envelope-1.0.json",
+    "developer-api-key-lifecycle-1.0.json",
     "transaction-1.0.json",
     "reconciliation-1.0.json",
     "fraud-1.0.json",

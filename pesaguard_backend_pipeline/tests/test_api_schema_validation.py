@@ -37,3 +37,15 @@ def test_transaction_request_schema_rejects_bad_currency_and_body():
 
 def test_transaction_response_schema_is_checked():
     validate_transaction_response({"status": "accepted", "duplicate": False, "idempotency_key": "key-1"})
+
+
+def test_transaction_request_rejects_nonpositive_and_subcent_amounts():
+    for amount in ("0.00", "1.005"):
+        payload = _request()
+        payload["TransAmount"] = amount
+        try:
+            validate_transaction_create(payload)
+        except ApiContractError:
+            pass
+        else:
+            raise AssertionError(f"invalid amount {amount!r} must be rejected")

@@ -152,7 +152,7 @@ def test_reconciliation_job_publishes_discrepancies_to_topic(monkeypatch):
     monkeypatch.setattr(reconciliation_job, "KafkaConsumer", lambda *args, **kwargs: DummyConsumer())
     monkeypatch.setattr(reconciliation_job, "KafkaProducer", lambda *args, **kwargs: DummyProducer())
     monkeypatch.setattr(reconciliation_job, "ConnectorRegistry", type("DummyRegistry", (), {"from_env": staticmethod(lambda: type("Dummy", (), {"get_connector": lambda self, tenant_id: None})())}))
-    monkeypatch.setattr(reconciliation_job, "check_for_anomalies", lambda event, seen: ["missing_payment"])
+    monkeypatch.setattr(reconciliation_job, "check_for_anomalies", lambda event, seen, tenant_settings=None: ["missing_payment"])
     monkeypatch.setattr(reconciliation_job, "_RUNNING", True)
 
     # Persist reconciliation outcomes into an isolated database so the audit

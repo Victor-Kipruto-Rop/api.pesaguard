@@ -121,3 +121,30 @@ def test_reconciliation_outbox_claim_publish_and_retry_are_durable(tmp_path):
     store.mark_reconciliation_outbox_published("recon-outbox-1")
     with Session() as session:
         assert session.get(ReconciliationOutbox, "recon-outbox-1").status == "published"
+
+
+def test_outbox_drain_releases_claims_when_producer_initialization_fails(tmp_path, monkeypatch):
+    database_url = f"sqlite:///{tmp_path / 'producer_failure.db'}"
+    engine = create_engine(database_url)
+    Base.metadata.create_all(engine)
+    store = EventStore(database_url=database_url)
+    assert store.mark_processed(_payload(), tenant_id="tenant-a") is ProcessResult.STORED
+
+    import background_tasks
+    import producer
+
+    monkeypatch.setattr(background_tasks, "DATABASE_URL", database_url)
+    monkeypatch.setattr(
+        producer,
+        "publish_transaction_batch_results",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("producer unavailable")),
+    )
+
+    result = background_tasks.drain_transaction_outbox()
+
+    assert result == {"status": "partial_failure", "claimed": 1, "published": 0, "failed": 1}
+    with sessionmaker(bind=engine)() as session:
+        row = session.query(TransactionOutbox).one()
+        assert row.status == "failed"
+        assert row.locked_until is None
+        assert row.last_error == "producer unavailable"
