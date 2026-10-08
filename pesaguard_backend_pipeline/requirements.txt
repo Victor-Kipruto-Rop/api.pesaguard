@@ -35,7 +35,7 @@ jsonschema==4.23.0
 
 # HTTP Networking & Security
 requests==2.33.0
-PyJWT==2.13.0
+PyJWT==2.15.0
 cryptography==50.0.1
 argon2-cffi==23.1.0
 webauthn==2.7.0
