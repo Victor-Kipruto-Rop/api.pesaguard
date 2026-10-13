@@ -1,51 +1,111 @@
-# Authentication and API-key behavior
+# Authentication and identity routes
 
 ## Status and source of truth
 
-This page describes the authentication mechanisms present in the checked-in route-derived contract and backend code. It is not a login API reference. The current `docs/api/openapi.implemented.json` does not define public `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/refresh`, or `/api/v1/auth/session` operations. Older examples for those endpoints are not valid integration instructions.
+The canonical FastAPI app mounts the authentication Flask application at both `/auth` and `/api/v1/auth`. Therefore the code exposes unversioned and versioned aliases for the authentication routes below; the aliases do not imply different permissions or behavior.
 
-Before making a request, inspect the operation in the deployed `/openapi.json` and follow its exact security requirement. The checked-in implementation snapshot defines:
+**Important documentation gap:** the checked-in `docs/api/openapi.implemented.json` was generated before recent authentication and lifecycle changes and currently omits these mounted routes. The docs repository's route/OpenAPI generator is being updated to enumerate the FastAPI app and its WSGI mounts. Until regeneration succeeds, do not treat the current generated OpenAPI snapshot as a complete route inventory. Confirm exact request schemas, response codes, security requirements, and permissions in the deployed `/openapi.json` before production use.
 
-- `bearerAuth`: HTTP Bearer credentials formatted as JWTs.
-- `apiKeyAuth`: an API key supplied in the `X-API-Key` header.
-- Tenant API-key prefixes accepted by the backend verifier: `pk_` and `pgk_`.
+## Credential schemes
 
-The API-key verifier's accepted prefix is not proof that a key is valid, active, correctly scoped, or authorized for a given tenant. Do not infer permissions or environment from the prefix.
+The checked-in contract defines bearer JWT authentication and an API-key scheme through `X-API-Key`. The backend verifier accepts tenant API-key prefixes `pk_` and `pgk_`; a prefix does not establish validity, environment, tenant binding, or permissions.
 
-## Request examples
+Use the scheme documented for each operation. Do not send bearer and API-key credentials together. The backend explicitly rejects the compatibility case where a `pgk_` value is sent as a bearer token while `X-API-Key` is also present; do not rely on mixed-credential behavior for other combinations.
 
-For an operation whose OpenAPI security requirement includes `bearerAuth`:
+## Registered route inventory
 
-```http
-GET /tenant/current
-Authorization: Bearer <provisioned-jwt>
-Accept: application/json
-```
+The following paths are registered in the authentication Flask application. Unless a deployment explicitly disables a mount, each path is exposed both as written and with the `/api/v1` prefix prepended (for example, `POST /auth/login` and `POST /api/v1/auth/login`). This is a code-level route inventory, not a guarantee that a production deployment has the same revision or configuration.
 
-For an operation whose security requirement includes `apiKeyAuth`:
+### Login, credentials, and sessions
 
-```http
-GET /tenant/current
-X-API-Key: <provisioned-tenant-api-key>
-Accept: application/json
-```
+| Method | Route |
+|---|---|
+| POST | `/auth/register` |
+| POST | `/auth/login` |
+| POST | `/auth/refresh` |
+| POST | `/auth/logout` |
+| POST | `/auth/logout-all` |
+| GET | `/auth/verify` |
+| POST | `/auth/revoke` |
+| POST | `/auth/revoke/refresh` |
+| POST | `/auth/revoke/device` |
+| POST | `/auth/revoke/user` |
+| POST | `/auth/security/global-revoke` |
+| POST | `/auth/client-token` |
+| GET | `/auth/sessions` |
+| POST | `/auth/sessions/{session_id}/renew` |
+| POST | `/auth/sessions/{session_id}/revoke` |
+| POST | `/auth/password/change` |
+| POST | `/auth/password-reset/request` |
+| POST | `/auth/password-reset/confirm` |
+| POST | `/auth/passwordless/challenge` |
+| POST | `/auth/passwordless/verify` |
+| POST | `/auth/verify-email` |
+| POST | `/auth/verify-email/resend` |
 
-These examples are conditional on the credential having the permission required by the selected operation. In the checked-in contract, `GET /tenant/current` declares `read:settings`. Do not send both bearer and API-key credentials in one request. The backend explicitly rejects the compatibility case where a `pgk_` value is sent as a bearer token while `X-API-Key` is also present; do not rely on mixed-credential behavior for other combinations.
+### API keys, devices, and administrative controls
 
-## Authorization and tenant isolation
+| Method | Route |
+|---|---|
+| POST | `/auth/api-keys` |
+| POST | `/auth/api-keys/{key_id}/revoke` |
+| POST | `/auth/api-keys/{key_id}/rotate` |
+| GET | `/auth/devices` |
+| POST | `/auth/devices/{device_id}/logout` |
+| POST | `/auth/devices/{device_id}/rename` |
+| POST | `/auth/devices/{device_id}/revoke` |
+| POST | `/auth/devices/{device_id}/trust` |
+| GET | `/auth/users` |
+| GET | `/auth/account/lockouts` |
+| POST | `/auth/account/unlock` |
+| POST | `/auth/admin/users/{user_id}/password-reset` |
+| POST | `/auth/admin/users/{user_id}/emergency-credential-rotation` |
+| POST | `/auth/service-credentials/{credential_id}/revoke` |
 
-Authentication establishes an identity; it does not grant unrestricted access. The current route-derived contract includes operation-specific permission identifiers such as `read:settings`, `read:discrepancies`, and `manage:organizations`. Some handlers perform additional permission checks, so inspect the operation description and backend implementation when a route has more than one authorization condition.
+### Multi-factor authentication and WebAuthn
 
-Requests must use a tenant context authorized for the credential. A caller-supplied tenant identifier is not proof of access. Treat `401` as an authentication failure and `403` as an authorization or tenant-scope denial only where the operation documents those responses; check the actual response schema for other cases.
+| Method | Route |
+|---|---|
+| POST | `/auth/mfa/challenge` |
+| POST | `/auth/mfa/email/request` |
+| POST | `/auth/mfa/email/verify` |
+| POST | `/auth/mfa/enroll` |
+| POST | `/auth/mfa/enroll/verify` |
+| GET | `/auth/mfa/factors` |
+| POST | `/auth/mfa/factors/{factor_id}/revoke` |
+| GET | `/auth/mfa/policy` |
+| PUT | `/auth/mfa/policy` |
+| POST | `/auth/mfa/recovery-codes/regenerate` |
+| POST | `/auth/mfa/reset/request` |
+| POST | `/auth/mfa/reset/confirm` |
+| POST | `/auth/mfa/verify` |
+| POST | `/auth/mfa/webauthn/enroll/options` |
+| POST | `/auth/mfa/webauthn/enroll/verify` |
+| POST | `/auth/mfa/webauthn/login/verify` |
+| POST | `/auth/mfa/webauthn/step-up/options` |
+| POST | `/auth/mfa/webauthn/step-up/verify` |
+
+### Single sign-on and OIDC
+
+| Method | Route |
+|---|---|
+| GET | `/auth/sso/oidc/authorize` |
+| GET, POST | `/auth/sso/oidc/callback` |
+| GET | `/auth/sso/oidc/config` |
+| POST | `/auth/sso/oidc/token` |
+| POST | `/auth/sso/oidc/validate` |
+| GET, POST | `/auth/sso/policy` |
+| POST | `/auth/sso/policy/review` |
+| GET, POST | `/auth/sso/providers` |
+
+## Do not infer request or response schemas
+
+This list is derived from route decorators in the current backend source. It intentionally does not invent request fields, success payloads, status codes, or permission names. Those details must be taken from the regenerated OpenAPI contract and verified against the deployed revision. In particular, use the actual paths `/auth/password-reset/request`, `/auth/password-reset/confirm`, `/auth/password/change`, and `/auth/sessions`; older drafts used incorrect singular or hyphenated paths.
 
 ## Credential handling
 
-- Obtain credentials only through the deployment's authorized provisioning process.
-- Store them in a managed secret store or protected runtime configuration.
+- Obtain credentials only through the authorized provisioning and identity workflow.
+- Store secrets in a managed secret store or protected runtime configuration.
 - Never expose credentials in browser bundles, URLs, source control, logs, screenshots, or telemetry.
-- Rotate or revoke credentials through the supported operator workflow.
-- Confirm token expiry, key status, tenant binding, and permissions before troubleshooting an authorization failure.
-
-## What this page does not claim
-
-This page does not claim that self-service login, refresh, logout, API-key creation, production-key approval, or a particular key expiry policy is enabled for every deployment. Those workflows must be documented from their actual registered routes and verified deployment configuration before they are advertised as available.
+- Rotate or revoke credentials through the supported endpoint or operator workflow.
+- Confirm token expiry, key status, tenant binding, and operation-specific permissions before troubleshooting an authorization failure.
