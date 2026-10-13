@@ -47,7 +47,7 @@ PesaGuard currently runs a Flask and SQLAlchemy backend with PostgreSQL as the p
 
 ## Interfaces and invariants
 
-- Public API routes belong under `/api/v1` unless a documented compatibility alias exists.
+- New public business API routes should use `/api/v1`. The current route-derived inventory also contains operational and legacy paths outside that prefix; clients must use the exact path in the deployed OpenAPI document and must not blindly prepend `/api/v1`.
 - IDs are not globally trusted: detail lookups must include tenant and account predicates.
 - A retry must be safe to run more than once.
 - A successful response must not claim durable processing when the required persistence step failed.
