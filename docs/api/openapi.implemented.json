@@ -9,6 +9,15 @@
       "backend": "Victor-Kipruto-Rop/api.pesaguard",
       "commit": "8c50cad38e5176aec2513a6ef4584493364a1d42",
       "generator": "scripts/generate-openapi.py"
+    },
+    "x-docs-review": {
+      "checked_against_commit": "7d5e037faaf04589f1c0ca6c1bb43a3b2f2ed9b4",
+      "scope": [
+        "canonical API and docs hostnames",
+        "accepted API-key prefixes",
+        "incident filter preset GET/POST semantics"
+      ],
+      "note": "Manual corrections to identified stale fields; full route/OpenAPI regeneration and CI validation remain pending."
     }
   },
   "security": [
@@ -5172,16 +5181,37 @@
         "summary": "List tenant discrepancy and incident filter presets",
         "responses": {
           "200": {
-            "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
+            "description": "Tenant filter presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "presets": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "presets"
+                  ]
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The response body contains a `presets` object. This GET path reads presets; it does not create or update a custom preset.",
+        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The response contains a `presets` object. This GET operation reads presets; it does not create or update a custom preset.",
         "x-required-permission": "read:discrepancies"
       },
       "post": {
@@ -5191,18 +5221,71 @@
         ],
         "summary": "Create or replace a tenant filter preset",
         "responses": {
-          "200": {
-            "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
+          "201": {
+            "description": "Preset persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "saved"
+                      ]
+                    },
+                    "presets": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "presets"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
         },
         "description": "Accepts an optional `name` string and optional `filters` object. The name defaults to `custom_preset`; an empty name is rejected. The handler upserts by tenant and preset name, persists the filters, and returns HTTP 201 with `status: saved` and the merged preset map. The route decorator requires `read:discrepancies`; when API authentication is required, the write path also checks `write:discrepancies`.",
-        "x-required-permission": "read:discrepancies"
+        "x-required-permission": "read:discrepancies",
+        "x-additional-required-permissions": [
+          "write:discrepancies"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "filters": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
       }
     },
     "/incidents/search": {
