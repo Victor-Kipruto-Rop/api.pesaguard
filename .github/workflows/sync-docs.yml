@@ -26,6 +26,7 @@ on:
     paths:
       - "pesaguard_backend_pipeline/**"
       - "!pesaguard_backend_pipeline/tests/**"
+      - ".github/workflows/sync-docs.yml"
   workflow_dispatch:
 
 permissions:
