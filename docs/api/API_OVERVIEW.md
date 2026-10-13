@@ -1,111 +1,72 @@
-# PesaGuard API Contract
+# PesaGuard API: implemented routes and target contract
 
-This directory documents the authoritative public API contract for the PesaGuard backend. The project is implemented as a Flask and SQLAlchemy service with REST-style blueprints and operational routes grouped around tenant, finance, reconciliation, anomaly, notification, reporting, integration, audit, user, role, settings, and health concerns.
+## Purpose and source of truth
 
-## Base URL
+PesaGuard has two different OpenAPI artifacts; they must not be confused:
 
-The public API base path is versioned and should be routed as:
+- **Implemented route snapshot:** [`openapi.implemented.json`](openapi.implemented.json) is generated from the Flask application's registered route map. It is the repository's implementation snapshot, not proof that the same revision is currently deployed.
+- **Target contract:** [`openapi.json`](openapi.json) is a hand-maintained design contract for planned tenant-scoped transaction, reconciliation, fraud, and authentication operations. A route appearing only there must not be presented as implemented.
+- **Deployed contract:** the running service's `/openapi.json` is authoritative for the deployed revision. Compare it with the checked-in generated snapshot before relying on any endpoint.
 
-```
-/api/v1
-```
+The repository's current README states that M-Pesa/Daraja is the active payment scope. Airtel Money and bank integration documents are design references unless a working adapter, tests, configuration, and deployment evidence demonstrate otherwise.
+
+## Runtime and URL conventions
+
+The backend is a Flask/SQLAlchemy service behind a FastAPI control plane. The canonical public API origin configured in the repository is `https://api.pesaguard.co.ke`. Do not assume every endpoint uses the same prefix: the route-derived snapshot includes paths with and without `/api/v1`, so use the exact path and server definition in the deployed OpenAPI document.
 
 ## Authentication
 
-Authentication uses a bearer token pattern compatible with the existing Flask/JWT-style RBAC stack in the repository.
+The checked-in route-derived contract defines bearer JWT authentication and an API-key scheme using `X-API-Key`. The backend API-key verifier accepts `pk_` and `pgk_` prefixes. A key prefix does not prove environment, tenant, permissions, or provisioning status. Credentials are tenant-scoped and must be provisioned through the authorized workflow.
 
-Example:
+The current route-derived OpenAPI snapshot does **not** define the `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/refresh`, or `/api/v1/auth/session` routes described in older drafts. Do not integrate against those paths unless they appear in the deployed contract.
 
-```
-Authorization: Bearer <token>
-```
+## Permission identifiers
 
-The backend must validate token issuer, audience, and tenant claims where applicable.
+The route-derived snapshot contains these `x-required-permission` values:
 
-## Permission Model
+- `bulk:operations`
+- `export:communications`
+- `manage:communications`
+- `manage:organizations`
+- `manage:providers`
+- `read:analytics`
+- `read:communications`
+- `read:discrepancies`
+- `read:metrics`
+- `read:providers`
+- `read:settings`
+- `read:usage`
+- `resolve:discrepancies`
+- `send:communications`
+- `write:discrepancies`
+- `write:settings`
 
-Permissions are expressed as resource-oriented scopes such as:
+This is the set present in the checked-in snapshot, not a promise that every credential has any of these permissions. Some handlers apply additional conditional permission checks; read the operation description and backend handler before assuming a single permission is sufficient.
 
-- dashboard:read
-- transactions:read
-- transactions:write
-- transactions:export
-- reconciliation:read
-- reconciliation:create
-- anomalies:read
-- anomalies:investigate
-- alerts:read
-- alerts:acknowledge
-- customers:read
-- customers:write
-- reports:read
-- reports:create
-- integrations:read
-- integrations:manage
-- users:read
-- users:write
-- audit:read
-- settings:read
-- settings:write
+## Examples of routes in the checked-in implementation snapshot
 
-## Common Response Format
+The following paths are present in the checked-in route-derived contract. They still need to be checked against the live deployed specification before production use:
 
-Errors should use a normalized envelope:
+- `GET /tenant/current` — current tenant context; documented with `read:settings`.
+- `GET /api/v1/customers/{tenant_id}/transactions` — tenant transaction listing; documented with `read:discrepancies`.
+- `GET /api/v1/customers/{tenant_id}/transactions/{trans_id}` — transaction detail; documented with `read:discrepancies`.
+- `GET /incidents/filters/presets` — built-in and tenant-persisted discrepancy filter presets.
+- `POST /incidents/filters/presets` — persists a named filter preset; the handler applies both the route-level read permission and a conditional write-permission check when API authentication is required.
 
-```json
-{
-  "error": {
-    "code": "TRANSACTION_NOT_FOUND",
-    "message": "Transaction could not be found.",
-    "request_id": "<uuid>"
-  }
-}
-```
+Use the operation's request schema, responses, parameters, and security requirements rather than assuming examples are complete.
 
-Successful paginated responses should include metadata such as:
+## Errors, pagination, and idempotency
 
-```json
-{
-  "items": [],
-  "page": 1,
-  "limit": 25,
-  "total": 0,
-  "total_pages": 0
-}
-```
+Do not assume a universal error envelope, pagination shape, or idempotency behavior unless the specific operation documents it. The hand-maintained target contract includes proposed examples; the route-derived and deployed contracts take precedence for implemented behavior.
 
-## Core Endpoint Map
+## Release and verification
 
-- `/api/v1/auth`
-- `/api/v1/dashboard`
-- `/api/v1/transactions`
-- `/api/v1/reconciliation`
-- `/api/v1/anomalies`
-- `/api/v1/alerts`
-- `/api/v1/customers`
-- `/api/v1/reports`
-- `/api/v1/integrations`
-- `/api/v1/webhooks`
-- `/api/v1/audit`
-- `/api/v1/users`
-- `/api/v1/roles`
-- `/api/v1/settings`
-- `/api/v1/health`
+Before calling the API production-ready, verify:
 
-## Status Codes
+1. The backend CI workflow passes tests, migrations, and the breaking-contract gate.
+2. The route-derived OpenAPI and route snapshot are regenerated from the current backend commit.
+3. The documentation CI checks strict drift between HTML guides, OpenAPI, and registered routes.
+4. The deployed `/openapi.json`, health/readiness endpoints, authentication, tenant isolation, and critical reconciliation flows pass staging smoke tests.
+5. The live integration status for each payment rail is explicitly confirmed.
 
-- 200 OK
-- 201 Created
-- 202 Accepted
-- 204 No Content
-- 400 Bad Request
-- 401 Unauthorized
-- 403 Forbidden
-- 404 Not Found
-- 409 Conflict
-- 422 Unprocessable Entity
-- 429 Too Many Requests
-- 500 Internal Server Error
-- 502 Bad Gateway
-- 503 Service Unavailable
-- 504 Gateway Timeout
+A repository file or successful documentation build alone is not evidence of a successful production deployment.
