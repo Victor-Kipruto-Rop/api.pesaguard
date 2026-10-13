@@ -149,7 +149,7 @@ def test_site_probe_timeout_is_reported_as_unknown_not_raised(monkeypatch):
             raise FutureTimeoutError()
 
     monkeypatch.setattr(public_status, "SITE_PROBES", (
-        ("public-website", "Public website", "https://pesaguard.victorkipruto.com/"),
+        ("public-website", "Public website", "https://pesaguard.co.ke/"),
     ))
     monkeypatch.setattr(public_status, "_site_cache", {"checked_at": 0.0, "services": []})
     monkeypatch.setattr(public_status._site_probe_pool, "submit", lambda *args: TimedOutProbe())
