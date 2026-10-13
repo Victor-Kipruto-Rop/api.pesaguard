@@ -41,7 +41,7 @@ The route-derived snapshot contains these `x-required-permission` values:
 - `write:discrepancies`
 - `write:settings`
 
-This is the set present in the checked-in snapshot, not a promise that every credential has any of these permissions. Some handlers apply additional conditional permission checks; read the operation description and backend handler before assuming a single permission is sufficient.
+This is the set present in the checked-in snapshot, which is currently incomplete for mounted authentication routes. It is not a complete permission inventory and is not a promise that every credential has any of these permissions. Some handlers apply additional conditional permission checks; read the operation description and backend handler before assuming a single permission is sufficient.
 
 ## Examples of routes in the checked-in implementation snapshot
 
@@ -50,6 +50,7 @@ The following paths are present in the checked-in route-derived contract. They s
 - `GET /tenant/current` — current tenant context; documented with `read:settings`.
 - `GET /api/v1/customers/{tenant_id}/transactions` — tenant transaction listing; documented with `read:discrepancies`.
 - `GET /api/v1/customers/{tenant_id}/transactions/{trans_id}` — transaction detail; documented with `read:discrepancies`.
+- `POST /api/v1/transactions` — transaction-creation route registered in the current dashboard Flask app and exercised by backend tests; it is missing from the stale generated OpenAPI snapshot and must be included by the route/OpenAPI regeneration.
 - `GET /incidents/filters/presets` — built-in and tenant-persisted discrepancy filter presets.
 - `POST /incidents/filters/presets` — persists a named filter preset; the handler applies both the route-level read permission and a conditional write-permission check when API authentication is required.
 
