@@ -4,9 +4,9 @@
     "title": "PesaGuard Dashboard & Reconciliation API",
     "version": "2.0.0",
     "description": "Enterprise-grade operational telemetry and reconciliation endpoints. This file mirrors the specification served at /openapi.json by a running deployment; the live deployment is authoritative.",
-    "x-documentation": "https://docs.pesaguard.victorkipruto.com/api/",
+    "x-documentation": "https://docs.pesaguard.co.ke/api/",
     "x-generated-from": {
-      "backend": "Victor-Kipruto-Rop/api.pesaguard.victorkipruto.com",
+      "backend": "Victor-Kipruto-Rop/api.pesaguard",
       "commit": "8c50cad38e5176aec2513a6ef4584493364a1d42",
       "generator": "scripts/generate-openapi.py"
     }
@@ -30,7 +30,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Tenant API key starting with `pk_`. Used when no Authorization header is sent."
+        "description": "Provisioned tenant API key using a supported `pk_` or `pgk_` format. Use the documented `X-API-Key` header; do not send both API-key and bearer credentials in one request."
       }
     },
     "responses": {
@@ -5169,7 +5169,7 @@
         "tags": [
           "Incidents"
         ],
-        "summary": "Return and persist a minimal set of dashboard filter presets",
+        "summary": "List tenant discrepancy and incident filter presets",
         "responses": {
           "200": {
             "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
@@ -5180,14 +5180,16 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The response body contains a `presets` object. This GET path reads presets; it does not create or update a custom preset.",
+        "x-required-permission": "read:discrepancies"
       },
       "post": {
         "operationId": "incident_filter_presets_post",
         "tags": [
           "Incidents"
         ],
-        "summary": "Return and persist a minimal set of dashboard filter presets",
+        "summary": "Create or replace a tenant filter preset",
         "responses": {
           "200": {
             "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
@@ -5198,7 +5200,9 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Accepts an optional `name` string and optional `filters` object. The name defaults to `custom_preset`; an empty name is rejected. The handler upserts by tenant and preset name, persists the filters, and returns HTTP 201 with `status: saved` and the merged preset map. The route decorator requires `read:discrepancies`; when API authentication is required, the write path also checks `write:discrepancies`.",
+        "x-required-permission": "read:discrepancies"
       }
     },
     "/incidents/search": {
