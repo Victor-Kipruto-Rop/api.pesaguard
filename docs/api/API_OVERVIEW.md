@@ -4,7 +4,7 @@
 
 PesaGuard has two different OpenAPI artifacts; they must not be confused:
 
-- **Implemented route snapshot:** [`openapi.implemented.json`](openapi.implemented.json) is generated from the Flask application's registered route map. It is the repository's implementation snapshot, not proof that the same revision is currently deployed.
+- **Implemented route snapshot:** [`openapi.implemented.json`](openapi.implemented.json) is intended to be generated from the canonical FastAPI app and its mounted Flask WSGI applications. The checked-in artifact was last generated from backend commit `8c50cad38e5176aec2513a6ef4584493364a1d42` and is stale pending a successful regeneration against current `main`; it may omit newer routes.
 - **Target contract:** [`openapi.json`](openapi.json) is a hand-maintained design contract for planned tenant-scoped transaction, reconciliation, fraud, and authentication operations. A route appearing only there must not be presented as implemented.
 - **Deployed contract:** the running service's `/openapi.json` is authoritative for the deployed revision. Compare it with the checked-in generated snapshot before relying on any endpoint.
 
@@ -12,7 +12,7 @@ The repository's current README states that M-Pesa/Daraja is the active payment 
 
 ## Runtime and URL conventions
 
-The backend is a Flask/SQLAlchemy service behind a FastAPI control plane. The canonical public API origin configured in the repository is `https://api.pesaguard.co.ke`. Do not assume every endpoint uses the same prefix: the route-derived snapshot includes paths with and without `/api/v1`, so use the exact path and server definition in the deployed OpenAPI document.
+The canonical entry point is FastAPI (`canonical_app:app`, importing `fastapi_app:app`). It directly registers liveness/readiness routes, mounts the authentication Flask app at `/auth` and `/api/v1/auth`, and mounts the dashboard Flask app at `/`. The canonical public API origin configured in the repository is `https://api.pesaguard.co.ke`. Do not assume every endpoint uses the same prefix: the route-derived snapshot includes paths with and without `/api/v1`, so use the exact path and server definition in the deployed OpenAPI document.
 
 ## Authentication
 
