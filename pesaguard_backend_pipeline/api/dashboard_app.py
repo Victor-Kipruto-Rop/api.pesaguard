@@ -90,7 +90,6 @@ DEFAULT_CORS_ALLOWED_ORIGINS = ",".join((
     "https://docs.pesaguard.co.ke",
     "https://developers.pesaguard.co.ke",
     "https://status.pesaguard.co.ke",
-    "https://status.pesaguard.victorkipruto.com",
 ))
 DEFAULT_CORS_ALLOWED_HEADERS = (
     "Authorization, Content-Type, Idempotency-Key, traceparent, "
