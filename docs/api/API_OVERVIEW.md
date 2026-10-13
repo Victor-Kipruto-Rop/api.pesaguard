@@ -18,7 +18,7 @@ The backend is a Flask/SQLAlchemy service behind a FastAPI control plane. The ca
 
 The checked-in route-derived contract defines bearer JWT authentication and an API-key scheme using `X-API-Key`. The backend API-key verifier accepts `pk_` and `pgk_` prefixes. A key prefix does not prove environment, tenant, permissions, or provisioning status. Credentials are tenant-scoped and must be provisioned through the authorized workflow.
 
-The current route-derived OpenAPI snapshot does **not** define the `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/refresh`, or `/api/v1/auth/session` routes described in older drafts. Do not integrate against those paths unless they appear in the deployed contract.
+The current route-derived OpenAPI snapshot is incomplete: it was generated before the canonical FastAPI entry point's authentication WSGI mounts and recent lifecycle routes were incorporated. The backend source and tests include `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/sessions`, password-reset, MFA, WebAuthn, and OIDC routes, with versioned aliases under `/api/v1/auth`. The docs generator is being updated to include these mounts. Do not infer that a route is absent just because it is missing from the stale snapshot; verify the deployed `/openapi.json` after regeneration.
 
 ## Permission identifiers
 
