@@ -30,7 +30,7 @@ X-API-Key: <provisioned-tenant-api-key>
 Accept: application/json
 ```
 
-These examples are conditional on the credential having the permission required by the selected operation. In the checked-in contract, `GET /tenant/current` declares `read:settings`. Do not send both bearer and API-key credentials in one request; the backend rejects ambiguous combinations in its API-key compatibility path.
+These examples are conditional on the credential having the permission required by the selected operation. In the checked-in contract, `GET /tenant/current` declares `read:settings`. Do not send both bearer and API-key credentials in one request. The backend explicitly rejects the compatibility case where a `pgk_` value is sent as a bearer token while `X-API-Key` is also present; do not rely on mixed-credential behavior for other combinations.
 
 ## Authorization and tenant isolation
 
