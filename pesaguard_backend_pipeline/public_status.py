@@ -22,13 +22,13 @@ from sqlalchemy.exc import IntegrityError
 from email_service import EmailService
 from models import PublicStatusSubscription
 
-STATUS_SITE_URL = "https://status.pesaguard.victorkipruto.com/"
+STATUS_SITE_URL = "https://status.pesaguard.co.ke/"
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TOKEN_TTL = timedelta(hours=24)
 SITE_PROBES = (
-    ("public-website", "Public website", "https://pesaguard.victorkipruto.com/"),
-    ("dashboard-site", "Dashboard", "https://dashboard.pesaguard.victorkipruto.com/"),
-    ("documentation-site", "Documentation", "https://docs.pesaguard.victorkipruto.com/"),
+    ("public-website", "Public website", "https://pesaguard.co.ke/"),
+    ("dashboard-site", "Dashboard", "https://app.pesaguard.co.ke/"),
+    ("documentation-site", "Documentation", "https://docs.pesaguard.co.ke/"),
     ("status-site", "Status website", STATUS_SITE_URL),
 )
 _SITE_CACHE_SECONDS = 30
