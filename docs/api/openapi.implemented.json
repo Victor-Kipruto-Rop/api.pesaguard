@@ -5211,7 +5211,7 @@
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The response contains a `presets` object. This GET operation reads presets; it does not create or update a custom preset.",
+        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The current handler falls back to tenant id `default` when no tenant context is resolved; production callers must ensure an authenticated tenant context is present. This GET operation reads presets and does not create or update a custom preset.",
         "x-required-permission": "read:discrepancies"
       },
       "post": {
@@ -5262,13 +5262,13 @@
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "description": "Accepts an optional `name` string and optional `filters` object. The name defaults to `custom_preset`; an empty name is rejected. The handler upserts by tenant and preset name, persists the filters, and returns HTTP 201 with `status: saved` and the merged preset map. The route decorator requires `read:discrepancies`; when API authentication is required, the write path also checks `write:discrepancies`.",
+        "description": "Accepts an optional JSON object with optional `name` and `filters` fields. The name defaults to `custom_preset` when omitted or empty; a whitespace-only name is rejected after trimming. `filters` defaults to an empty object. The handler upserts by resolved tenant and preset name and returns HTTP 201 with `status: saved` and the merged preset map. If no tenant context is resolved, the current handler falls back to tenant id `default`. The route decorator requires `read:discrepancies`; when API authentication is required, the write path also checks `write:discrepancies`.",
         "x-required-permission": "read:discrepancies",
         "x-additional-required-permissions": [
           "write:discrepancies"
         ],
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -5280,8 +5280,7 @@
                   "filters": {
                     "type": "object"
                   }
-                },
-                "additionalProperties": false
+                }
               }
             }
           }
