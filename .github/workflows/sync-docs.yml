@@ -1,6 +1,6 @@
 name: Sync docs
 
-# Connects this repository to docs.pesaguard.victorkipruto.com without a docs
+# Connects this repository to docs.pesaguard.co.ke without a docs
 # backend. The docs site is static; its OpenAPI spec is generated from this
 # repository's registered routes by scripts that live in the docs repository.
 #
@@ -37,7 +37,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DOCS_REPO: Victor-Kipruto-Rop/docs.pesaguard.victorkipruto.com
+  DOCS_REPO: Victor-Kipruto-Rop/docs.pesaguard.co.ke
 
 jobs:
   notify-docs:
@@ -81,7 +81,7 @@ jobs:
       - name: Generate the implemented spec from the registered routes
         env:
           DATABASE_URL: sqlite:////tmp/pesaguard-spec.db
-          PESAGUARD_API_URL: https://api.pesaguard.victorkipruto.com
+          PESAGUARD_API_URL: https://api.pesaguard.co.ke
         run: python docs-site/scripts/generate-openapi.py . --out /tmp/openapi.implemented.json
 
       - name: Replace the committed copy if the content changed
