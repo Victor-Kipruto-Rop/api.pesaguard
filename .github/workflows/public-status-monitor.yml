@@ -27,4 +27,4 @@ jobs:
           curl --fail --silent --show-error --max-time 30 \
             --request POST \
             --header "Authorization: Bearer $STATUS_MONITOR_TOKEN" \
-            https://api.pesaguard.victorkipruto.com/public/status/monitor
+            https://api.pesaguard.co.ke/public/status/monitor
