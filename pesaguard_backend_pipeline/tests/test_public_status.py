@@ -71,6 +71,16 @@ def test_public_status_lists_each_backend_check_and_deployed_site(public_status_
     assert payload["verified"] is True
 
 
+def test_public_status_probe_urls_use_canonical_domains():
+    assert public_status.STATUS_SITE_URL == "https://status.pesaguard.co.ke/"
+    probe_urls = {url for _, _, url in public_status.SITE_PROBES}
+    assert "https://pesaguard.co.ke/" in probe_urls
+    assert "https://app.pesaguard.co.ke/" in probe_urls
+    assert "https://docs.pesaguard.co.ke/" in probe_urls
+    assert "https://status.pesaguard.co.ke/" in probe_urls
+    assert not any("victorkipruto.com" in url for url in probe_urls)
+
+
 def test_public_site_outage_degrades_the_overall_status(public_status_client, monkeypatch):
     client, _, _, _ = public_status_client
     monkeypatch.setattr(public_status, "_site_services", lambda: [
@@ -149,7 +159,7 @@ def test_site_probe_timeout_is_reported_as_unknown_not_raised(monkeypatch):
             raise FutureTimeoutError()
 
     monkeypatch.setattr(public_status, "SITE_PROBES", (
-        ("public-website", "Public website", "https://pesaguard.victorkipruto.com/"),
+        ("public-website", "Public website", "https://pesaguard.co.ke/"),
     ))
     monkeypatch.setattr(public_status, "_site_cache", {"checked_at": 0.0, "services": []})
     monkeypatch.setattr(public_status._site_probe_pool, "submit", lambda *args: TimedOutProbe())

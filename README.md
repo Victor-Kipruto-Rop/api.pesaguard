@@ -86,8 +86,8 @@ The status website uses these public API routes:
    GitHub Actions repository secret. Never commit the token or expose it in
    logs.
 4. Set `PESAGUARD_CORS_ALLOWED_ORIGINS` to allow both
-   `https://api.pesaguard.victorkipruto.com` and
-   `https://status.pesaguard.victorkipruto.com`. An explicit value replaces
+   `https://api.pesaguard.co.ke` and
+   `https://status.pesaguard.co.ke`. An explicit value replaces
    defaults, so retain any other origins required by clients.
 5. Back up the database, then run migrations from the backend checkout root
    with production `DATABASE_URL` configured, before deploying the code:
@@ -110,7 +110,7 @@ The status website uses these public API routes:
 
 After deployment, verify:
 
-1. `GET https://api.pesaguard.victorkipruto.com/public/status` returns a valid
+1. `GET https://api.pesaguard.co.ke/public/status` returns a valid
    `verified` payload and the expected service IDs. HTTP 503 can carry a real
    degraded/outage payload; inspect the payload as well as the HTTP code.
 2. A browser request from the status-site origin passes CORS preflight for the

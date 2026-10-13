@@ -265,11 +265,11 @@ def test_public_status_is_sanitized_and_allows_the_status_site(dashboard_client,
 
     response = client.get(
         "/public/status",
-        headers={"Origin": "https://status.pesaguard.victorkipruto.com"},
+        headers={"Origin": "https://status.pesaguard.co.ke"},
     )
 
     assert response.status_code == 503
-    assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
+    assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.co.ke"
     assert response.headers["Cache-Control"] == "no-store"
     assert "private broker detail" not in response.get_data(as_text=True)
     assert "private provider detail" not in response.get_data(as_text=True)
@@ -301,14 +301,14 @@ def test_public_status_cors_preflight_accepts_status_site(dashboard_client, monk
         response = client.options(
             endpoint,
             headers={
-                "Origin": "https://status.pesaguard.victorkipruto.com",
+                "Origin": "https://status.pesaguard.co.ke",
                 "Access-Control-Request-Method": method,
                 "Access-Control-Request-Headers": "content-type",
             },
         )
 
         assert response.status_code == 200
-        assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.victorkipruto.com"
+        assert response.headers["Access-Control-Allow-Origin"] == "https://status.pesaguard.co.ke"
         assert "POST" in response.headers["Access-Control-Allow-Methods"]
         assert "Content-Type" in response.headers["Access-Control-Allow-Headers"]
 
