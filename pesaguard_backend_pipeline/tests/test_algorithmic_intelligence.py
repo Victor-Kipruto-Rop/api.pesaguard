@@ -87,7 +87,7 @@ def test_candidate_scoring_only_auto_matches_complete_exact_evidence():
         incoming, {**exact, "reference": "different-ref"}, window_seconds=900
     )
     assert ambiguous_or_partial["auto_matchable"] is False
-    assert "reference_exact" in ambiguous_or_partial["reason_codes"]
+    assert "reference_not_exact" in ambiguous_or_partial["reason_codes"]
 
 
 def test_candidate_scoring_fails_closed_when_time_evidence_is_missing():
