@@ -75,3 +75,37 @@ def test_evaluation_reports_precision_recall_false_positives_and_latency():
     assert metrics["false_positives"] >= 0
     assert metrics["false_negatives"] >= 0
     assert metrics["detection_latency_ms"] >= 0
+
+
+
+def test_daraja_compact_timestamp_uses_kenya_local_hour_for_time_risk():
+    daraja = assess_transaction(tx("night-local", when="20261014020000"))
+    iso_utc = assess_transaction({
+        "TransID": "night-iso", "TransAmount": "1000", "MSISDN": "254700000001",
+        "BusinessShortCode": "600000", "timestamp": "2026-10-13T23:00:00Z",
+    })
+    assert daraja.features.time_pattern == 1.0
+    assert iso_utc.features.time_pattern == 1.0
+
+
+def test_established_customer_history_does_not_increase_risk_score():
+    baseline = {"mean_amount": 1000, "std_amount": 250, "customer_mean_amount": 1000}
+    current = tx("history-current", amount="1000", when="20261014100000")
+    new_customer = assess_transaction(current, [], baseline)
+    history = [
+        tx(f"known-{index}", amount="1000", when="20261013100000")
+        for index in range(20)
+    ]
+    established_customer = assess_transaction(current, history, baseline)
+    assert established_customer.features.customer_history == 1.0
+    assert new_customer.features.customer_history == 0.0
+    assert established_customer.risk_score <= new_customer.risk_score
+
+
+def test_risk_configuration_rejects_invalid_thresholds():
+    import pytest
+
+    with pytest.raises(ValueError):
+        assess_transaction(tx("bad-threshold"), amount_threshold=float("nan"))
+    with pytest.raises(ValueError):
+        assess_transaction(tx("bad-velocity"), velocity_limit=0)
