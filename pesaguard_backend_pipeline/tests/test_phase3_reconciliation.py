@@ -51,7 +51,7 @@ def test_golden_dataset_is_100_percent_correct():
         record_kwargs = {}
         if case.get("original_transaction_id"):
             record_kwargs["original_transaction_id"] = case["original_transaction_id"]
-        raw = transaction(case["transaction_id"], amount=case["amount"], timestamp=event_time.strftime("%Y%m%d%H%M%S"), **event_kwargs)
+        raw = transaction(case["transaction_id"], amount=case["amount"], timestamp=(event_time + timedelta(hours=3)).strftime("%Y%m%d%H%M%S"), **event_kwargs)
         records = [] if case["record_amount"] is None else [record(case["transaction_id"], amount=case["record_amount"], timestamp=record_time.isoformat().replace("+00:00", "Z"), **record_kwargs)]
         prepared.append((case["name"], raw, records, case["expected_status"]))
     results = [
