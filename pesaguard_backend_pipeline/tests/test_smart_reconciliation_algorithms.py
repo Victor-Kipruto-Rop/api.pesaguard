@@ -140,3 +140,65 @@ def test_bad_algorithm_parameters_fail_closed():
         robust_amount_outliers([1, 2, 3], minimum_samples=2)
     with pytest.raises(ValueError):
         detect_velocity_breach([], window_seconds=0)
+
+
+
+def test_engine_shadow_mode_is_opt_in_and_does_not_change_legacy_decision():
+    from reconciliation_engine import evaluate_transaction
+
+    event = {
+        "TransID": "SHADOW-1",
+        "TransAmount": "100",
+        "MSISDN": "254700000000",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-1",
+    }
+    record = {
+        "internal_ref": "ledger-1",
+        "reference": "INV-1",
+        "amount": "100",
+        "phone_number": "254700000000",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+    }
+    baseline = evaluate_transaction(event, [record], seen_trans_ids=set())
+    assert baseline["status"] == "matched"
+    assert "smart_analysis" not in baseline
+
+    shadow = evaluate_transaction(
+        event,
+        [record],
+        seen_trans_ids=set(),
+        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": True}},
+    )
+    assert shadow["status"] == baseline["status"]
+    assert shadow["match"] == baseline["match"]
+    assert shadow["smart_analysis"]["mode"] == "shadow"
+    assert shadow["smart_analysis"]["legacy_decision_unchanged"] is True
+    assert shadow["smart_analysis"]["candidate_ranking"]["top_candidate"]["candidate_id"] == "ledger-1"
+
+
+def test_shadow_mode_does_not_break_legacy_decision_when_disabled():
+    from reconciliation_engine import evaluate_transaction
+
+    event = {
+        "TransID": "SHADOW-2",
+        "TransAmount": "100",
+        "MSISDN": "254700000000",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-2",
+    }
+    record = {
+        "internal_ref": "ledger-2",
+        "reference": "INV-2",
+        "amount": "100",
+        "phone_number": "254700000000",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+    }
+    result = evaluate_transaction(
+        event,
+        [record],
+        seen_trans_ids=set(),
+        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": False}},
+    )
+    assert result["status"] == "matched"
+    assert "smart_analysis" not in result
