@@ -389,9 +389,11 @@ def validate_transaction_quality(transaction: Mapping[str, Any]) -> dict[str, An
     if timestamp is None:
         findings.append({"code": "MISSING_OR_AMBIGUOUS_TIMESTAMP", "severity": "high"})
     if not str(reference or "").strip():
-        findings.append({"code": "MISSING_REFERENCE", "severity": "medium"})
+        # A missing reference may still be investigated through other evidence,
+        # but it must not pass the automatic-match quality gate.
+        findings.append({"code": "MISSING_REFERENCE", "severity": "high"})
     return {
         "algorithm_version": ALGORITHM_VERSION,
-        "valid_for_automatic_matching": not any(item["severity"] in {"critical", "high"} for item in findings),
+        "valid_for_automatic_matching": not findings,
         "findings": findings,
     }
