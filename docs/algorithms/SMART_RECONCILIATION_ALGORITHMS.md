@@ -1,0 +1,51 @@
+# Smart Reconciliation Algorithms
+
+## Scope and activation boundary
+
+`pesaguard_backend_pipeline/smart_reconciliation_algorithms.py` provides deterministic, pure-Python algorithm primitives. The current change is additive: it does **not** replace the existing reconciliation engine's decision path, authorize refunds, block payments, or claim fraud probabilities. Integrate through a shadow-evaluation phase before changing production matching outcomes.
+
+## Included algorithms
+
+| Algorithm | Method | Output and safe use |
+|---|---|---|
+| Tenant-scoped transaction fingerprint | SHA-256 over provider + provider transaction ID; conservative normalized fallback when no ID exists | Duplicate candidate key. A fallback fingerprint is not proof of duplication. |
+| Candidate evidence scoring | Weighted reference, amount, timestamp, and phone evidence | Ranking signal with explicit conflicts. Score is not a probability. |
+| Ambiguity detection | Deterministic ranking + configurable top-score margin | Emits `REVIEW` when top candidates are too close; never guesses between tied ledger rows. |
+| Amount outlier detection | Median absolute deviation (MAD), modified z-score | Flags unusual amounts for review; requires a minimum sample count and reports insufficient-data state. |
+| Explainable risk triage | Bounded weighted rules | Returns score, tier, active signals, and review action. It does not auto-decline a transaction. |
+| Rolling-window velocity | Count events in a caller-selected window | Detects volume threshold breaches. Caller must scope input to a tenant and entity such as account/phone. |
+| Transaction data-quality gate | Required ID, finite positive amount, timezone-aware timestamp, reference | Separates malformed/incomplete events from candidates for automatic matching. |
+
+## Integration contract
+
+1. Normalize provider callbacks at the integration boundary. Preserve the raw event and its provenance separately.
+2. Require a non-empty `tenant_id` for fingerprinting. Never compare hashes across tenants.
+3. Store the algorithm version and explainable evidence with any shadow result. Do not store full phone numbers in algorithm telemetry.
+4. Run the current production engine and the new ranker side-by-side on the same tenant-scoped candidate set. Do not let shadow results change transaction status.
+5. Compare proposed outcomes against approved, reviewed ground truth using the existing certification process. Report precision, recall, false positives, false negatives, ambiguous-match rate, and latency by tenant/provider/amount band.
+6. Review false positives and false negatives with finance operators. Keep thresholds tenant-configurable only after approval and change audit.
+7. Enable any decision-path change gradually behind a feature flag, with an immediate rollback to the existing engine.
+8. Keep human approval for refund/reversal, settlement, and other irreversible financial actions.
+
+## Operational constraints
+
+- The score is a deterministic ranking heuristic, not a calibrated probability.
+- Outlier detection is not ready until the minimum number of valid observations exists; do not treat an empty result as normality.
+- Velocity detection is only correct when the caller supplies the correct tenant/entity history and uses consistent UTC timestamps.
+- ISO timestamps without an explicit timezone are rejected as ambiguous. Normalize timestamps before calling.
+- Exact provider transaction IDs should be the primary idempotency key. Fallback fingerprints are useful for investigation but can collide.
+- Do not use unsupervised anomaly results as sole evidence of fraud or as the sole reason to hold customer funds.
+- Retain tenant isolation, audit records, idempotency, and existing authorization controls.
+
+## Verification
+
+Run from the repository root:
+
+```powershell
+$env:PYTHONPATH = "."
+pytest -q pesaguard_backend_pipeline/tests/test_smart_reconciliation_algorithms.py
+pytest -q
+python -m compileall -q pesaguard_backend_pipeline
+```
+
+The focused tests cover deterministic/tenant-scoped fingerprints, normalized fallback fingerprints, explicit candidate conflicts, tie handling, MAD outliers and zero-MAD behavior, bounded risk scores, rolling windows, invalid timestamps, and data-quality findings. Full-suite and production certification results must be recorded from an actual run; they are not implied by adding these tests.

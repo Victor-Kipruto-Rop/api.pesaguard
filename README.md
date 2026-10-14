@@ -125,3 +125,8 @@ Email notifications are poll-based: a change can take up to five minutes to
 trigger a message, and an incident that begins and recovers between polls may
 not be observed. Production delivery is unverified until these checks pass
 against the deployed service.
+
+
+## Smart reconciliation algorithms
+
+The additive, deterministic algorithm primitives and their safety/rollout contract are documented in [`docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md`](docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md). They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
