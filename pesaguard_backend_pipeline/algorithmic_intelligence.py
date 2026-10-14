@@ -137,10 +137,12 @@ def score_reconciliation_candidate(
     *,
     window_seconds: int = 900,
 ) -> dict[str, Any]:
-    """Return explainable evidence; only conservative exact evidence auto-matches.
+    """Return explainable candidate evidence without rewarding missing data.
 
-    This helper intentionally does not choose among multiple candidates. The
-    caller must detect ambiguous top candidates and route them to review.
+    Exact reference and amount are necessary but not sufficient for an automatic
+    match: both timestamps must parse and fall inside the configured window.
+    Phone evidence is corroborating when both sides provide it; absent phone data
+    is neutral, while conflicting phone data blocks automatic matching.
     """
     incoming_raw_ref = _canonical_reference(incoming.get("BillRefNumber") or incoming.get("reference"))
     candidate_raw_ref = _canonical_reference(candidate.get("reference") or candidate.get("internal_ref"))
@@ -149,47 +151,156 @@ def score_reconciliation_candidate(
     incoming_amount = incoming.get("TransAmount", incoming.get("amount"))
     candidate_amount = candidate.get("amount", candidate.get("TransAmount"))
     try:
-        amount_equal = (incoming_amount is not None and candidate_amount is not None
-                        and amount_to_minor_units(incoming_amount) == amount_to_minor_units(candidate_amount))
-    except ValueError:
+        amount_equal = (
+            incoming_amount is not None and candidate_amount is not None
+            and amount_to_minor_units(incoming_amount) == amount_to_minor_units(candidate_amount)
+        )
+    except (ValueError, TypeError, InvalidOperation):
         amount_equal = False
 
     incoming_time = incoming.get("TransTime") or incoming.get("timestamp")
     candidate_time = candidate.get("timestamp") or candidate.get("created_at")
     delta_seconds = _timestamp_delta_seconds(incoming_time, candidate_time)
-    # Missing timestamps are unknown evidence, not proof that the events are close.
-    time_ok = delta_seconds is not None and delta_seconds <= max(0, int(window_seconds))
+    time_available = delta_seconds is not None
+    time_ok = time_available and delta_seconds <= max(0, int(window_seconds))
+
     incoming_phone = _canonical_phone(incoming.get("MSISDN") or incoming.get("phone_number"))
     candidate_phone = _canonical_phone(candidate.get("phone_number") or candidate.get("MSISDN"))
-    phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
+    phone_available = bool(incoming_phone and candidate_phone)
+    phone_ok = not phone_available or incoming_phone == candidate_phone
 
+    reference_exact = bool(incoming_raw_ref and candidate_raw_ref and incoming_raw_ref == candidate_raw_ref)
+    reference_normalized_only = bool(
+        incoming_ref and candidate_ref and incoming_ref == candidate_ref
+        and incoming_raw_ref != candidate_raw_ref
+    )
     evidence = {
-        "reference_exact": bool(incoming_raw_ref and candidate_raw_ref and incoming_raw_ref == candidate_raw_ref),
-        "reference_normalized_only": bool(
-            incoming_ref and candidate_ref and incoming_ref == candidate_ref
-            and incoming_raw_ref != candidate_raw_ref
-        ),
+        "reference_exact": reference_exact,
+        "reference_normalized_only": reference_normalized_only,
         "amount_exact": bool(amount_equal),
+        "time_evidence_available": time_available,
         "time_within_window": bool(time_ok),
+        "phone_evidence_available": phone_available,
         "phone_consistent": bool(phone_ok),
         "time_delta_seconds": delta_seconds,
     }
+
+    # Missing optional evidence contributes neither a positive nor a negative
+    # score. Renormalize weights over observed evidence to avoid rewarding gaps.
+    weighted_evidence = [
+        (0.45, reference_exact, True),
+        (0.30, bool(amount_equal), incoming_amount is not None and candidate_amount is not None),
+        (0.15, bool(time_ok), time_available),
+        (0.10, bool(phone_ok), phone_available),
+    ]
+    available_weight = sum(weight for weight, _, available in weighted_evidence if available)
     score = (
-        0.45 * evidence["reference_exact"]
-        + 0.30 * evidence["amount_exact"]
-        + 0.15 * evidence["time_within_window"]
-        + 0.10 * evidence["phone_consistent"]
+        sum(weight * float(passed) for weight, passed, available in weighted_evidence if available)
+        / available_weight
+        if available_weight else 0.0
     )
-    auto_matchable = all((
-        evidence["reference_exact"], evidence["amount_exact"],
-        evidence["time_within_window"], evidence["phone_consistent"],
-    ))
+    auto_matchable = bool(
+        reference_exact and amount_equal and time_available and time_ok
+        and phone_ok
+    )
+    reason_codes = []
+    if not reference_exact:
+        reason_codes.append("reference_not_exact")
+    if not amount_equal:
+        reason_codes.append("amount_not_exact")
+    if not time_available:
+        reason_codes.append("timestamp_evidence_missing")
+    elif not time_ok:
+        reason_codes.append("timestamp_outside_window")
+    if phone_available and not phone_ok:
+        reason_codes.append("phone_conflict")
     return {
         "score": round(float(score), 4),
         "auto_matchable": auto_matchable,
         "evidence": evidence,
-        "reason_codes": [key for key, passed in evidence.items()
-                         if key != "time_delta_seconds" and not passed],
+        "reason_codes": reason_codes,
+    }
+
+
+def find_unique_exact_subset(
+    candidates: Sequence[Mapping[str, Any]],
+    target_amount: Any,
+    *,
+    currency: str = "KES",
+    max_candidates: int = 18,
+) -> dict[str, Any]:
+    """Find a unique exact subset for settlement investigation, never posting.
+
+    The caller MUST pre-scope candidates to one tenant, provider, settlement
+    window, and any available batch identifier before calling this helper.
+    The bounded search stops after finding two solutions: one solution is a
+    candidate allocation, multiple solutions are ambiguous, and no solution is
+    unmatched. Inputs outside the configured bound are review-only.
+    """
+    target_minor = _strict_amount_minor_units(target_amount)
+    expected_currency = str(currency or "KES").upper().strip()
+    bound = max(1, min(int(max_candidates), 20))
+    if target_minor <= 0:
+        raise ValueError("target_amount must be greater than zero")
+    if len(candidates) > bound:
+        return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                "candidate_count": len(candidates), "reason_codes": ["candidate_limit_exceeded"]}
+
+    rows: list[tuple[str, int]] = []
+    seen_ids: set[str] = set()
+    for candidate in candidates:
+        identifier = str(candidate.get("TransID") or candidate.get("transaction_id") or candidate.get("id") or "").strip()
+        if not identifier or identifier in seen_ids:
+            return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                    "candidate_count": len(candidates), "reason_codes": ["missing_or_duplicate_transaction_id"]}
+        seen_ids.add(identifier)
+        candidate_currency = str(candidate.get("Currency") or candidate.get("currency") or "KES").upper().strip()
+        if candidate_currency != expected_currency:
+            return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                    "candidate_count": len(candidates), "reason_codes": ["currency_mismatch"]}
+        try:
+            amount_minor = _strict_amount_minor_units(candidate.get("TransAmount", candidate.get("amount")))
+        except (ValueError, TypeError, InvalidOperation):
+            return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                    "candidate_count": len(candidates), "reason_codes": ["invalid_candidate_amount"]}
+        if amount_minor <= 0:
+            return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                    "candidate_count": len(candidates), "reason_codes": ["non_positive_candidate_amount"]}
+        rows.append((identifier, amount_minor))
+
+    suffix_totals = [0] * (len(rows) + 1)
+    for index in range(len(rows) - 1, -1, -1):
+        suffix_totals[index] = suffix_totals[index + 1] + rows[index][1]
+    solutions: list[tuple[str, ...]] = []
+
+    def search(index: int, total: int, chosen: tuple[str, ...]) -> None:
+        if len(solutions) >= 2:
+            return
+        if total == target_minor:
+            solutions.append(chosen)
+            return
+        if index >= len(rows) or total > target_minor:
+            return
+        if total + suffix_totals[index] < target_minor:
+            return
+        identifier, amount_minor = rows[index]
+        search(index + 1, total + amount_minor, chosen + (identifier,))
+        search(index + 1, total, chosen)
+
+    search(0, 0, ())
+    if not solutions:
+        status, selected, reasons = "UNMATCHED", [], ["no_exact_subset"]
+    elif len(solutions) > 1:
+        status, selected, reasons = "AMBIGUOUS", [], ["multiple_exact_subsets"]
+    else:
+        status, selected, reasons = "MATCH_CANDIDATE", list(solutions[0]), []
+    return {
+        "status": status, "selected_transaction_ids": selected,
+        "target_minor_units": target_minor, "currency": expected_currency,
+        "candidate_count": len(rows), "solution_count_capped": min(len(solutions), 2),
+        "reason_codes": reasons,
+        "requires_human_or_policy_approval": True,
+        "requires_manual_review": status != "MATCH_CANDIDATE",
     }
 
 
