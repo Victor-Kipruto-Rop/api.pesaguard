@@ -21,6 +21,10 @@ The system foundation is documented here:
 - [database/CORE_DATA_ENGINEERING.md](database/CORE_DATA_ENGINEERING.md) — ingestion, canonical model, transformations, lineage, catalog, retention, and governance
 - [database/DATA_DICTIONARY.md](database/DATA_DICTIONARY.md) — field-level definitions for the platform’s core entities
 
+## Algorithm foundation
+
+- [algorithms/TRANSACTION_INTELLIGENCE.md](algorithms/TRANSACTION_INTELLIGENCE.md) — implemented transaction-intelligence primitives, matching guardrails, validation and future algorithm roadmap
+
 ## Supporting documentation
 
 - [api/](api/) — public API contracts
