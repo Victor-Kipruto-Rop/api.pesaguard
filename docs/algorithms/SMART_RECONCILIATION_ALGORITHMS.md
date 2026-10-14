@@ -18,8 +18,11 @@
 
 ## Production safety corrections in phase3.3
 
-- Missing provider references are never fabricated from TransID, and internal database row IDs are never treated as payment references. A record can still be investigated using amount/time evidence, but that evidence does not produce an exact MATCHED result.
+- Missing provider references are never fabricated from TransID, checkout-request IDs, or local database row IDs. A record can still be investigated using amount/time evidence, but that evidence does not produce an exact MATCHED result.
 - A missing reference fails the automatic-match quality gate. It remains eligible for controlled investigation and human review.
+- The active evaluate_transaction matching path requires an explicit exact business-reference match before returning an automatic match; amount, phone, and timestamp agreement alone is review evidence.
+- Candidate rows with explicit tenant, provider, account, business-code, or currency conflicts are excluded. If all candidates are excluded for scope conflicts, the result is a reviewable ambiguity rather than a match or a misleading no-payment result.
+- Daraja compact timestamps used by the scoring function are interpreted as Africa/Nairobi local time and converted to UTC, consistent with the main matching path.
 - Multiple ledger rows sharing a reference now produce EXCEPTION with ambiguous_internal_reference; they are not mislabeled as duplicate provider payments.
 - The reconciliation engine version is bumped to phase3.3 so new decisions can be distinguished in audit evidence.
 
