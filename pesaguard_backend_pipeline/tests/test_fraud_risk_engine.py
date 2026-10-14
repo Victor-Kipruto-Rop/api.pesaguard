@@ -74,7 +74,8 @@ def test_evaluation_reports_precision_recall_false_positives_and_latency():
     assert metrics["recall"] >= 0
     assert metrics["false_positives"] >= 0
     assert metrics["false_negatives"] >= 0
-    assert metrics["detection_latency_ms"] >= 0
+    assert metrics["detection_latency_ms"] is None
+    assert metrics["latency_sample_count"] == 0
 
 
 
@@ -109,3 +110,12 @@ def test_risk_configuration_rejects_invalid_thresholds():
         assess_transaction(tx("bad-threshold"), amount_threshold=float("nan"))
     with pytest.raises(ValueError):
         assess_transaction(tx("bad-velocity"), velocity_limit=0)
+
+
+def test_detection_latency_uses_event_time_not_decision_age():
+    event_time = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    decision = assess_transaction(tx("latency-test", when="20261014130000"))
+    metrics = evaluate_predictions([(decision, False, event_time)])
+    expected_ms = max(0.0, (decision.detected_at - event_time).total_seconds() * 1000)
+    assert metrics["latency_sample_count"] == 1
+    assert metrics["detection_latency_ms"] == expected_ms
