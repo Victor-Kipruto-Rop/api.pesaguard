@@ -104,6 +104,56 @@ def _identity(transaction: Mapping[str, Any], *keys: str) -> str:
     return "unknown"
 
 
+def detect_cumulative_subthreshold_activity(transaction: Mapping[str, Any], history: Sequence[Mapping[str, Any]] = (), *, threshold: float, window_seconds: int = 3600, min_transactions: int = 3) -> dict[str, Any]:
+    """Screen for cumulative below-threshold activity using tenant-scoped history.
+
+    This produces explainable evidence for review only. It never blocks,
+    reverses, or posts transactions.
+    """
+    try:
+        limit = float(threshold)
+    except (TypeError, ValueError, OverflowError):
+        limit = float("nan")
+    if not math.isfinite(limit) or limit < 0:
+        raise ValueError("threshold must be a finite non-negative number")
+    window = max(0, int(window_seconds))
+    minimum = max(2, int(min_transactions))
+    result = {"evaluated": False, "triggered": False, "transaction_count": 0,
+              "total_amount": 0.0, "threshold": limit, "window_seconds": window,
+              "reason_codes": []}
+    if limit <= 0:
+        result["reason_codes"] = ["threshold_not_positive"]
+        return result
+    customer = _identity(transaction, "MSISDN", "customer_id", "customer")
+    current_id = _identity(transaction, "TransID", "trans_id", "transaction_id")
+    current_time = _timestamp(transaction)
+    current_amount = _number(transaction.get("TransAmount") or transaction.get("amount"), float("nan"))
+    if customer == "unknown" or current_id == "unknown" or current_time is None or not math.isfinite(current_amount) or current_amount <= 0 or current_amount >= limit:
+        result["reason_codes"] = ["insufficient_current_transaction_evidence"]
+        return result
+    observed = {current_id: (current_time, current_amount)}
+    for item in history:
+        item_id = _identity(item, "TransID", "trans_id", "transaction_id")
+        if _identity(item, "MSISDN", "customer_id", "customer") != customer or item_id == "unknown" or item_id in observed:
+            continue
+        item_time = _timestamp(item)
+        if item_time is None:
+            continue
+        age = (current_time - item_time).total_seconds()
+        if age < 0 or age > window:
+            continue
+        item_amount = _number(item.get("TransAmount") or item.get("amount"), float("nan"))
+        if not math.isfinite(item_amount) or item_amount <= 0 or item_amount >= limit:
+            continue
+        observed[item_id] = (item_time, item_amount)
+    total = sum(amount for _, amount in observed.values())
+    count = len(observed)
+    triggered = count >= minimum and total >= limit
+    return {"evaluated": True, "triggered": triggered, "transaction_count": count,
+            "total_amount": round(total, 2), "threshold": limit, "window_seconds": window,
+            "reason_codes": ["cumulative_subthreshold_activity"] if triggered else []}
+
+
 def calculate_features(
     transaction: Mapping[str, Any],
     history: Sequence[Mapping[str, Any]] = (),
@@ -167,7 +217,10 @@ def evaluate_rules(
     velocity_limit: float = 5.0,
 ) -> tuple[RuleResult, ...]:
     transaction_id = _identity(transaction, "TransID", "trans_id", "transaction_id")
-    duplicate = any(_identity(item, "TransID", "trans_id", "transaction_id") == transaction_id for item in history)
+    duplicate = transaction_id != "unknown" and any(
+        _identity(item, "TransID", "trans_id", "transaction_id") == transaction_id
+        for item in history
+    )
     amount = features.amount
     customer_id = _identity(transaction, "MSISDN", "customer_id", "customer")
     current_time = _timestamp(transaction)
@@ -182,12 +235,14 @@ def evaluate_rules(
             if 0 <= age_seconds <= 300:
                 recent_customer_amounts.append(round(_number(item.get("TransAmount") or item.get("amount")), 2))
     rapid_changes = len(set(recent_customer_amounts[-5:])) >= 4
+    cumulative_activity = detect_cumulative_subthreshold_activity(transaction, history, threshold=amount_threshold)
     return (
         RuleResult("velocity", features.velocity * 5 >= velocity_limit, 0.30, "transaction velocity exceeded the configured limit"),
         RuleResult("amount_threshold", amount > amount_threshold, 0.20, "transaction amount exceeded the tenant threshold"),
         RuleResult("duplicate_activity", duplicate, 0.30, "transaction identity was already observed"),
         RuleResult("unusual_time", features.time_pattern > 0, 0.10, "transaction occurred during an unusual time window"),
         RuleResult("rapid_transaction_changes", rapid_changes, 0.15, "recent transaction amounts changed rapidly"),
+        RuleResult("cumulative_subthreshold_activity", cumulative_activity["triggered"], 0.25, "distinct below-threshold transactions for the same customer reached the configured threshold in the review window"),
     )
 
 
