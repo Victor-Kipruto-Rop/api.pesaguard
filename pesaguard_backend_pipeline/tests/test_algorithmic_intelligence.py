@@ -1,6 +1,6 @@
 import pytest
 
-from algorithmic_intelligence import (
+from fraud_risk_engine import calculate_features\nfrom algorithmic_intelligence import (
     amount_to_minor_units,
     is_amount_outlier,
     normalize_reference,
@@ -78,3 +78,19 @@ def test_candidate_scoring_does_not_assume_missing_time_is_proof_of_match():
     )
     assert result["auto_matchable"] is True
     assert result["evidence"]["time_delta_seconds"] is None
+
+
+def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
+    history = [
+        {"TransID": f"h-{index}", "TransAmount": amount, "MSISDN": f"25470000000{index}",
+         "TransTime": f"2026100{index + 1}120000"}
+        for index, amount in enumerate([100, 101, 99, 100, 102, 10000])
+    ]
+    features = calculate_features(
+        {"TransID": "current", "TransAmount": "150", "MSISDN": "254799999999",
+         "TransTime": "20261014120000"},
+        history,
+    )
+    # The historical outlier should not inflate the mean and hide a meaningful
+    # deviation from the normal 100-KES cluster.
+    assert features.amount_deviation > 0.5
