@@ -240,6 +240,9 @@ def find_unique_exact_subset(
     target_minor = _strict_amount_minor_units(target_amount)
     expected_currency = str(currency or "KES").upper().strip()
     bound = max(1, min(int(max_candidates), 20))
+    if not re.fullmatch(r"[A-Z]{3}", expected_currency):
+        return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                "candidate_count": len(candidates), "reason_codes": ["invalid_target_currency"]}
     if target_minor <= 0:
         raise ValueError("target_amount must be greater than zero")
     if len(candidates) > bound:
@@ -255,6 +258,9 @@ def find_unique_exact_subset(
                     "candidate_count": len(candidates), "reason_codes": ["missing_or_duplicate_transaction_id"]}
         seen_ids.add(identifier)
         candidate_currency = str(candidate.get("Currency") or candidate.get("currency") or "KES").upper().strip()
+        if not re.fullmatch(r"[A-Z]{3}", candidate_currency):
+            return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
+                    "candidate_count": len(candidates), "reason_codes": ["invalid_candidate_currency"]}
         if candidate_currency != expected_currency:
             return {"status": "REVIEW_REQUIRED", "selected_transaction_ids": [],
                     "candidate_count": len(candidates), "reason_codes": ["currency_mismatch"]}
@@ -595,6 +601,11 @@ def assess_reversal(
     The prior list must contain only provider-confirmed successful reversals for
     the same tenant/provider scope. The caller owns that scoped database query.
     """
+    for scope_field in ("tenant_id", "provider", "provider_account_id"):
+        original_scope = str(original.get(scope_field) or "").strip().casefold()
+        reversal_scope = str(reversal.get(scope_field) or "").strip().casefold()
+        if original_scope and reversal_scope and original_scope != reversal_scope:
+            return {"status": "INVALID", "valid": False, "reason_codes": [f"{scope_field}_mismatch"]}
     original_id = str(original.get("TransID") or original.get("trans_id") or original.get("transaction_id") or "").strip()
     reversal_id = str(reversal.get("TransID") or reversal.get("trans_id") or reversal.get("transaction_id") or "").strip()
     original_ref = str(reversal.get("OriginalTransID") or reversal.get("OriginalTransactionID")
@@ -606,6 +617,8 @@ def assess_reversal(
 
     original_currency = str(original.get("Currency") or original.get("currency") or "KES").strip().upper()
     reversal_currency = str(reversal.get("Currency") or reversal.get("currency") or "KES").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", original_currency) or not re.fullmatch(r"[A-Z]{3}", reversal_currency):
+        return {"status": "INVALID", "valid": False, "reason_codes": ["invalid_currency"]}
     if original_currency != reversal_currency:
         return {"status": "INVALID", "valid": False, "reason_codes": ["currency_mismatch"]}
     try:
@@ -625,6 +638,8 @@ def assess_reversal(
         item_currency = str(item.get("Currency") or item.get("currency") or "KES").strip().upper()
         if not item_id or item_id == reversal_id or item_id in seen_ids or item_ref != original_id:
             continue
+        if not re.fullmatch(r"[A-Z]{3}", item_currency):
+            return {"status": "INVALID", "valid": False, "reason_codes": ["invalid_prior_reversal_currency"]}
         if item_currency != original_currency:
             return {"status": "INVALID", "valid": False, "reason_codes": ["prior_reversal_currency_mismatch"]}
         try:
@@ -684,7 +699,7 @@ def profile_transaction_batch(
             raise ValueError(f"unsupported required field: {field}")
     total = len(records)
     missing = {field: 0 for field in required_fields}
-    invalid_amount = invalid_timestamp = future_timestamp = late_events = invalid_rows = 0
+    invalid_amount = invalid_timestamp = invalid_currency = future_timestamp = late_events = invalid_rows = 0
     duplicate_ids: set[str] = set()
     seen_ids: set[str] = set()
     currencies: dict[str, int] = {}
@@ -729,6 +744,8 @@ def profile_transaction_batch(
             elif age >= max(0, int(late_after_seconds)):
                 late_events += 1
         currency = str(values["currency"] or "KES").strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            invalid_currency += 1
         currencies[currency] = currencies.get(currency, 0) + 1
 
     rates = {field: round(count / total, 4) if total else 0.0 for field, count in missing.items()}
@@ -737,7 +754,7 @@ def profile_transaction_batch(
         "record_count": total, "invalid_row_count": invalid_rows,
         "missing_field_counts": missing, "missing_field_rates": rates,
         "invalid_amount_count": invalid_amount, "invalid_timestamp_count": invalid_timestamp,
-        "future_timestamp_count": future_timestamp, "late_event_count": late_events,
+        "invalid_currency_count": invalid_currency, "future_timestamp_count": future_timestamp, "late_event_count": late_events,
         "duplicate_transaction_ids": sorted(duplicate_ids),
         "duplicate_transaction_id_count": len(duplicate_ids),
         "missing_reference_count": reference_missing, "currency_counts": dict(sorted(currencies.items())),
@@ -755,7 +772,10 @@ def _strict_amount_minor_units(value: Any, *, decimal_places: int = 2) -> int:
     if not amount.is_finite():
         raise ValueError("amount must be a finite decimal number")
     quantum = Decimal(1).scaleb(-decimal_places)
-    normalized = amount.quantize(quantum, rounding=ROUND_HALF_UP)
+    try:
+        normalized = amount.quantize(quantum, rounding=ROUND_HALF_UP)
+    except InvalidOperation as exc:
+        raise ValueError("amount exceeds supported transaction precision") from exc
     if amount != normalized:
         raise ValueError("amount has precision beyond the supported minor unit")
     return int(normalized.scaleb(decimal_places))
