@@ -202,3 +202,13 @@ def test_shadow_mode_does_not_break_legacy_decision_when_disabled():
     )
     assert result["status"] == "matched"
     assert "smart_analysis" not in result
+
+
+
+def test_internal_ledger_id_is_not_mistaken_for_payment_reference():
+    result = score_reconciliation_candidate(
+        {"reference": "INV-1", "amount": "10"},
+        {"internal_ref": "INV-1", "amount": "10"},
+    )
+    assert "reference_exact" not in result.evidence
+    assert "reference_missing" in result.conflicts
