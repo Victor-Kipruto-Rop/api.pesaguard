@@ -61,3 +61,36 @@ def test_duplicate_transaction_is_flagged_without_double_alerting():
 
     assert "duplicate_transaction_id" in result["anomalies"]
     assert result["duplicate"] is True
+
+
+
+def test_ambiguous_equal_candidates_require_manual_review():
+    event = make_event(trans_id="T-AMBIGUOUS", amount="100", phone="254700000000")
+    records = [
+        make_internal_record(internal_ref="ORD-A"),
+        make_internal_record(internal_ref="ORD-B"),
+    ]
+
+    result = evaluate_transaction(event, records, seen_trans_ids=set())
+
+    assert result["status"] == "needs_review"
+    assert result["severity"] == "warning"
+    assert result["match"]["match_type"] == "ambiguous"
+    assert result["match"]["ambiguous"] is True
+    assert result["match"]["candidate_count"] == 2
+    assert result["match"]["review_reason"] == "multiple_candidates_with_similar_scores"
+    assert set(result["match"]["candidate_internal_refs"]) == {"ORD-A", "ORD-B"}
+
+
+def test_unique_candidate_remains_auto_match_compatible():
+    event = make_event(trans_id="T-UNIQUE", amount="100", phone="254700000000")
+    result = evaluate_transaction(
+        event,
+        [make_internal_record(internal_ref="ORD-UNIQUE")],
+        seen_trans_ids=set(),
+    )
+
+    assert result["status"] == "matched"
+    assert result["match"]["match_type"] == "exact"
+    assert result["match"]["candidate_count"] == 1
+    assert result["match"]["ambiguous"] is False
