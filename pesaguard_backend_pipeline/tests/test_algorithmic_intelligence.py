@@ -106,7 +106,7 @@ def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
 def test_partial_payment_aggregation_is_reference_scoped_and_idempotent():
     payments = [
         {"TransID": "P1", "BillRefNumber": "INV-7", "TransAmount": "40.00"},
-        {"TransID": "P2", "BillRefNumber": "inv 7", "TransAmount": "60.00"},
+        {"TransID": "P2", "BillRefNumber": "inv-7", "TransAmount": "60.00"},
         {"TransID": "P2", "BillRefNumber": "INV-7", "TransAmount": "60.00"},
         {"TransID": "P3", "BillRefNumber": "OTHER", "TransAmount": "999.00"},
     ]
@@ -199,3 +199,17 @@ def test_punctuation_only_reference_similarity_is_not_auto_match_evidence():
     )
     assert result["evidence"]["reference_normalized_only"] is True
     assert result["auto_matchable"] is False
+
+
+
+def test_partial_payment_aggregation_does_not_merge_punctuation_collisions():
+    result = aggregate_partial_payments(
+        [
+            {"TransID": "P1", "reference": "INV-7", "amount": "40.00"},
+            {"TransID": "P2", "reference": "INV 7", "amount": "60.00"},
+        ],
+        "100.00",
+        reference="INV-7",
+    )
+    assert result["status"] == "PARTIAL"
+    assert result["received_minor_units"] == 4000
