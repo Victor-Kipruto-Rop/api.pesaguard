@@ -97,7 +97,18 @@ class ReconciliationEngine:
 
         duplicate_records = [record for record in records if self._reference_matches(transaction, record)]
         if len(duplicate_records) > 1:
-            return self._result("DUPLICATE", None, ["duplicate_internal_reference"], 1.0, started, now)
+            # Multiple ledger rows sharing a reference are not proof that the
+            # provider payment itself is a duplicate. Treat this as ambiguity
+            # and require review instead of contaminating duplicate metrics.
+            return self._result(
+                "EXCEPTION",
+                None,
+                ["ambiguous_internal_reference"],
+                0.0,
+                started,
+                now,
+                reason="multiple internal records share the transaction reference",
+            )
         if not records:
             return self._result("UNMATCHED", None, ["missing_internal_record"], 0.0, started, now)
 
@@ -161,7 +172,9 @@ class ReconciliationEngine:
         timestamp = _parse_event_time(value.get("TransTime", value.get("timestamp")))
         return {
             "transaction_id": str(value.get("TransID") or value.get("trans_id") or "").strip(),
-            "reference": str(value.get("BillRefNumber") or value.get("reference") or value.get("TransID") or "").strip(),
+            # TransID is provider identity, not a merchant/ledger reference.
+            # Never synthesize reference evidence from a different field.
+            "reference": str(value.get("BillRefNumber") or value.get("reference") or "").strip(),
             "amount": amount,
             "timestamp": timestamp,
             "phone": str(value.get("MSISDN") or value.get("phone_number") or "").strip(),
@@ -181,7 +194,9 @@ class ReconciliationEngine:
         amount = self._amount(value.get("amount", value.get("TransAmount")))
         return {
             "internal_ref": value.get("internal_ref"),
-            "reference": str(value.get("reference") or value.get("merchant_ref") or value.get("internal_ref") or "").strip(),
+            # internal_ref is a local row identifier, not an external payment
+            # reference. Treat absent business references as absent evidence.
+            "reference": str(value.get("reference") or value.get("merchant_ref") or "").strip(),
             "original_reference": str(
                 value.get("original_transaction_id")
                 or value.get("original_reference")
@@ -226,7 +241,9 @@ class ReconciliationEngine:
                 record.get("original_reference") == transaction.get("original_reference")
                 or record.get("reference") == transaction.get("original_reference")
             )
-        return record.get("reference") == transaction.get("reference")
+        transaction_reference = str(transaction.get("reference") or "").strip()
+        record_reference = str(record.get("reference") or "").strip()
+        return bool(transaction_reference and record_reference and record_reference == transaction_reference)
 
     def _exact_match(self, transaction: Dict[str, Any], records: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         for record in records:
