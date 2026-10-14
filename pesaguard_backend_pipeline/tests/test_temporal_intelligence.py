@@ -138,3 +138,18 @@ def test_invalid_algorithm_thresholds_are_rejected():
         seasonal_amount_anomaly({}, [], minimum_samples=2)
     with pytest.raises(ValueError):
         classify_temporal_evidence({}, max_ingestion_lag_seconds=-1)
+    with pytest.raises(ValueError):
+        seasonal_amount_anomaly({}, [], modified_z_threshold=float("nan"))
+
+
+def test_seasonal_baseline_rejects_non_positive_current_amount():
+    event, history = _history_for_wednesdays()
+    result = seasonal_amount_anomaly({
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "account_id": "paybill-a",
+        "event_time": event.isoformat(),
+        "amount": "0",
+    }, history)
+    assert result["evaluated"] is False
+    assert "positive_amount_and_timezone_aware_event_time_required" in result["reason_codes"]
