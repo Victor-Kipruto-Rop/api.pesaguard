@@ -28,10 +28,12 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 1. Normalize and validate the source event.
 2. Check tenant/provider-scoped external identity and replay fingerprints.
 3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
-4. Use time and phone consistency as corroborating signals.
-5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
-6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
-7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
+4. Require parseable timestamps on both sides and a timestamp inside the configured window before an evidence-scoring candidate can be marked auto-matchable. A missing timestamp is unknown evidence, never proof of temporal consistency.
+5. Use phone consistency as corroborating evidence when both sides provide a phone number. A mismatch blocks automatic matching; missing phone evidence is neutral and does not inflate the score.
+6. Candidate scores are normalized over evidence that is actually present. They are evidence scores, not probabilities.
+7. Never auto-match a candidate solely because amount and timestamp happen to be similar.
+8. If multiple candidates are plausible and the top two scores differ by less than the configured ambiguity margin, create an exception for review instead of selecting whichever record happened to appear first.
+9. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
 
 Partial-payment aggregation, velocity screening and settlement variance decomposition are reusable primitives; they do not currently replace the existing reconciliation lifecycle or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping and persistence before presenting them as end-to-end product features.
 
