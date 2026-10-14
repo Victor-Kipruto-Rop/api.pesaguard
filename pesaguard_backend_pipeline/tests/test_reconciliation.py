@@ -94,3 +94,33 @@ def test_unique_candidate_remains_auto_match_compatible():
     assert result["match"]["match_type"] == "exact"
     assert result["match"]["candidate_count"] == 1
     assert result["match"]["ambiguous"] is False
+
+
+
+def test_amount_within_tolerance_is_reviewed_not_auto_matched():
+    event = make_event(trans_id="T-TOLERANCE", amount="100.40", phone="254700000000")
+    record = make_internal_record(internal_ref="ORD-TOLERANCE", amount=100.00)
+
+    result = evaluate_transaction(event, [record], seen_trans_ids=set())
+
+    assert result["status"] == "needs_review"
+    assert result["match"]["match_type"] == "fuzzy_exact"
+
+
+def test_missing_timestamp_evidence_requires_review():
+    event = make_event(
+        trans_id="T-NO-TIME",
+        amount="100",
+        phone="254700000000",
+        trans_time="not-a-valid-time",
+    )
+    record = make_internal_record(
+        internal_ref="ORD-NO-TIME",
+        amount=100.00,
+        timestamp=None,
+    )
+
+    result = evaluate_transaction(event, [record], seen_trans_ids=set())
+
+    assert result["status"] == "needs_review"
+    assert result["match"]["match_type"] == "fuzzy_exact"
