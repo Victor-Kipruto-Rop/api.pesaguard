@@ -11,7 +11,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Algorithm | Purpose | Guardrail |
 |---|---|---|
 | Decimal-to-minor-unit conversion | Compare money without binary floating-point equality errors | Decimal rounding is explicit; callers must use the correct currency precision |
-| Canonical reference normalization | Reduce case, Unicode normalization, spaces and punctuation differences for grouping and candidate hints | Punctuation-only similarity is not sufficient for automatic matching; missing references remain missing |
+| Canonical reference normalization | Produce a punctuation-insensitive candidate hint | Candidate hints cannot auto-match; partial-payment aggregation preserves punctuation to avoid collisions; missing references remain missing |
 | Tenant/provider-scoped transaction identity | Build a stable deduplication key from tenant, provider and external transaction ID | Refuses missing identity fields; does not deduplicate by amount/time alone |
 | Canonical payload fingerprint | Detect a conflicting replay where the same transaction ID carries changed facts | Separate from identity: changed amount/reference deliberately changes the fingerprint |
 | Median/MAD modified z-score | Detect amount outliers despite a few extreme historical values | Requires at least five samples; not a fraud verdict |
