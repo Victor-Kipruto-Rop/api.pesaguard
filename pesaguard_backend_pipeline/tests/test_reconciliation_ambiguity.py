@@ -17,7 +17,7 @@ def test_reconciliation_refuses_tied_non_reference_candidates():
             "internal_ref": "ORDER-A",
             "reference": "ORDER-A",
             "amount": "100.00",
-            "timestamp": datetime(2026, 10, 14, 12, 0, 1, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 10, 14, 9, 0, 1, tzinfo=timezone.utc),
             "phone_number": "254700000001",
             "status": "pending",
         },
