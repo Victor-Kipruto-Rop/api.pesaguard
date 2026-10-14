@@ -33,7 +33,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
 4. Use time and phone consistency as corroborating signals. Missing time evidence is unknown, not a successful time-window check.
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
-6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
+6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review. The reconciliation engine returns an exception rather than selecting between top tolerant/amount-only candidates whose scores differ by less than 0.05.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
 
 Partial-payment aggregation, velocity screening, settlement variance decomposition, replay classification, reversal validation and batch quality profiling are deterministic primitives. They do not by themselves provide end-to-end durable workflows. Before claiming a production capability, callers must wire them into tenant-scoped persistence, enforce database uniqueness/locking, add audit evidence and operational alerts, and test recovery from partial failure.
@@ -53,7 +53,7 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 ## Next algorithms to add after data contracts and ground truth are verified
 
 - One-to-many and many-to-one settlement matching using explicit batch/settlement identifiers and amount conservation.
-- Partial-payment aggregation with exact sum constraints and bounded search; never use unbounded subset-sum on a production request.
+- Integrate bounded exact subset results into the persisted settlement lifecycle with tenant-scoped retrieval, approvals, audit history, and safe retry semantics.
 - Persistent reversal/refund lifecycle graph linked to the original external transaction. The current reversal validator is a pure helper; the provider-confirmed lifecycle and database transaction still need integration.
 - Temporal/bi-temporal reconciliation using event time, settlement time and ingestion time separately.
 - Persistence-level conflicting-replay handling backed by database uniqueness constraints, payload-fingerprint storage, and an audited operator workflow. The current replay classifier is a pure helper and must be wired into the durable ingestion transaction.
@@ -64,7 +64,7 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 - Settlement variance decomposition: fees, reversals, timing gaps, missing records, duplicate records and amount mismatch.
 - Graph-based related-entity analysis only where lawful, necessary data and validated labels exist.
 
-These are not claimed as implemented by this change. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
+The bounded settlement subset search and ambiguity-safe selection guard are implemented as review-oriented primitives. Durable settlement workflow integration remains open. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
 
 ## Validation
 
