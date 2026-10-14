@@ -22,6 +22,9 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
 | Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
 | Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback and existing policy thresholds |
+| Settlement-batch item reconciliation | Matches expected and settled rows by exact external transaction ID, amount and currency | Flags missing, unexpected, duplicate, invalid and mismatched rows; totals never override item mismatches |
+| Reversal lifecycle assessment | Aggregates explicitly linked reversals against one original transaction | Deduplicates reversal IDs, rejects unlinked/currency-invalid rows and flags over-reversal; creates no ledger postings |
+| Event timing assessment | Separates event time, ingestion time and settlement time to flag late/future/out-of-order events | Unknown timestamps remain UNKNOWN; timing findings are review signals, not proof of fraud |
 
 ## Matching policy
 
@@ -33,9 +36,9 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
 
-Partial-payment aggregation, velocity screening and settlement variance decomposition are reusable primitives; they do not currently replace the existing reconciliation lifecycle or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping and persistence before presenting them as end-to-end product features.
+Partial-payment aggregation, velocity screening, settlement variance decomposition, settlement-batch reconciliation, reversal lifecycle assessment and event-timing assessment are reusable pure primitives. The new batch/reversal/timing functions do not yet replace the existing reconciliation lifecycle, persist outcomes, or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping, database constraints, audit events and persistence before presenting them as end-to-end product features.
 
-The candidate score is evidence, not a probability. A score of 1.0 does not mean a calibrated 100% probability of correctness.
+The candidate score is evidence, not a probability. A score of 1.0 does not mean a calibrated 100% probability of correctness. Missing timestamps are now treated as unknown evidence and cannot satisfy the automatic-match time gate.
 
 ## Statistical baseline
 
@@ -47,10 +50,10 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 
 ## Next algorithms to add after data contracts and ground truth are verified
 
-- One-to-many and many-to-one settlement matching using explicit batch/settlement identifiers and amount conservation.
+- One-to-many and many-to-one settlement matching using explicit settlement-batch identifiers and bounded amount-conservation rules; current batch primitive matches by exact transaction ID and does not infer groups.
+- Temporal/bi-temporal persistence with event time, settlement time and ingestion time separately; current timing primitive assesses one event but does not store temporal history.
 - Partial-payment aggregation with exact sum constraints and bounded search; never use unbounded subset-sum on a production request.
-- Reversal/refund lifecycle graph linked to the original external transaction.
-- Temporal/bi-temporal reconciliation using event time, settlement time and ingestion time separately.
+- Duplicate-window and conflicting-replay detection backed by database uniqueness constraints.
 - Duplicate-window and conflicting-replay detection backed by database uniqueness constraints.
 - Merchant/customer peer-group baselines, day-of-week and hour-of-day seasonality, and robust rolling windows.
 - Change-point detection for sudden shifts in provider error rate, fees, transaction volume or settlement latency.
@@ -68,6 +71,7 @@ Run from the repository root with the project virtual environment active:
 ```bash
 export PYTHONPATH=pesaguard_backend_pipeline
 pytest -q pesaguard_backend_pipeline/tests/test_algorithmic_intelligence.py
+pytest -q pesaguard_backend_pipeline/tests/test_advanced_transaction_algorithms.py
 pytest -q pesaguard_backend_pipeline/tests/test_fraud_risk_engine.py
 ```
 
