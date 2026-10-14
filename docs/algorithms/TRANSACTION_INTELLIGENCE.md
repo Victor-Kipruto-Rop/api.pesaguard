@@ -18,13 +18,14 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Same-reference partial-payment aggregation | Sum multiple identified payments against one expected amount | Requires explicit reference and transaction IDs; duplicate IDs count once; overpayment is surfaced |
 | Trailing-window velocity detector | Count recent events for the same identity | Requires identity and timestamp; does not treat future-dated events as recent |
 | Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
-| Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Does not select between competing candidates; callers must send ambiguous cases to review |
+| Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Missing phone data is neutral, conflicting phone data blocks auto-match, missing timestamps fail closed; callers must send ambiguous cases to review |
 | Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
 | Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
 | Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback; risk thresholds remain uncalibrated until labelled data is reviewed |
 | Replay classification | Distinguishes new events, identical replays and changed-payload replays within tenant/provider/account scope | Pure decision helper; database uniqueness and atomic writes remain authoritative |
 | Reversal amount validation | Checks original-reference linkage and cumulative reversal amount | Caller must supply only confirmed reversals from a tenant/account-scoped query; no ledger posting is performed |
 | Transaction batch quality profile | Counts missing fields, invalid amounts/timestamps, duplicate IDs, future/late events and unknown fields | Observability signal only; never silently drops or rewrites source rows |
+| Bounded exact settlement subset search | Finds a unique set of scoped candidate transactions whose minor-unit sum equals a settlement target | Candidate count is capped; ambiguous/no-solution/invalid inputs go to review; even a unique result is not a confirmed match or ledger posting |
 
 ## Matching policy
 
@@ -74,6 +75,7 @@ Run from the repository root with the project virtual environment active:
 export PYTHONPATH=pesaguard_backend_pipeline
 pytest -q pesaguard_backend_pipeline/tests/test_algorithmic_intelligence.py
 pytest -q pesaguard_backend_pipeline/tests/test_fraud_risk_engine.py
+pytest -q pesaguard_backend_pipeline/tests/test_reconciliation_ambiguity.py
 ```
 
 The full CI suite and staging validation remain required. Synthetic tests demonstrate deterministic behavior, not production accuracy.
