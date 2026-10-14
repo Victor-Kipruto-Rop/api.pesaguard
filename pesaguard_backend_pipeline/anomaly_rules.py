@@ -56,6 +56,18 @@ def check_for_anomalies(
 
     anomalies: List[str] = []
 
+    # Historical baselines are optional and must be pre-filtered to this tenant
+    # and comparable transaction population by the caller.
+    historical_amounts = tenant_settings.get("historical_amounts") or tenant_settings.get("amount_baseline")
+    robust_z = robust_amount_modified_zscore(event.get("TransAmount"), historical_amounts)
+    try:
+        robust_threshold = float(tenant_settings.get("anomaly_robust_zscore_threshold", 3.5))
+    except (TypeError, ValueError):
+        robust_threshold = 3.5
+    if robust_z is not None and robust_z >= max(0.0, robust_threshold):
+        anomalies.append("historical_amount_outlier_robust_zscore")
+
+
     try:
         if _is_duplicate(event, seen_trans_ids):
             anomalies.append("duplicate_transaction_id")
@@ -78,6 +90,32 @@ def check_for_anomalies(
     return anomalies
 
 
+def robust_amount_modified_zscore(amount: Any, historical_amounts: Any, *, minimum_samples: int = 20) -> Any:
+    """Return a robust modified z-score using median/MAD, or None without enough data.
+
+    Only positive, finite numeric observations are accepted. A minimum sample
+    size avoids claiming statistical confidence from tiny baselines. If the
+    baseline MAD is zero, any amount above the median is treated as a strong
+    outlier signal; callers should still route it to review, not auto-block it.
+    """
+    from math import isfinite
+    from statistics import median
+
+    try:
+        observed = float(amount)
+        values = [float(value) for value in (historical_amounts or [])]
+    except (TypeError, ValueError):
+        return None
+    values = [value for value in values if isfinite(value) and value > 0]
+    if not isfinite(observed) or observed <= 0 or len(values) < max(1, int(minimum_samples)):
+        return None
+    center = median(values)
+    mad = median([abs(value - center) for value in values])
+    if mad == 0:
+        return 0.0 if observed <= center else 10.0
+    return max(0.0, 0.6745 * (observed - center) / mad)
+
+
 def score_transaction_anomaly(
     event: Dict[str, Any],
     tenant_settings: Optional[Dict[str, Any]] = None,
@@ -98,6 +136,19 @@ def score_transaction_anomaly(
     except (TypeError, ValueError):
         logger.warning("Critical: Non-numeric transaction amount detected.")
         return 1.0
+
+    # Optional tenant-specific robust baseline signal. The caller must supply
+    # a comparable, tenant-scoped historical population; small baselines are ignored.
+    robust_z = robust_amount_modified_zscore(
+        event.get("TransAmount", event.get("amount")),
+        tenant_settings.get("historical_amounts") or tenant_settings.get("amount_baseline"),
+    )
+    try:
+        robust_threshold = float(tenant_settings.get("anomaly_robust_zscore_threshold", 3.5))
+    except (TypeError, ValueError):
+        robust_threshold = 3.5
+    if robust_z is not None and robust_z >= max(0.0, robust_threshold):
+        score += 0.25
 
     # Signal 1: Extreme amount tiering
     if amount > large_amount_threshold * 1.5:
