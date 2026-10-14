@@ -56,9 +56,9 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 - One-to-many and many-to-one settlement matching using explicit batch/settlement identifiers and amount conservation.
 - Integrate bounded exact subset results into the persisted settlement lifecycle with tenant-scoped retrieval, approvals, audit history, and safe retry semantics.
 - Persistent reversal/refund lifecycle graph linked to the original external transaction. The current reversal validator is a pure helper; the provider-confirmed lifecycle and database transaction still need integration.
-- Temporal/bi-temporal reconciliation using event time, settlement time and ingestion time separately.
+- Temporal/bi-temporal workflow integration using event time, settlement time and ingestion time separately. Advisory parsing, lag classification, future-clock-skew detection, and settlement-before-event checks are now implemented in `temporal_intelligence.py`; durable source provenance and persisted lifecycle integration remain open.
 - Persistence-level conflicting-replay handling backed by database uniqueness constraints, payload-fingerprint storage, and an audited operator workflow. The current replay classifier is a pure helper and must be wired into the durable ingestion transaction.
-- Merchant/customer peer-group baselines, day-of-week and hour-of-day seasonality, and robust rolling windows.
+- Expand the initial weekday/hour, weekday, and same-scope seasonal baseline helper to governed merchant/customer peer groups and robust rolling windows only after lawful identifiers and cohort sufficiency are established. The first scope-safe seasonal amount helper is implemented in `temporal_intelligence.py`; durable baseline snapshots and alerting remain open.
 - Change-point detection for sudden shifts in provider error rate, fees, transaction volume or settlement latency.
 - Calibrated risk scoring with precision/recall, false-positive rate, PR-AUC, drift monitoring and human-reviewed labels.
 - Persisted data-quality trend detection for schema drift, late-arriving events, null spikes, invalid currency/amount and provider-specific field changes. The current batch profiler reports a single batch and does not yet persist trends or emit alerts.
@@ -99,3 +99,8 @@ validation, false-positive review, threshold governance, and monitoring before
 the signal is used to change customer outcomes. Missing transaction IDs are no
 longer treated as duplicates merely because both values normalize to the same
 unknown sentinel.
+
+
+## Temporal and seasonal helper implementation
+
+See [Temporal and Seasonal Transaction Intelligence](TEMPORAL_AND_SEASONAL_INTELLIGENCE.md) for the timestamp contract, baseline hierarchy, scope checks, reason codes, tests, and production integration gates. The helper implementation is additive and does not change the authoritative reconciliation decision path.

@@ -48,8 +48,8 @@ This inventory separates a helper's existence from end-to-end integration, persi
 ### P2 — advanced intelligence after P0/P1
 
 14. Cross-channel entity graphs, only with reliable lawful identifiers; do not merge accounts based only on shared phone, amount, or location.
-15. Seasonality-aware baselines for business hours, weekdays, pay cycles, merchant type, and currency.
-16. Provider-specific lifecycle/state-transition anomaly rules, including invalid reversal/original ordering.
+15. Extend the new weekday/hour seasonal baseline with approved pay-cycle, merchant-type, and currency cohorts only after cohort sizes and data contracts are validated. The first tenant/provider/account-scoped seasonal helper is implemented in `temporal_intelligence.py`; durable baseline snapshots, trend persistence, and production route integration remain open.
+16. Extend temporal evidence to provider-specific lifecycle/state-transition rules, including invalid reversal/original ordering. Event/ingestion/settlement lag classification is implemented as an advisory helper in `temporal_intelligence.py`; immutable timestamp provenance and persisted lifecycle integration remain open.
 17. Settlement arrival-window prediction after provider calendars, merchant schedules, and holidays are configured.
 18. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
 19. Graph/unsupervised models as investigative signals only; never auto-freeze funds from uncalibrated anomaly scores.
@@ -74,3 +74,8 @@ This gate is a policy evaluator, not a deployment switch. A PASS applies only to
 supplied scorecard; it does not prove representativeness, guarantee future performance,
 automatically enable a model, or replace staging, shadow evaluation, finance approval,
 monitoring, and rollback.
+
+
+## Temporal/seasonal helper coverage
+
+The additive `pesaguard_backend_pipeline/temporal_intelligence.py` module implements timezone-aware event-time parsing, late-arrival and future-clock-skew classification, settlement-before-payment detection, and a seasonal amount baseline hierarchy (weekday+hour, weekday, then same-scope history). Focused tests are in `pesaguard_backend_pipeline/tests/test_temporal_intelligence.py`. These helpers are not wired as authoritative ingestion or settlement decisions. Before production activation, preserve source timestamp provenance, ensure tenant/account-scoped queries, persist versioned outputs, validate against reviewed holdout data, and add alerting and rollback controls. See [Temporal and Seasonal Transaction Intelligence](TEMPORAL_AND_SEASONAL_INTELLIGENCE.md).

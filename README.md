@@ -142,3 +142,8 @@ The current implementation inventory and remaining production-integration gates 
 ### Reconciliation scope safety
 
 The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns `needs_review` with a critical scope-conflict signal instead of auto-matching. This does **not** replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in `pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py`. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
+
+
+## Temporal and seasonal intelligence
+
+The additive temporal/seasonal helpers in [`docs/algorithms/TEMPORAL_AND_SEASONAL_INTELLIGENCE.md`](docs/algorithms/TEMPORAL_AND_SEASONAL_INTELLIGENCE.md) classify late-arriving provider events and invalid settlement ordering, and provide tenant/provider/account-scoped weekday/hour amount baselines. They are advisory primitives only; production use still requires durable persistence, route integration, shadow evaluation, reviewed labels, monitoring, and full CI/staging verification. Run `pytest -q pesaguard_backend_pipeline/tests/test_temporal_intelligence.py` with `PYTHONPATH=pesaguard_backend_pipeline` to execute the focused tests.
