@@ -170,6 +170,35 @@ def score_reconciliation_candidate(
     return CandidateScore(candidate_id, round(min(points, 1.0), 4), tuple(evidence), tuple(conflicts))
 
 
+def _scope_conflicts(
+    transaction: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Identify explicit cross-scope conflicts without inferring missing metadata.
+
+    Candidate lists must already be tenant-scoped by the calling query. This
+    helper adds a second line of defense: when both records expose a scope field,
+    disagreement makes the candidate ineligible. Missing scope metadata is not
+    proof of a mismatch and is surfaced as a caller-side verification requirement.
+    """
+    aliases = {
+        "tenant": ("tenant_id", "TenantID", "tenantId"),
+        "provider": ("provider", "provider_name", "providerName"),
+        "account": ("account_id", "merchant_account_id", "account"),
+        "currency": ("currency", "Currency"),
+    }
+    conflicts: list[str] = []
+    for scope, keys in aliases.items():
+        tx_value = next((transaction.get(key) for key in keys if transaction.get(key) not in (None, "")), None)
+        candidate_value = next((candidate.get(key) for key in keys if candidate.get(key) not in (None, "")), None)
+        if tx_value is None or candidate_value is None:
+            continue
+        left = str(tx_value).strip().casefold()
+        right = str(candidate_value).strip().casefold()
+        if left != right:
+            conflicts.append(f"{scope}_scope_conflict")
+    return tuple(conflicts)
+
+
 def rank_reconciliation_candidates(
     transaction: Mapping[str, Any],
     candidates: Sequence[Mapping[str, Any]],
@@ -178,21 +207,58 @@ def rank_reconciliation_candidates(
     amount_tolerance: Decimal | str = Decimal("0.01"),
     ambiguity_margin: float = 0.05,
 ) -> dict[str, Any]:
-    """Rank candidates deterministically; return review-required on close ties."""
+    """Rank only scope-compatible candidates and fail closed on scope conflicts.
+
+    This function is advisory: even a strong candidate is not an instruction to
+    post a ledger entry. The caller remains responsible for tenant-scoped queries,
+    transactional idempotency, verified provider state, and review policy.
+    """
     if not 0 <= ambiguity_margin <= 1:
         raise ValueError("ambiguity_margin must be between 0 and 1")
+
+    eligible: list[Mapping[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        conflicts = _scope_conflicts(transaction, candidate)
+        if conflicts:
+            candidate_id = str(
+                candidate.get("internal_ref") or candidate.get("id")
+                or candidate.get("reference") or f"candidate-{index + 1}"
+            )
+            excluded.append({
+                "candidate_id": candidate_id,
+                "reason_codes": list(conflicts),
+            })
+        else:
+            eligible.append(candidate)
+
     scores = [
         score_reconciliation_candidate(
             transaction, item, window_seconds=window_seconds, amount_tolerance=amount_tolerance
         )
-        for item in candidates
+        for item in eligible
     ]
     scores.sort(key=lambda item: (-item.score, item.candidate_id))
     ambiguous = len(scores) > 1 and (scores[0].score - scores[1].score) < ambiguity_margin
+    scope_conflict_only = not scores and bool(excluded)
+    decision = (
+        "REVIEW" if ambiguous or scope_conflict_only
+        else ("CANDIDATE" if scores and scores[0].score > 0 else "UNMATCHED")
+    )
+    reason_codes = []
+    if ambiguous:
+        reason_codes.append("ambiguous_candidates")
+    if scope_conflict_only:
+        reason_codes.append("candidate_scope_conflict")
     return {
         "algorithm_version": ALGORITHM_VERSION,
-        "decision": "REVIEW" if ambiguous else ("CANDIDATE" if scores and scores[0].score > 0 else "UNMATCHED"),
+        "decision": decision,
         "ambiguous": ambiguous,
+        "reason_codes": reason_codes,
+        "candidate_count": len(candidates),
+        "eligible_candidate_count": len(eligible),
+        "excluded_candidate_count": len(excluded),
+        "excluded_candidates": excluded,
         "top_candidate": asdict(scores[0]) if scores else None,
         "candidates": [asdict(item) for item in scores],
     }
