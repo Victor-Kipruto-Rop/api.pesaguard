@@ -1,7 +1,7 @@
 import pytest
 
 from fraud_risk_engine import calculate_features\nfrom algorithmic_intelligence import (
-    amount_to_minor_units,
+    aggregate_partial_payments,\n    amount_to_minor_units,\n    decompose_settlement_variance,\n    detect_velocity_spike,
     is_amount_outlier,
     normalize_reference,
     robust_amount_deviation,
@@ -94,3 +94,56 @@ def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
     # The historical outlier should not inflate the mean and hide a meaningful
     # deviation from the normal 100-KES cluster.
     assert features.amount_deviation > 0.5
+
+
+
+def test_partial_payment_aggregation_is_reference_scoped_and_idempotent():
+    payments = [
+        {"TransID": "P1", "BillRefNumber": "INV-7", "TransAmount": "40.00"},
+        {"TransID": "P2", "BillRefNumber": "inv 7", "TransAmount": "60.00"},
+        {"TransID": "P2", "BillRefNumber": "INV-7", "TransAmount": "60.00"},
+        {"TransID": "P3", "BillRefNumber": "OTHER", "TransAmount": "999.00"},
+    ]
+    result = aggregate_partial_payments(payments, "100.00", reference="INV-7")
+    assert result["status"] == "MATCHED"
+    assert result["payment_count"] == 2
+    assert result["received_minor_units"] == 10000
+
+
+def test_partial_payment_aggregation_surfaces_overpayment_and_rejects_missing_ids():
+    result = aggregate_partial_payments(
+        [{"TransID": "P1", "reference": "A", "amount": "11.00"}],
+        "10.00",
+        reference="A",
+    )
+    assert result["status"] == "OVERPAID"
+    with pytest.raises(ValueError):
+        aggregate_partial_payments([{"reference": "A", "amount": "10.00"}], "10.00", reference="A")
+
+
+def test_velocity_detection_uses_trailing_window_and_same_identity_only():
+    result = detect_velocity_spike(
+        {"MSISDN": "254700000001", "TransTime": "20261014120030"},
+        [
+            {"MSISDN": "254700000001", "TransTime": "20261014120000"},
+            {"MSISDN": "254700000001", "TransTime": "20261014120010"},
+            {"MSISDN": "254700000002", "TransTime": "20261014120020"},
+            {"MSISDN": "254700000001", "TransTime": "20261014115900"},
+        ],
+        limit=2,
+    )
+    assert result["evaluated"] is True
+    assert result["triggered"] is True
+    assert result["count"] == 2
+
+
+def test_settlement_variance_is_decomposed_without_silent_adjustment():
+    balanced = decompose_settlement_variance(
+        expected_gross="1000.00", actual_net="970.00", known_fees="20.00",
+        known_reversals="10.00",
+    )
+    assert balanced["status"] == "BALANCED"
+    assert balanced["unexplained_variance_minor_units"] == 0
+    unbalanced = decompose_settlement_variance(expected_gross="1000", actual_net="960", known_fees="20")
+    assert unbalanced["status"] == "VARIANCE"
+    assert unbalanced["unexplained_variance_minor_units"] == -2000
