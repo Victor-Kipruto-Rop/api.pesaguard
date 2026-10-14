@@ -101,8 +101,9 @@ def evaluate_reconciliation_predictions(
                     fn += 1
         elif expected is not None:
             fn += 1
-        else:
+        elif decision in _UNMATCHED_DECISIONS:
             tn += 1
+        # A review/exception is an abstention, not a correct negative.
 
     return {
         "metric_version": "reconciliation-evaluation-v1",
