@@ -140,6 +140,8 @@ def score_reconciliation_candidate(
     This helper intentionally does not choose among multiple candidates. The
     caller must detect ambiguous top candidates and route them to review.
     """
+    incoming_raw_ref = _canonical_reference(incoming.get("BillRefNumber") or incoming.get("reference"))
+    candidate_raw_ref = _canonical_reference(candidate.get("reference") or candidate.get("internal_ref"))
     incoming_ref = normalize_reference(incoming.get("BillRefNumber") or incoming.get("reference"))
     candidate_ref = normalize_reference(candidate.get("reference") or candidate.get("internal_ref"))
     incoming_amount = incoming.get("TransAmount", incoming.get("amount"))
@@ -159,7 +161,11 @@ def score_reconciliation_candidate(
     phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
 
     evidence = {
-        "reference_exact": bool(incoming_ref and candidate_ref and incoming_ref == candidate_ref),
+        "reference_exact": bool(incoming_raw_ref and candidate_raw_ref and incoming_raw_ref == candidate_raw_ref),
+        "reference_normalized_only": bool(
+            incoming_ref and candidate_ref and incoming_ref == candidate_ref
+            and incoming_raw_ref != candidate_raw_ref
+        ),
         "amount_exact": bool(amount_equal),
         "time_within_window": bool(time_ok),
         "phone_consistent": bool(phone_ok),
@@ -423,3 +429,12 @@ def detect_window_change(
         "recent_median": recent_center,
         "relative_change": round(relative_change, 6),
     }
+
+
+
+def _canonical_reference(value: Any) -> str:
+    """Normalize casing/Unicode/whitespace but preserve punctuation for exact matching."""
+    if value is None:
+        return ""
+    normalized = unicodedata.normalize("NFKC", str(value)).casefold().strip()
+    return re.sub(r"\s+", " ", normalized)
