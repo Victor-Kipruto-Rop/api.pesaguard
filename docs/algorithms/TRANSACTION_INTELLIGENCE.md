@@ -15,6 +15,9 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Tenant/provider-scoped transaction identity | Build a stable deduplication key from tenant, provider and external transaction ID | Refuses missing identity fields; does not deduplicate by amount/time alone |
 | Canonical payload fingerprint | Detect a conflicting replay where the same transaction ID carries changed facts | Separate from identity: changed amount/reference deliberately changes the fingerprint |
 | Median/MAD modified z-score | Detect amount outliers despite a few extreme historical values | Requires at least five samples; not a fraud verdict |
+| Same-reference partial-payment aggregation | Sum multiple identified payments against one expected amount | Requires explicit reference and transaction IDs; duplicate IDs count once; overpayment is surfaced |
+| Trailing-window velocity detector | Count recent events for the same identity | Requires identity and timestamp; does not treat future-dated events as recent |
+| Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
 | Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Does not select between competing candidates; callers must send ambiguous cases to review |
 | Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback and existing policy thresholds |
 
@@ -27,6 +30,8 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
 6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
+
+Partial-payment aggregation, velocity screening and settlement variance decomposition are reusable primitives; they do not currently replace the existing reconciliation lifecycle or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping and persistence before presenting them as end-to-end product features.
 
 The candidate score is evidence, not a probability. A score of 1.0 does not mean a calibrated 100% probability of correctness.
 
