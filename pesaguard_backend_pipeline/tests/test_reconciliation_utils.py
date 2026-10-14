@@ -24,6 +24,21 @@ def test_normalize_daraja_flat_c2b():
     assert n["TransAmount"] == 150.0
     assert n["TransTime"] == "2024-01-01T09:30:45"
     assert n["timestamp"] == datetime(2024, 1, 1, 9, 30, 45)
+    assert "reference" not in n
+
+
+def test_normalize_daraja_uses_bill_reference_not_provider_transaction_id():
+    payload = {
+        "TransID": "PROVIDER-123",
+        "BillRefNumber": "ORDER-456",
+        "TransAmount": "150.00",
+        "TransTime": "20240101123045",
+    }
+
+    normalized = normalize_daraja_event(payload)
+
+    assert normalized["TransID"] == "PROVIDER-123"
+    assert normalized["reference"] == "ORDER-456"
 
 
 def test_exact_match_requires_explicit_business_reference_and_amount():
