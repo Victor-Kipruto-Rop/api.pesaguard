@@ -125,7 +125,7 @@ def reconcile_settlement_batch(
         counts[item["status"]] = counts.get(item["status"], 0) + 1
     exception_count = len(invalid_expected) + len(invalid_observed) + len(duplicate_expected) + len(duplicate_observed)
     return {
-        "status": "RECONCILED" if not exception_count and all(item["status"] == "MATCHED" for item in results) else "EXCEPTIONS",
+        "status": "RECONCILED" if expected and observed and not exception_count and all(item["status"] == "MATCHED" for item in results) else "EXCEPTIONS",
         "currency": target_currency,
         "decimal_places": decimal_places,
         "expected_total_minor_units": expected_total,
