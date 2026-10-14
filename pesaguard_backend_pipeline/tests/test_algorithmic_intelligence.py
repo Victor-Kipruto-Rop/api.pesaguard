@@ -61,7 +61,7 @@ def test_candidate_scoring_only_auto_matches_complete_exact_evidence():
         "MSISDN": "254700000001",
     }
     exact = {
-        "reference": "inv 001",
+        "reference": "inv-001",
         "amount": "125.00",
         "timestamp": "2026-10-14T12:05:00Z",
         "phone_number": "+254 700 000 001",
