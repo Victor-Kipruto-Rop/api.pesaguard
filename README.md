@@ -137,3 +137,8 @@ The additive, deterministic algorithm primitives and their safety/rollout contra
 The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See [`docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md`](docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md). These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
 
 The current implementation inventory and remaining production-integration gates are tracked in [`docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md`](docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md). It distinguishes existing helper functions from durable, tenant-safe production integration and calibration work.
+
+
+### Reconciliation scope safety
+
+The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns `needs_review` with a critical scope-conflict signal instead of auto-matching. This does **not** replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in `pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py`. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.

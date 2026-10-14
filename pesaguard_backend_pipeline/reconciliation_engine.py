@@ -72,6 +72,24 @@ class ReconciliationEngine:
         transaction_id = transaction.get("transaction_id")
         if not transaction_id:
             return self._result("EXCEPTION", None, [], 0.0, started, now, reason="missing transaction id")
+
+        scope_conflicts = [
+            {"candidate_id": str(record.get("internal_ref") or "unknown"), "reason_codes": _explicit_scope_conflicts(transaction, record)}
+            for record in records
+            if _explicit_scope_conflicts(transaction, record)
+        ]
+        if scope_conflicts:
+            reason_codes = sorted({code for item in scope_conflicts for code in item["reason_codes"]})
+            return self._result(
+                "EXCEPTION",
+                None,
+                ["candidate_scope_conflict", *reason_codes],
+                0.0,
+                started,
+                now,
+                reason="candidate set contains explicit tenant/provider/account/currency scope conflicts",
+            )
+
         transaction_type = transaction.get("transaction_type")
         if transaction_type in {"refund", "reversal"} and not transaction.get("original_reference"):
             return self._result(
@@ -173,6 +191,10 @@ class ReconciliationEngine:
                 or value.get("original_reference")
                 or ""
             ).strip(),
+            "tenant_id": value.get("tenant_id") or value.get("tenantId") or value.get("TenantID"),
+            "provider": value.get("provider") or value.get("provider_name") or value.get("providerName"),
+            "provider_account_id": value.get("provider_account_id") or value.get("account_id") or value.get("BusinessShortCode") or value.get("business_short_code"),
+            "currency": value.get("currency") or value.get("Currency"),
         }
 
     def _normalize_record(self, value: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,6 +214,10 @@ class ReconciliationEngine:
             "timestamp": _parse_record_time(value.get("timestamp") or value.get("created_at") or value.get("synced_at")),
             "phone": str(value.get("phone_number") or value.get("MSISDN") or value.get("msisdn") or "").strip(),
             "status": str(value.get("status") or "").strip().lower(),
+            "tenant_id": value.get("tenant_id") or value.get("tenantId") or value.get("TenantID"),
+            "provider": value.get("provider") or value.get("provider_name") or value.get("providerName"),
+            "provider_account_id": value.get("provider_account_id") or value.get("account_id") or value.get("merchant_account_id") or value.get("BusinessShortCode") or value.get("business_short_code"),
+            "currency": value.get("currency") or value.get("Currency"),
             "record": value,
         }
 
@@ -453,6 +479,10 @@ def evaluate_transaction(
     if original_amount is not None:
         merged_event["TransAmount"] = original_amount
         merged_event["amount"] = original_amount
+    # Keep the authenticated tenant context on the event so the matching guard
+    # can detect a mistakenly mixed candidate set before any automatic match.
+    if tenant_settings and tenant_settings.get("tenant_id"):
+        merged_event["tenant_id"] = str(tenant_settings["tenant_id"])
     event = merged_event
 
     trans_id = str(event.get("TransID") or event.get("trans_id") or "unknown").strip()
@@ -524,6 +554,18 @@ def evaluate_transaction(
         allow_partial=allow_partial,
     )
 
+    if best_match and best_match.get("match_type") == "scope_conflict":
+        anomalies.append("candidate_scope_conflict")
+        return {
+            "trans_id": trans_id,
+            "status": "needs_review",
+            "severity": "critical",
+            "duplicate": duplicate,
+            "anomalies": anomalies,
+            "match": best_match,
+            **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
+        }
+
     if best_match is None:
         return {
             "trans_id": trans_id,
@@ -560,6 +602,44 @@ def evaluate_transaction(
     }
 
 
+def _explicit_scope_conflicts(event: Dict[str, Any], record: Dict[str, Any]) -> List[str]:
+    """Return only explicit scope disagreements; missing metadata is not a match.
+
+    Candidate retrieval must still be tenant-scoped at the database layer. This
+    guard is a second line of defense against accidentally mixed candidate sets.
+    """
+    aliases = {
+        "tenant": (
+            ("tenant_id", "tenantId", "TenantID"),
+            ("tenant_id", "tenantId", "TenantID"),
+        ),
+        "provider": (
+            ("provider", "provider_name", "providerName"),
+            ("provider", "provider_name", "providerName"),
+        ),
+        "account": (
+            ("provider_account_id", "account_id", "merchant_account_id", "BusinessShortCode", "business_short_code"),
+            ("provider_account_id", "account_id", "merchant_account_id", "BusinessShortCode", "business_short_code"),
+        ),
+        "currency": (
+            ("currency", "Currency"),
+            ("currency", "Currency"),
+        ),
+    }
+    conflicts: List[str] = []
+    for scope, (left_keys, right_keys) in aliases.items():
+        left = next((event.get(key) for key in left_keys if event.get(key) not in (None, "")), None)
+        right = next((record.get(key) for key in right_keys if record.get(key) not in (None, "")), None)
+        if left is None or right is None:
+            continue
+        left_text, right_text = str(left).strip(), str(right).strip()
+        if scope in {"provider", "currency"}:
+            left_text, right_text = left_text.casefold(), right_text.casefold()
+        if left_text != right_text:
+            conflicts.append(f"{scope}_scope_conflict")
+    return conflicts
+
+
 def _find_best_match(
     event: Dict[str, Any],
     internal_records: Sequence[Dict[str, Any]],
@@ -577,7 +657,16 @@ def _find_best_match(
     allowed_delta = max(Decimal("0.01"), abs(amount) * (tolerance_percent / Decimal("100")))
 
     candidates = []
+    scope_conflicts: List[Dict[str, Any]] = []
     for record in internal_records:
+        conflicts = _explicit_scope_conflicts(event, record)
+        if conflicts:
+            scope_conflicts.append({
+                "internal_ref": record.get("internal_ref") or record.get("id"),
+                "reason_codes": conflicts,
+            })
+            continue
+
         record_time = _parse_record_time(record.get("timestamp") or record.get("synced_at") or record.get("created_at"))
         
         latency = 0
@@ -619,6 +708,19 @@ def _find_best_match(
             "reasons": candidate_reasons,
         })
 
+    # An explicitly cross-tenant/provider/account/currency candidate is a
+    # data-isolation invariant violation, not merely a weak match. Fail closed
+    # even if another candidate looked plausible; the caller must fix the query
+    # scope and review the event rather than silently matching from a mixed set.
+    if scope_conflicts:
+        return {
+            "match_type": "scope_conflict",
+            "ambiguous": True,
+            "candidate_count": 0,
+            "excluded_candidate_count": len(scope_conflicts),
+            "excluded_candidates": scope_conflicts,
+            "reason_codes": sorted({code for item in scope_conflicts for code in item["reason_codes"]}),
+        }
     if not candidates:
         return None
 
