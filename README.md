@@ -135,3 +135,5 @@ The additive, deterministic algorithm primitives and their safety/rollout contra
 ## Reconciliation algorithm evaluation
 
 The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See [`docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md`](docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md). These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
+
+The current implementation inventory and remaining production-integration gates are tracked in [`docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md`](docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md). It distinguishes existing helper functions from durable, tenant-safe production integration and calibration work.
