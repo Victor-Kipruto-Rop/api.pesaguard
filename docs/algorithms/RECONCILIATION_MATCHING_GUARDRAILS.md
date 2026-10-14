@@ -44,3 +44,8 @@ The anomaly rules also support a tenant-supplied `historical_amounts` (or `amoun
 This is deliberately optional: the caller must provide a comparable baseline scoped to the same tenant, provider, currency, and business context. Missing or undersized baselines do not generate a score. If the baseline MAD is zero, an amount above the median is treated as a strong outlier signal. This remains a review signal—not proof of fraud, an automatic block, or a calibrated probability.
 
 Before enabling this signal in production, validate baseline freshness, outlier behavior, seasonality, and false-positive rates against approved labeled data.
+
+
+## Automatic-match policy guardrail
+
+The legacy-compatible matcher now auto-matches only the `exact` candidate type, which requires equal normalized amounts, a matching phone number, and both event and ledger timestamps to be parseable and within the configured window. A tolerance-based amount match (`fuzzy_exact`) or missing timestamp evidence routes to `needs_review`. This avoids silently treating a monetary difference or absent time evidence as a settled transaction. Existing duplicate/idempotency controls remain separate and mandatory.
