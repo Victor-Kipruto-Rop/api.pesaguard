@@ -42,7 +42,7 @@ The candidate score is evidence, not a probability. A score of 1.0 does not mean
 
 ## Statistical baseline
 
-Daraja compact timestamps (YYYYMMDDHHMMSS) are interpreted as Africa/Nairobi local time and normalized to UTC for cross-format comparison. Naive ISO timestamps continue to be treated as UTC. Risk time-of-day features use Africa/Nairobi local time; do not compare event-time and ingestion-time fields as if they were interchangeable.
+Daraja compact timestamps (YYYYMMDDHHMMSS) are interpreted as Africa/Nairobi local time and normalized to UTC for cross-format comparison. Naive ISO timestamps continue to be treated as UTC. Risk time-of-day features use Africa/Nairobi local time; do not compare event-time and ingestion-time fields as if they were interchangeable. Risk feature scoring treats established customer history as context rather than a positive risk signal, and rapid amount-change screening is scoped to the same customer within a five-minute window. The rule model remains heuristic, not a calibrated fraud probability. Evaluation reports detection latency only when the caller supplies an event timestamp; decision age is not a latency metric.
 
 The modified z-score is:
 
