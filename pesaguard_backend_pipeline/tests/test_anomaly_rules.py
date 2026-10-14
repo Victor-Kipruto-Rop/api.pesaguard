@@ -38,3 +38,33 @@ def test_invalid_amount_type_flagged():
     event = {"TransID": "BAD1", "TransAmount": "not_a_number"}
     result = check_for_anomalies(event, seen_trans_ids=set())
     assert "invalid_or_zero_amount" in result
+
+
+
+def test_robust_historical_amount_outlier_is_explained():
+    from anomaly_rules import robust_amount_modified_zscore
+
+    baseline = [100] * 25
+    score = robust_amount_modified_zscore(500, baseline)
+    assert score is not None and score >= 3.5
+
+    result = check_for_anomalies(
+        {"TransID": "OUTLIER1", "TransAmount": "500"},
+        seen_trans_ids=set(),
+        tenant_settings={"historical_amounts": baseline},
+    )
+    assert "historical_amount_outlier_robust_zscore" in result
+
+
+def test_robust_baseline_is_ignored_when_sample_is_too_small():
+    from anomaly_rules import robust_amount_modified_zscore
+
+    assert robust_amount_modified_zscore(500, [100] * 10) is None
+
+
+def test_robust_baseline_does_not_flag_typical_amount():
+    from anomaly_rules import robust_amount_modified_zscore
+
+    baseline = list(range(90, 111)) + [100, 101, 99, 100]
+    score = robust_amount_modified_zscore(102, baseline)
+    assert score is not None and score < 3.5

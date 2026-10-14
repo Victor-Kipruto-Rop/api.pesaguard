@@ -535,7 +535,10 @@ def evaluate_transaction(
             **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
         }
 
-    if best_match["match_type"] in {"exact", "fuzzy_exact"}:
+    # Only exact amount + phone + available timestamp evidence may auto-match.
+    # A tolerance-based amount match is useful for ranking, but financial
+    # differences—even small ones—must be reviewed rather than silently settled.
+    if best_match["match_type"] == "exact" and not best_match.get("ambiguous"):
         return {
             "trans_id": trans_id,
             "status": "matched",
@@ -594,9 +597,11 @@ def _find_best_match(
         record_phone = str(record.get("phone_number") or record.get("msisdn") or "").strip()
         phone_matches = record_phone == phone and len(phone) > 0
 
-        if phone_matches and amt_diff == 0:
+        if phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
             match_type = "exact"
         elif phone_matches and amt_diff <= allowed_delta:
+            # Includes near-amount matches and exact amounts without timestamp
+            # evidence; both remain reviewable instead of auto-approved.
             match_type = "fuzzy_exact"
         elif not phone_matches and allow_partial:
             match_type = "partial_fuzzy" if amt_diff <= allowed_delta else "partial"
@@ -618,15 +623,40 @@ def _find_best_match(
         return None
 
     priority = {"exact": 0, "fuzzy_exact": 1, "partial_fuzzy": 2, "partial": 3}
+    # Deterministic tie-breaking makes repeated runs auditable and reproducible.
     candidates.sort(
         key=lambda item: (
             -item.get("score", 0.0),
             priority.get(item["match_type"], 99),
             item["latency_seconds"],
             item["amount_diff"],
+            str(item.get("internal_ref") or ""),
+            str((item.get("record") or {}).get("id") or ""),
         )
     )
-    return candidates[0]
+
+    best = dict(candidates[0])
+    best_score = float(best.get("score", 0.0))
+    second = candidates[1] if len(candidates) > 1 else None
+    score_gap = best_score - float(second.get("score", 0.0)) if second else 1.0
+
+    # Never silently auto-approve when two different ledger records are
+    # similarly plausible. Equal amount/phone/time values occur legitimately
+    # in payment systems; choosing the first row would create a false match.
+    ambiguity_gap = 0.03
+    ambiguous = bool(second and score_gap <= ambiguity_gap)
+    best["candidate_count"] = len(candidates)
+    best["confidence_gap"] = round(max(0.0, score_gap), 6)
+    best["ambiguous"] = ambiguous
+    if ambiguous:
+        best["original_match_type"] = best["match_type"]
+        best["match_type"] = "ambiguous"
+        best["review_reason"] = "multiple_candidates_with_similar_scores"
+        best["candidate_internal_refs"] = [
+            str(item.get("internal_ref") or (item.get("record") or {}).get("id") or "unknown")
+            for item in candidates[:5]
+        ]
+    return best
 
 
 def _coerce_amount(value: Any) -> Optional[Decimal]:

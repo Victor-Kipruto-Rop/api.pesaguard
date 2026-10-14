@@ -1,0 +1,51 @@
+# Reconciliation Matching Guardrails
+
+## Purpose
+
+The reconciliation matcher must prefer reviewable uncertainty over a confident-looking but incorrect ledger assignment. A false positive can make a missing payment appear reconciled, distort settlement reporting, and create an audit gap.
+
+## Current implemented behavior
+
+The legacy-compatible `evaluate_transaction` path now:
+
+- ranks eligible candidates deterministically using score, match type, event-time distance, amount difference, and stable record identifiers;
+- records `candidate_count`, `confidence_gap`, and `ambiguous` in selected-candidate evidence;
+- returns `match_type: ambiguous` and routes the result to `needs_review` when the top two candidate scores differ by at most 0.03;
+- includes up to five candidate references for operator review;
+- preserves automatic matching for a single eligible candidate to avoid silently changing existing integration semantics.
+
+The 0.03 margin is a heuristic, not a statistically calibrated probability. Match `score` values are ranking scores and must not be described as calibrated fraud or match probabilities.
+
+## Operational interpretation
+
+- `matched`: one eligible candidate passed the current match rules and the ambiguity guard did not trigger.
+- `needs_review` with `match_type: ambiguous`: multiple candidates are similarly plausible. Do not settle, refund, or auto-approve solely from this result.
+- `missing_payment`: no eligible internal candidate was found under the configured matching window and amount tolerance. Investigate delayed ledger synchronization before treating it as confirmed loss.
+- `duplicate_ignored`: idempotency infrastructure identified a repeated provider transaction; do not emit a second financial posting.
+
+## Required follow-up before production certification
+
+1. Build approved, tenant-separated ground-truth fixtures covering true matches, non-matches, same-amount collisions, partial payments, reversals, late arrivals, and duplicate callbacks.
+2. Measure precision, recall, false-positive rate, false-negative rate, and review rate per tenant and provider.
+3. Calibrate the ambiguity margin against labeled data; keep the default conservative until evidence supports a change.
+4. Ensure callers use tenant-scoped records and database uniqueness constraints. An in-memory matcher cannot replace transactional idempotency or tenant isolation.
+5. Add shadow evaluation before enabling any future fuzzy or machine-learning model for financial decisions.
+6. Treat ML anomaly scores as review signals only until validated training data, drift monitoring, explainability, and an explicit approval policy exist.
+
+## Non-goals
+
+This change does not certify fraud detection, guarantee complete reconciliation, enable automatic refunds, change ledger posting semantics, or prove production readiness. CI and staging tests must pass before merge.
+
+
+## Optional robust historical amount anomaly signal
+
+The anomaly rules also support a tenant-supplied `historical_amounts` (or `amount_baseline`) list. When at least 20 valid positive observations are present, the detector computes a median absolute deviation (MAD) modified z-score. Scores at or above `anomaly_robust_zscore_threshold` (default 3.5) add the explainable `historical_amount_outlier_robust_zscore` signal and contribute a bounded increment to the heuristic anomaly score.
+
+This is deliberately optional: the caller must provide a comparable baseline scoped to the same tenant, provider, currency, and business context. Missing or undersized baselines do not generate a score. If the baseline MAD is zero, an amount above the median is treated as a strong outlier signal. This remains a review signal—not proof of fraud, an automatic block, or a calibrated probability.
+
+Before enabling this signal in production, validate baseline freshness, outlier behavior, seasonality, and false-positive rates against approved labeled data.
+
+
+## Automatic-match policy guardrail
+
+The legacy-compatible matcher now auto-matches only the `exact` candidate type, which requires equal normalized amounts, a matching phone number, and both event and ledger timestamps to be parseable and within the configured window. A tolerance-based amount match (`fuzzy_exact`) or missing timestamp evidence routes to `needs_review`. This avoids silently treating a monetary difference or absent time evidence as a settled transaction. Existing duplicate/idempotency controls remain separate and mandatory.
