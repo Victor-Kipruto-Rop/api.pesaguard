@@ -6,7 +6,6 @@ signals with tenant policy, verified ledger state, and human review thresholds.
 """
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
