@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Tuple
 
 try:
@@ -29,7 +30,9 @@ def _parse_time(value: Any):
     text = str(value).strip()
     if len(text) == 14 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(
+                tzinfo=ZoneInfo("Africa/Nairobi")
+            ).astimezone(timezone.utc)
         except ValueError:
             return None
 
@@ -58,8 +61,16 @@ def _similarity(left: str, right: str) -> float:
 
 
 def score_match(event: Dict[str, Any], record: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
-    event_ref = _norm_text(event.get("BillRefNumber") or event.get("reference") or event.get("TransID") or event.get("trans_id"))
-    record_ref = _norm_text(record.get("internal_ref") or record.get("reference") or record.get("trans_id"))
+    # Provider IDs and local row IDs are not merchant references. Treat absent
+    # business references as missing evidence, never as an exact reference match.
+    event_ref = _norm_text(
+        event.get("BillRefNumber") or event.get("reference")
+        or event.get("transaction_reference") or event.get("tx_ref")
+    )
+    record_ref = _norm_text(
+        record.get("BillRefNumber") or record.get("reference")
+        or record.get("merchant_ref") or record.get("transaction_reference")
+    )
 
     ref_exact = 1.0 if event_ref and record_ref and event_ref == record_ref else 0.0
     ref_similarity = _similarity(event_ref, record_ref)

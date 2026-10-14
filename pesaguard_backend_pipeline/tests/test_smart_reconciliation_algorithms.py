@@ -132,6 +132,16 @@ def test_quality_gate_flags_non_positive_amount():
     assert result["findings"][0]["code"] == "NON_POSITIVE_AMOUNT"
 
 
+def test_missing_reference_cannot_pass_automatic_match_quality_gate():
+    result = validate_transaction_quality({
+        "TransID": "x",
+        "amount": "10.00",
+        "timestamp": NOW.isoformat(),
+    })
+    assert result["valid_for_automatic_matching"] is False
+    assert result["findings"] == [{"code": "MISSING_REFERENCE", "severity": "high"}]
+
+
 def test_bad_algorithm_parameters_fail_closed():
     with pytest.raises(ValueError):
         rank_reconciliation_candidates({}, [], ambiguity_margin=2)

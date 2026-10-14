@@ -43,7 +43,7 @@ logger = logging.getLogger("pesaguard.reconciliation_engine")
 RECONCILIATION_STATUSES = frozenset({
     "MATCHED", "UNMATCHED", "PARTIAL", "MISMATCH", "DUPLICATE", "PENDING", "EXCEPTION",
 })
-ENGINE_VERSION = "phase3.2"
+ENGINE_VERSION = "phase3.3"
 
 
 class ReconciliationEngine:
@@ -97,7 +97,18 @@ class ReconciliationEngine:
 
         duplicate_records = [record for record in records if self._reference_matches(transaction, record)]
         if len(duplicate_records) > 1:
-            return self._result("DUPLICATE", None, ["duplicate_internal_reference"], 1.0, started, now)
+            # Multiple ledger rows sharing a reference are not proof that the
+            # provider payment itself is a duplicate. Treat this as ambiguity
+            # and require review instead of contaminating duplicate metrics.
+            return self._result(
+                "EXCEPTION",
+                None,
+                ["ambiguous_internal_reference"],
+                0.0,
+                started,
+                now,
+                reason="multiple internal records share the transaction reference",
+            )
         if not records:
             return self._result("UNMATCHED", None, ["missing_internal_record"], 0.0, started, now)
 
@@ -161,7 +172,9 @@ class ReconciliationEngine:
         timestamp = _parse_event_time(value.get("TransTime", value.get("timestamp")))
         return {
             "transaction_id": str(value.get("TransID") or value.get("trans_id") or "").strip(),
-            "reference": str(value.get("BillRefNumber") or value.get("reference") or value.get("TransID") or "").strip(),
+            # TransID is provider identity, not a merchant/ledger reference.
+            # Never synthesize reference evidence from a different field.
+            "reference": str(value.get("BillRefNumber") or value.get("reference") or "").strip(),
             "amount": amount,
             "timestamp": timestamp,
             "phone": str(value.get("MSISDN") or value.get("phone_number") or "").strip(),
@@ -181,7 +194,9 @@ class ReconciliationEngine:
         amount = self._amount(value.get("amount", value.get("TransAmount")))
         return {
             "internal_ref": value.get("internal_ref"),
-            "reference": str(value.get("reference") or value.get("merchant_ref") or value.get("internal_ref") or "").strip(),
+            # internal_ref is a local row identifier, not an external payment
+            # reference. Treat absent business references as absent evidence.
+            "reference": str(value.get("reference") or value.get("merchant_ref") or "").strip(),
             "original_reference": str(
                 value.get("original_transaction_id")
                 or value.get("original_reference")
@@ -226,7 +241,9 @@ class ReconciliationEngine:
                 record.get("original_reference") == transaction.get("original_reference")
                 or record.get("reference") == transaction.get("original_reference")
             )
-        return record.get("reference") == transaction.get("reference")
+        transaction_reference = str(transaction.get("reference") or "").strip()
+        record_reference = str(record.get("reference") or "").strip()
+        return bool(transaction_reference and record_reference and record_reference == transaction_reference)
 
     def _exact_match(self, transaction: Dict[str, Any], records: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         for record in records:
@@ -560,6 +577,34 @@ def evaluate_transaction(
     }
 
 
+def _explicit_scope_conflicts(event: Dict[str, Any], record: Dict[str, Any]) -> List[str]:
+    """Return explicit tenant/provider/account/currency conflicts.
+
+    Candidate queries must already be tenant-scoped. This check is defense in
+    depth: it excludes a candidate only when both sides provide comparable
+    scope metadata and those values disagree.
+    """
+    pairs = (
+        ("tenant_scope_conflict", ("tenant_id", "tenantId"), ("tenant_id", "tenantId"), False),
+        ("provider_scope_conflict", ("provider", "provider_name"), ("provider", "provider_name"), True),
+        ("account_scope_conflict", ("provider_account_id", "account_id"), ("provider_account_id", "account_id"), False),
+        ("business_code_scope_conflict", ("BusinessShortCode", "business_short_code"), ("BusinessShortCode", "business_short_code"), False),
+        ("currency_scope_conflict", ("Currency", "currency"), ("Currency", "currency"), True),
+    )
+    conflicts = []
+    for reason, event_keys, record_keys, case_insensitive in pairs:
+        left = next((event.get(key) for key in event_keys if event.get(key) not in (None, "")), None)
+        right = next((record.get(key) for key in record_keys if record.get(key) not in (None, "")), None)
+        if left is None or right is None:
+            continue
+        left_value, right_value = str(left).strip(), str(right).strip()
+        if case_insensitive:
+            left_value, right_value = left_value.casefold(), right_value.casefold()
+        if left_value != right_value:
+            conflicts.append(reason)
+    return conflicts
+
+
 def _find_best_match(
     event: Dict[str, Any],
     internal_records: Sequence[Dict[str, Any]],
@@ -567,17 +612,29 @@ def _find_best_match(
     tolerance_percent: Decimal = Decimal("0.5"),
     allow_partial: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Match callback event against candidate internal records."""
+    """Match callback event against tenant-scoped candidate internal records."""
     amount = _coerce_amount(event.get("TransAmount") or event.get("amount"))
     if amount is None or amount <= 0:
         return None
 
     phone = str(event.get("MSISDN") or event.get("phone_number") or "").strip()
-    event_time = _parse_event_time(event.get("TransTime"))
+    event_time = _parse_event_time(event.get("TransTime") or event.get("timestamp"))
+    event_reference = str(
+        event.get("BillRefNumber") or event.get("reference")
+        or event.get("transaction_reference") or event.get("tx_ref") or ""
+    ).strip()
     allowed_delta = max(Decimal("0.01"), abs(amount) * (tolerance_percent / Decimal("100")))
 
     candidates = []
+    excluded_scope_candidates = []
     for record in internal_records:
+        scope_conflicts = _explicit_scope_conflicts(event, record)
+        if scope_conflicts:
+            excluded_scope_candidates.append({
+                "internal_ref": str(record.get("internal_ref") or record.get("id") or "unknown"),
+                "reason_codes": scope_conflicts,
+            })
+            continue
         record_time = _parse_record_time(record.get("timestamp") or record.get("synced_at") or record.get("created_at"))
         
         latency = 0
@@ -596,8 +653,17 @@ def _find_best_match(
 
         record_phone = str(record.get("phone_number") or record.get("msisdn") or "").strip()
         phone_matches = record_phone == phone and len(phone) > 0
+        record_reference = str(
+            record.get("BillRefNumber") or record.get("reference")
+            or record.get("merchant_ref") or record.get("transaction_reference") or ""
+        ).strip()
+        reference_matches = bool(
+            event_reference and record_reference and event_reference == record_reference
+        )
 
-        if phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
+        # Exact amount + phone + timestamp is not sufficient to identify an
+        # order. Require an explicit business-reference match for auto-match.
+        if reference_matches and phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
             match_type = "exact"
         elif phone_matches and amt_diff <= allowed_delta:
             # Includes near-amount matches and exact amounts without timestamp
@@ -620,6 +686,20 @@ def _find_best_match(
         })
 
     if not candidates:
+        if excluded_scope_candidates:
+            return {
+                "match_type": "ambiguous",
+                "internal_ref": None,
+                "record": None,
+                "score": 0.0,
+                "candidate_count": 0,
+                "eligible_candidate_count": 0,
+                "excluded_scope_candidate_count": len(excluded_scope_candidates),
+                "excluded_scope_candidates": excluded_scope_candidates,
+                "confidence_gap": 0.0,
+                "ambiguous": True,
+                "review_reason": "candidate_scope_conflict",
+            }
         return None
 
     priority = {"exact": 0, "fuzzy_exact": 1, "partial_fuzzy": 2, "partial": 3}
@@ -646,6 +726,9 @@ def _find_best_match(
     ambiguity_gap = 0.03
     ambiguous = bool(second and score_gap <= ambiguity_gap)
     best["candidate_count"] = len(candidates)
+    best["eligible_candidate_count"] = len(candidates)
+    best["excluded_scope_candidate_count"] = len(excluded_scope_candidates)
+    best["excluded_scope_candidates"] = excluded_scope_candidates
     best["confidence_gap"] = round(max(0.0, score_gap), 6)
     best["ambiguous"] = ambiguous
     if ambiguous:
