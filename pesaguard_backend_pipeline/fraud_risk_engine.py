@@ -121,7 +121,19 @@ def calculate_features(
     velocity = len([value for value in recent_customer if (current_time - value).total_seconds() <= 60]) if current_time else 0.0
     mean_amount = _number(baseline.get("mean_amount"), mean(tenant_amounts) if tenant_amounts else amount)
     std_amount = _number(baseline.get("std_amount"), pstdev(tenant_amounts) if len(tenant_amounts) > 1 else max(mean_amount * 0.25, 1.0))
-    amount_deviation = min(abs(amount - mean_amount) / max(std_amount, 1.0), 5.0) / 5.0
+    # Use a robust median/MAD score once there is enough tenant history. This
+    # prevents a few extreme transactions from inflating the mean and hiding
+    # later outliers. Small samples retain the existing conservative fallback.
+    try:
+        from .algorithmic_intelligence import robust_amount_deviation
+    except ImportError:  # pragma: no cover - top-level script execution
+        from algorithmic_intelligence import robust_amount_deviation
+    robust_deviation = robust_amount_deviation(amount, tenant_amounts)
+    amount_deviation = (
+        robust_deviation
+        if robust_deviation is not None
+        else min(abs(amount - mean_amount) / max(std_amount, 1.0), 5.0) / 5.0
+    )
     customer_baseline = _number(baseline.get("customer_mean_amount"), mean([_number(item.get("TransAmount") or item.get("amount")) for item in customer_history]) if customer_history else mean_amount)
     customer_history_score = min(len(customer_history) / 20.0, 1.0)
     tenant_baseline_score = min(abs(amount - mean_amount) / max(mean_amount, 1.0), 5.0) / 5.0
