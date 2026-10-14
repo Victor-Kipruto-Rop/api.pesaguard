@@ -6,7 +6,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 | Algorithm | Current code evidence | Important boundary |
 |---|---|---|
-| Decimal/minor-unit money comparison | `algorithmic_intelligence.py`; tests | Currency precision must be explicit; reject invalid precision. |
+| Decimal/minor-unit money comparison | algorithmic_intelligence.py; tests | Currency precision must be explicit; reject invalid precision. |
 | Reference normalization | Helper + tests | Candidate hint only; punctuation-insensitive similarity must not authorize a match. |
 | Tenant/provider-scoped transaction identity | Helper + tests | Database uniqueness and atomic insertion are still required. |
 | Payload fingerprint and replay classification | Helper + tests | Requires persisted prior fingerprint scoped to tenant/provider/account. |
@@ -22,17 +22,19 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Batch data-quality profile | Helper + tests | Counts findings; does not itself quarantine, repair, or persist rows. |
 | Transaction-quality gate | Helper + shadow hook | Confirm every actual ingestion route applies equivalent validation before financial state changes. |
 | Risk scoring | Explainable weighted rules and existing fraud features | Not calibrated probability; never auto-decline or refund based on score alone. |
-| Ground-truth evaluation | `reconciliation_evaluation.py` added in this change | Needs finance-reviewed representative labels; scorecard does not certify production. |
+| Ground-truth evaluation | reconciliation_evaluation.py | Needs finance-reviewed representative labels; scorecard does not certify production. |
+| Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
+| Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
 
 ## Gaps to close before production certification
 
 ### P0 — correctness and financial safety
 
-1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency. The live reconciliation matcher now fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
+1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency. The live reconciliation matcher fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
 2. **Atomic idempotency:** enforce database uniqueness for tenant + provider/account + external transaction ID and claim it transactionally. In-memory ID sets are not concurrency controls.
 3. **Conflicting replay quarantine:** persist the original canonical payload fingerprint; distinguish identical retries from same-ID/different-payload conflicts before a second side effect.
 4. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
-5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable. Scope-conflict guard regression coverage is in `tests/test_reconciliation_scope_guard.py`.
+5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
 6. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
 
 ### P1 — evaluation and operations
@@ -58,19 +60,10 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 Do not enable a new automatic decision rule merely because unit tests pass. Require focused tests and full backend CI, migration/concurrency/tenant-isolation tests, shadow runs on staging data, approved holdout metrics, finance review of false positives and negatives, feature-flag rollout, audit evidence, and rollback instructions.
 
-This is a code/design inventory, not a claim that the gates have passed. See [Smart Reconciliation Algorithms](SMART_RECONCILIATION_ALGORITHMS.md) and [Ground-Truth Evaluation](RECONCILIATION_GROUND_TRUTH_EVALUATION.md).
-
+This is a code/design inventory, not a claim that the gates have passed. See Smart Reconciliation Algorithms and Ground-Truth Evaluation.
 
 ## Offline algorithm release gate
 
-`pesaguard_backend_pipeline/reconciliation_release_gate.py` evaluates the scorecard
-from `reconciliation_evaluation.py` against explicit precision, recall, false-positive,
-review-rate, and minimum-sample thresholds. It blocks promotion when metrics are missing,
-the sample is too small, the evaluation is not declared a holdout, dataset provenance is
-missing, or a human reviewer is not named. Default thresholds are deliberately
-conservative and must be approved for the actual business cohort before use.
+The reconciliation_release_gate.py helper evaluates the scorecard from reconciliation_evaluation.py against explicit precision, recall, false-positive, review-rate, and minimum-sample thresholds. It blocks promotion when metrics are missing, the sample is too small, the evaluation is not declared a holdout, dataset provenance is missing, or a human reviewer is not named. Default thresholds are deliberately conservative and must be approved for the actual business cohort before use.
 
-This gate is a policy evaluator, not a deployment switch. A PASS applies only to the
-supplied scorecard; it does not prove representativeness, guarantee future performance,
-automatically enable a model, or replace staging, shadow evaluation, finance approval,
-monitoring, and rollback.
+This gate is a policy evaluator, not a deployment switch. A PASS applies only to the supplied scorecard; it does not prove representativeness, guarantee future performance, automatically enable a model, or replace staging, shadow evaluation, finance approval, monitoring, and rollback.
