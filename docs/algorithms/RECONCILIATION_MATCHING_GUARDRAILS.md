@@ -35,3 +35,12 @@ The 0.03 margin is a heuristic, not a statistically calibrated probability. Matc
 ## Non-goals
 
 This change does not certify fraud detection, guarantee complete reconciliation, enable automatic refunds, change ledger posting semantics, or prove production readiness. CI and staging tests must pass before merge.
+
+
+## Optional robust historical amount anomaly signal
+
+The anomaly rules also support a tenant-supplied `historical_amounts` (or `amount_baseline`) list. When at least 20 valid positive observations are present, the detector computes a median absolute deviation (MAD) modified z-score. Scores at or above `anomaly_robust_zscore_threshold` (default 3.5) add the explainable `historical_amount_outlier_robust_zscore` signal and contribute a bounded increment to the heuristic anomaly score.
+
+This is deliberately optional: the caller must provide a comparable baseline scoped to the same tenant, provider, currency, and business context. Missing or undersized baselines do not generate a score. If the baseline MAD is zero, an amount above the median is treated as a strong outlier signal. This remains a review signal—not proof of fraud, an automatic block, or a calibrated probability.
+
+Before enabling this signal in production, validate baseline freshness, outlier behavior, seasonality, and false-positive rates against approved labeled data.
