@@ -159,7 +159,8 @@ def score_reconciliation_candidate(
     time_ok = timestamp_available and delta_seconds <= max(0, int(window_seconds))
     incoming_phone = re.sub(r"[^0-9]", "", str(incoming.get("MSISDN") or incoming.get("phone_number") or ""))
     candidate_phone = re.sub(r"[^0-9]", "", str(candidate.get("phone_number") or candidate.get("MSISDN") or ""))
-    phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
+    phone_available = bool(incoming_phone and candidate_phone)
+    phone_ok = not phone_available or incoming_phone == candidate_phone
 
     evidence = {
         "reference_exact": bool(incoming_raw_ref and candidate_raw_ref and incoming_raw_ref == candidate_raw_ref),
@@ -170,6 +171,7 @@ def score_reconciliation_candidate(
         "amount_exact": bool(amount_equal),
         "timestamp_available": bool(timestamp_available),
         "time_within_window": bool(time_ok),
+        "phone_available": phone_available,
         "phone_consistent": bool(phone_ok),
         "time_delta_seconds": delta_seconds,
     }
@@ -177,7 +179,7 @@ def score_reconciliation_candidate(
         0.45 * evidence["reference_exact"]
         + 0.30 * evidence["amount_exact"]
         + 0.15 * evidence["time_within_window"]
-        + 0.10 * evidence["phone_consistent"]
+        + 0.10 * (evidence["phone_available"] and evidence["phone_consistent"])
     )
     auto_matchable = all((
         evidence["reference_exact"], evidence["amount_exact"],
@@ -189,7 +191,7 @@ def score_reconciliation_candidate(
         "auto_matchable": auto_matchable,
         "evidence": evidence,
         "reason_codes": [key for key, passed in evidence.items()
-                         if key != "time_delta_seconds" and not passed],
+                         if key not in {"time_delta_seconds", "phone_available"} and not passed],
     }
 
 

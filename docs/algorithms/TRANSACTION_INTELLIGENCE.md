@@ -29,7 +29,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 1. Normalize and validate the source event.
 2. Check tenant/provider-scoped external identity and replay fingerprints.
 3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
-4. Require parseable timestamps within the configured window before auto-matching. Missing time is unknown evidence, not proof of a match. If both phone identifiers exist, a mismatch blocks auto-match; missing phone data is not treated as proof of identity.
+4. Require parseable timestamps within the configured window before auto-matching. Missing time is unknown evidence, not proof of a match. If both phone identifiers exist, a mismatch blocks auto-match; a phone-match score bonus is awarded only when both identifiers exist and agree. Missing phone data is neutral, not positive identity evidence.
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
 6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.

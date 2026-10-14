@@ -84,6 +84,16 @@ def test_candidate_scoring_requires_timestamps_before_auto_match():
     assert result["evidence"]["time_within_window"] is False
     assert result["evidence"]["time_delta_seconds"] is None
 
+def test_missing_phone_is_not_awarded_positive_match_evidence():
+    result = score_reconciliation_candidate(
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:00Z"},
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:01Z"},
+    )
+    assert result["evidence"]["phone_available"] is False
+    assert result["evidence"]["phone_consistent"] is True
+    assert result["score"] == 0.9
+    assert result["auto_matchable"] is True
+
 
 def test_candidate_scoring_rejects_timestamp_outside_window():
     result = score_reconciliation_candidate(
