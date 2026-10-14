@@ -231,7 +231,7 @@ def aggregate_partial_payments(
     No combinatorial subset search is performed. An empty or ambiguous reference
     is rejected; overpayments are surfaced and never silently capped.
     """
-    target_reference = normalize_reference(reference)
+    target_reference = _canonical_reference(reference)
     if not target_reference:
         raise ValueError("a non-empty reference is required for partial-payment aggregation")
     target_currency = str(currency or "KES").upper().strip()
@@ -240,7 +240,7 @@ def aggregate_partial_payments(
     seen_ids: set[str] = set()
     total_minor = 0
     for payment in payments:
-        payment_reference = normalize_reference(payment.get("BillRefNumber") or payment.get("reference"))
+        payment_reference = _canonical_reference(payment.get("BillRefNumber") or payment.get("reference"))
         payment_currency = str(payment.get("Currency") or payment.get("currency") or "KES").upper().strip()
         payment_id = str(payment.get("TransID") or payment.get("transaction_id") or "").strip()
         if payment_reference != target_reference or payment_currency != target_currency:
