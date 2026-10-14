@@ -89,3 +89,12 @@ def test_identifiers_are_normalized_but_invalid_types_are_rejected():
         evaluate_reconciliation_predictions([
             {"expected_match_id": {"id": 1}, "predicted_match_id": None, "decision": "REVIEW"},
         ])
+
+
+def test_review_of_a_true_non_match_is_an_abstention_not_a_true_negative():
+    result = evaluate_reconciliation_predictions([
+        {"expected_match_id": None, "predicted_match_id": None, "decision": "REVIEW"},
+    ])
+    assert result["true_negatives"] == 0
+    assert result["exact_decision_accuracy"] == 0.0
+    assert result["review_rate"] == 1.0
