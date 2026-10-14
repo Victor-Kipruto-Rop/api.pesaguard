@@ -28,11 +28,11 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 ### P0 — correctness and financial safety
 
-1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency.
+1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency. The live reconciliation matcher now fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
 2. **Atomic idempotency:** enforce database uniqueness for tenant + provider/account + external transaction ID and claim it transactionally. In-memory ID sets are not concurrency controls.
 3. **Conflicting replay quarantine:** persist the original canonical payload fingerprint; distinguish identical retries from same-ID/different-payload conflicts before a second side effect.
 4. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
-5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
+5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable. Scope-conflict guard regression coverage is in `tests/test_reconciliation_scope_guard.py`.
 6. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
 
 ### P1 — evaluation and operations
