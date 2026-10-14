@@ -72,6 +72,24 @@ class ReconciliationEngine:
         transaction_id = transaction.get("transaction_id")
         if not transaction_id:
             return self._result("EXCEPTION", None, [], 0.0, started, now, reason="missing transaction id")
+
+        scope_conflicts = [
+            {"candidate_id": str(record.get("internal_ref") or "unknown"), "reason_codes": _explicit_scope_conflicts(transaction, record)}
+            for record in records
+            if _explicit_scope_conflicts(transaction, record)
+        ]
+        if scope_conflicts:
+            reason_codes = sorted({code for item in scope_conflicts for code in item["reason_codes"]})
+            return self._result(
+                "EXCEPTION",
+                None,
+                ["candidate_scope_conflict", *reason_codes],
+                0.0,
+                started,
+                now,
+                reason="candidate set contains explicit tenant/provider/account/currency scope conflicts",
+            )
+
         transaction_type = transaction.get("transaction_type")
         if transaction_type in {"refund", "reversal"} and not transaction.get("original_reference"):
             return self._result(
@@ -173,6 +191,10 @@ class ReconciliationEngine:
                 or value.get("original_reference")
                 or ""
             ).strip(),
+            "tenant_id": value.get("tenant_id") or value.get("tenantId") or value.get("TenantID"),
+            "provider": value.get("provider") or value.get("provider_name") or value.get("providerName"),
+            "provider_account_id": value.get("provider_account_id") or value.get("account_id") or value.get("BusinessShortCode") or value.get("business_short_code"),
+            "currency": value.get("currency") or value.get("Currency"),
         }
 
     def _normalize_record(self, value: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,6 +214,10 @@ class ReconciliationEngine:
             "timestamp": _parse_record_time(value.get("timestamp") or value.get("created_at") or value.get("synced_at")),
             "phone": str(value.get("phone_number") or value.get("MSISDN") or value.get("msisdn") or "").strip(),
             "status": str(value.get("status") or "").strip().lower(),
+            "tenant_id": value.get("tenant_id") or value.get("tenantId") or value.get("TenantID"),
+            "provider": value.get("provider") or value.get("provider_name") or value.get("providerName"),
+            "provider_account_id": value.get("provider_account_id") or value.get("account_id") or value.get("merchant_account_id") or value.get("BusinessShortCode") or value.get("business_short_code"),
+            "currency": value.get("currency") or value.get("Currency"),
             "record": value,
         }
 
