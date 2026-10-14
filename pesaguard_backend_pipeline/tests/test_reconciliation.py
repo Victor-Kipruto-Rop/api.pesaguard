@@ -1,24 +1,30 @@
 from reconciliation_engine import evaluate_transaction
 
 
-def make_event(trans_id="T1", amount="100", phone="254700000000", trans_time="20240601120000"):
-    return {
+def make_event(trans_id="T1", amount="100", phone="254700000000", trans_time="20240601120000", reference="INV-1"):
+    event = {
         "TransID": trans_id,
         "TransAmount": amount,
         "MSISDN": phone,
         "TransTime": trans_time,
         "BusinessShortCode": "12345",
     }
+    if reference is not None:
+        event["BillRefNumber"] = reference
+    return event
 
 
-def make_internal_record(internal_ref="ORD-1", amount=100.0, phone="254700000000", timestamp="2024-06-01T12:00:00Z", status="pending"):
-    return {
+def make_internal_record(internal_ref="ORD-1", amount=100.0, phone="254700000000", timestamp="2024-06-01T12:00:00Z", status="pending", reference="INV-1"):
+    record = {
         "internal_ref": internal_ref,
         "amount": amount,
         "phone_number": phone,
         "timestamp": timestamp,
         "status": status,
     }
+    if reference is not None:
+        record["reference"] = reference
+    return record
 
 
 def test_exact_match_is_resolved():
@@ -94,6 +100,30 @@ def test_unique_candidate_remains_auto_match_compatible():
     assert result["match"]["match_type"] == "exact"
     assert result["match"]["candidate_count"] == 1
     assert result["match"]["ambiguous"] is False
+
+
+def test_missing_business_reference_is_reviewed_not_auto_matched():
+    event = make_event(trans_id="T-NO-REF", reference=None)
+    result = evaluate_transaction(
+        event,
+        [make_internal_record(internal_ref="ORD-NO-REF")],
+        seen_trans_ids=set(),
+    )
+
+    assert result["status"] == "needs_review"
+    assert result["match"]["match_type"] == "fuzzy_exact"
+
+
+def test_conflicting_business_reference_is_reviewed_not_auto_matched():
+    event = make_event(trans_id="T-REF-CONFLICT", reference="INV-OTHER")
+    result = evaluate_transaction(
+        event,
+        [make_internal_record(internal_ref="ORD-REF-CONFLICT", reference="INV-1")],
+        seen_trans_ids=set(),
+    )
+
+    assert result["status"] == "needs_review"
+    assert result["match"]["match_type"] == "fuzzy_exact"
 
 
 
