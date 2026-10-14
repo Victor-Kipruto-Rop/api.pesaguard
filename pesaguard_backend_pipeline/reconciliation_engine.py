@@ -29,7 +29,7 @@ logger = logging.getLogger("pesaguard.reconciliation_engine")
 RECONCILIATION_STATUSES = frozenset({
     "MATCHED", "UNMATCHED", "PARTIAL", "MISMATCH", "DUPLICATE", "PENDING", "EXCEPTION",
 })
-ENGINE_VERSION = "phase3.1"
+ENGINE_VERSION = "phase3.2"
 
 
 class ReconciliationEngine:
@@ -483,15 +483,40 @@ def _find_best_match(
         return None
 
     priority = {"exact": 0, "fuzzy_exact": 1, "partial_fuzzy": 2, "partial": 3}
+    # Deterministic tie-breaking makes repeated runs auditable and reproducible.
     candidates.sort(
         key=lambda item: (
             -item.get("score", 0.0),
             priority.get(item["match_type"], 99),
             item["latency_seconds"],
             item["amount_diff"],
+            str(item.get("internal_ref") or ""),
+            str((item.get("record") or {}).get("id") or ""),
         )
     )
-    return candidates[0]
+
+    best = dict(candidates[0])
+    best_score = float(best.get("score", 0.0))
+    second = candidates[1] if len(candidates) > 1 else None
+    score_gap = best_score - float(second.get("score", 0.0)) if second else 1.0
+
+    # Never silently auto-approve when two different ledger records are
+    # similarly plausible. Equal amount/phone/time values occur legitimately
+    # in payment systems; choosing the first row would create a false match.
+    ambiguity_gap = 0.03
+    ambiguous = bool(second and score_gap <= ambiguity_gap)
+    best["candidate_count"] = len(candidates)
+    best["confidence_gap"] = round(max(0.0, score_gap), 6)
+    best["ambiguous"] = ambiguous
+    if ambiguous:
+        best["original_match_type"] = best["match_type"]
+        best["match_type"] = "ambiguous"
+        best["review_reason"] = "multiple_candidates_with_similar_scores"
+        best["candidate_internal_refs"] = [
+            str(item.get("internal_ref") or (item.get("record") or {}).get("id") or "unknown")
+            for item in candidates[:5]
+        ]
+    return best
 
 
 def _coerce_amount(value: Any) -> Optional[Decimal]:
