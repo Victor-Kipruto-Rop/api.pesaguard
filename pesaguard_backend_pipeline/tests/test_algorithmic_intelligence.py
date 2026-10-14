@@ -82,8 +82,10 @@ def test_candidate_scoring_does_not_assume_missing_time_is_proof_of_match():
         {"reference": "A", "amount": "10.00"},
         {"reference": "A", "amount": "10.00"},
     )
-    assert result["auto_matchable"] is True
+    assert result["auto_matchable"] is False
     assert result["evidence"]["time_delta_seconds"] is None
+    assert result["evidence"]["time_within_window"] is False
+    assert "time_within_window" in result["reason_codes"]
 
 
 def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
