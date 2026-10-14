@@ -402,7 +402,10 @@ def evaluate_transaction(
             "match": {"match_type": "none", "reason": "no_matching_record"},
         }
 
-    if best_match["match_type"] in {"exact", "fuzzy_exact"}:
+    # Only exact amount + phone + available timestamp evidence may auto-match.
+    # A tolerance-based amount match is useful for ranking, but financial
+    # differences—even small ones—must be reviewed rather than silently settled.
+    if best_match["match_type"] == "exact" and not best_match.get("ambiguous"):
         return {
             "trans_id": trans_id,
             "status": "matched",
@@ -459,9 +462,11 @@ def _find_best_match(
         record_phone = str(record.get("phone_number") or record.get("msisdn") or "").strip()
         phone_matches = record_phone == phone and len(phone) > 0
 
-        if phone_matches and amt_diff == 0:
+        if phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
             match_type = "exact"
         elif phone_matches and amt_diff <= allowed_delta:
+            # Includes near-amount matches and exact amounts without timestamp
+            # evidence; both remain reviewable instead of auto-approved.
             match_type = "fuzzy_exact"
         elif not phone_matches and allow_partial:
             match_type = "partial_fuzzy" if amt_diff <= allowed_delta else "partial"
