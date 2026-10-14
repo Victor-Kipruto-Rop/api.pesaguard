@@ -1,7 +1,11 @@
 import pytest
 
-from fraud_risk_engine import calculate_features\nfrom algorithmic_intelligence import (
-    aggregate_partial_payments,\n    amount_to_minor_units,\n    decompose_settlement_variance,\n    detect_velocity_spike,
+from fraud_risk_engine import calculate_features
+from algorithmic_intelligence import (
+    aggregate_partial_payments,
+    amount_to_minor_units,
+    decompose_settlement_variance,
+    detect_velocity_spike,
     is_amount_outlier,
     normalize_reference,
     robust_amount_deviation,
