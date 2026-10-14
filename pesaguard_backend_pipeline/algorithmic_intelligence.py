@@ -354,7 +354,7 @@ def _parse_datetime(value: Any):
     text = str(value or "").strip()
     if len(text) == 14 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Africa/Nairobi"))
         except ValueError:
             return None
     try:
@@ -498,8 +498,8 @@ def assess_reversal(
     if original_currency != reversal_currency:
         return {"status": "INVALID", "valid": False, "reason_codes": ["currency_mismatch"]}
     try:
-        original_minor = amount_to_minor_units(original.get("TransAmount", original.get("amount")))
-        reversal_minor = amount_to_minor_units(reversal.get("TransAmount", reversal.get("amount")))
+        original_minor = _strict_amount_minor_units(original.get("TransAmount", original.get("amount")))
+        reversal_minor = _strict_amount_minor_units(reversal.get("TransAmount", reversal.get("amount")))
         if original_minor <= 0 or reversal_minor <= 0:
             raise ValueError("amounts must be positive")
     except (ValueError, TypeError):
@@ -517,7 +517,7 @@ def assess_reversal(
         if item_currency != original_currency:
             return {"status": "INVALID", "valid": False, "reason_codes": ["prior_reversal_currency_mismatch"]}
         try:
-            prior_amount = amount_to_minor_units(item.get("TransAmount", item.get("amount")))
+            prior_amount = _strict_amount_minor_units(item.get("TransAmount", item.get("amount")))
         except (ValueError, TypeError):
             return {"status": "INVALID", "valid": False, "reason_codes": ["invalid_prior_reversal_amount"]}
         if prior_amount <= 0:
