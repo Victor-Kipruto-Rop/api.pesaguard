@@ -22,7 +22,8 @@ def test_normalize_daraja_flat_c2b():
     n = normalize_daraja_event(payload)
     assert n["TransID"] == "ABC123"
     assert n["TransAmount"] == 150.0
-    assert ("timestamp" in n) or ("TransTime" in n)
+    assert n["TransTime"] == "2024-01-01T09:30:45"
+    assert n["timestamp"] == datetime(2024, 1, 1, 9, 30, 45)
 
 
 def test_exact_match_by_reference_and_amount():
@@ -47,3 +48,12 @@ def test_validate_signature_hex():
     secret = "s3cr3t"
     digest = compute_hmac(payload, secret, algo="sha256").hex()
     assert validate_signature(digest, payload, secret, algo="sha256", signature_encoding="hex")
+
+
+def test_daraja_and_iso_timestamps_compare_in_utc():
+    compact = {"TransID": "R-UTC", "TransTime": "20240101123045", "TransAmount": "10"}
+    utc_record = {
+        "TransID": "R-UTC", "timestamp": "2024-01-01T09:30:55Z", "TransAmount": "10"
+    }
+    matched = time_window_match(compact, [utc_record], window_seconds=60)
+    assert matched is utc_record
