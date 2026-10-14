@@ -18,6 +18,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Same-reference partial-payment aggregation | Sum multiple identified payments against one expected amount | Requires explicit reference and transaction IDs; duplicate IDs count once; overpayment is surfaced |
 | Trailing-window velocity detector | Count recent events for the same identity | Requires identity and timestamp; does not treat future-dated events as recent |
 | Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
+| Bounded exact-subset settlement candidate search | Identify a unique combination of already-scoped transactions summing to a settlement amount | Hard candidate bound; duplicate IDs, mixed currencies, invalid amounts, no-solution and ambiguous-solution cases are review-only; never posts or mutates a ledger |
 | Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Does not select between competing candidates; callers must send ambiguous cases to review |
 | Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
 | Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
@@ -28,12 +29,12 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 1. Normalize and validate the source event.
 2. Check tenant/provider-scoped external identity and replay fingerprints.
 3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
-4. Use time and phone consistency as corroborating signals.
+4. Require parseable timestamps within the configured window before auto-matching. Missing time is unknown evidence, not proof of a match. If both phone identifiers exist, a mismatch blocks auto-match; missing phone data is not treated as proof of identity.
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
 6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
 
-Partial-payment aggregation, velocity screening and settlement variance decomposition are reusable primitives; they do not currently replace the existing reconciliation lifecycle or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping and persistence before presenting them as end-to-end product features.
+Partial-payment aggregation, velocity screening, settlement variance decomposition and bounded exact-subset settlement search are reusable primitives; they do not replace the existing reconciliation lifecycle or create ledger postings. The subset search is only safe after the caller scopes candidates to a single tenant, provider, settlement window and available batch identifier. Callers must wire these primitives into the relevant workflow with tenant scoping, persistence, audit events and human/policy approval before presenting them as end-to-end product features.
 
 The candidate score is evidence, not a probability. A score of 1.0 does not mean a calibrated 100% probability of correctness.
 
@@ -48,7 +49,7 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 ## Next algorithms to add after data contracts and ground truth are verified
 
 - One-to-many and many-to-one settlement matching using explicit batch/settlement identifiers and amount conservation.
-- Partial-payment aggregation with exact sum constraints and bounded search; never use unbounded subset-sum on a production request.
+- Persisted one-to-many and many-to-one settlement allocation workflow around the bounded exact-subset candidate primitive; do not post ledger entries automatically.
 - Reversal/refund lifecycle graph linked to the original external transaction.
 - Temporal/bi-temporal reconciliation using event time, settlement time and ingestion time separately.
 - Duplicate-window and conflicting-replay detection backed by database uniqueness constraints.
@@ -71,4 +72,4 @@ pytest -q pesaguard_backend_pipeline/tests/test_algorithmic_intelligence.py
 pytest -q pesaguard_backend_pipeline/tests/test_fraud_risk_engine.py
 ```
 
-The full CI suite and staging validation remain required. Synthetic tests demonstrate deterministic behavior, not production accuracy.
+The focused tests cover missing/out-of-window timestamps, exact-subset uniqueness, ambiguity, candidate bounds, duplicate IDs and currency mismatch. The full CI suite and staging validation remain required. Synthetic tests demonstrate deterministic behavior, not production accuracy.

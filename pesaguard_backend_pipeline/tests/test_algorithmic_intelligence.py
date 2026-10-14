@@ -77,13 +77,50 @@ def test_candidate_scoring_only_auto_matches_complete_exact_evidence():
     assert "reference_exact" in ambiguous_or_partial["reason_codes"]
 
 
-def test_candidate_scoring_does_not_assume_missing_time_is_proof_of_match():
-    result = score_reconciliation_candidate(
-        {"reference": "A", "amount": "10.00"},
-        {"reference": "A", "amount": "10.00"},
-    )
-    assert result["auto_matchable"] is True
+def test_candidate_scoring_requires_timestamps_before_auto_match():
+    result = score_reconciliation_candidate({"reference": "A", "amount": "10.00"}, {"reference": "A", "amount": "10.00"})
+    assert result["auto_matchable"] is False
+    assert result["evidence"]["timestamp_available"] is False
+    assert result["evidence"]["time_within_window"] is False
     assert result["evidence"]["time_delta_seconds"] is None
+
+
+def test_candidate_scoring_rejects_timestamp_outside_window():
+    result = score_reconciliation_candidate(
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:00Z"},
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:30:00Z"}, window_seconds=900)
+    assert result["auto_matchable"] is False
+    assert result["evidence"]["time_within_window"] is False
+
+
+def test_exact_subset_settlement_matching_requires_unique_solution():
+    from algorithmic_intelligence import find_unique_exact_subset
+    result = find_unique_exact_subset([
+        {"TransID": "P1", "amount": "40.00"}, {"TransID": "P2", "amount": "60.00"},
+        {"TransID": "P3", "amount": "20.00"}], "100.00")
+    assert result["status"] == "MATCH_CANDIDATE"
+    assert set(result["selected_transaction_ids"]) == {"P1", "P2"}
+    assert result["requires_human_or_policy_approval"] is False
+
+
+def test_exact_subset_refuses_ambiguous_and_unbounded_matches():
+    from algorithmic_intelligence import find_unique_exact_subset
+    ambiguous = find_unique_exact_subset([
+        {"TransID": "P1", "amount": "40"}, {"TransID": "P2", "amount": "60"},
+        {"TransID": "P3", "amount": "50"}, {"TransID": "P4", "amount": "50"}], "100")
+    assert ambiguous["status"] == "AMBIGUOUS"
+    assert ambiguous["selected_transaction_ids"] == []
+    assert ambiguous["requires_human_or_policy_approval"] is True
+    bounded = find_unique_exact_subset([{"TransID": f"P{i}", "amount": "1"} for i in range(19)], "10", max_candidates=18)
+    assert bounded["status"] == "REVIEW_REQUIRED"
+
+
+def test_exact_subset_rejects_duplicate_ids_and_mixed_currency():
+    from algorithmic_intelligence import find_unique_exact_subset
+    duplicate = find_unique_exact_subset([{"TransID": "P1", "amount": "50"}, {"TransID": "P1", "amount": "50"}], "100")
+    assert duplicate["status"] == "REVIEW_REQUIRED"
+    currency = find_unique_exact_subset([{"TransID": "P1", "amount": "100", "currency": "USD"}], "100", currency="KES")
+    assert currency["status"] == "REVIEW_REQUIRED"
 
 
 def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
