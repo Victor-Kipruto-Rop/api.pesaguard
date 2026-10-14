@@ -19,6 +19,8 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Trailing-window velocity detector | Count recent events for the same identity | Requires identity and timestamp; does not treat future-dated events as recent |
 | Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
 | Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Does not select between competing candidates; callers must send ambiguous cases to review |
+| Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
+| Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
 | Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback and existing policy thresholds |
 
 ## Matching policy
