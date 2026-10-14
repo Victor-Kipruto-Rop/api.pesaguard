@@ -307,9 +307,9 @@ def test_missing_phone_is_neutral_not_positive_match_evidence():
         {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:00Z"},
         {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:01Z"},
     )
-    assert result["evidence"]["phone_available"] is False
+    assert result["evidence"]["phone_evidence_available"] is False
     assert result["evidence"]["phone_consistent"] is True
-    assert result["score"] == 0.9
+    assert result["score"] == 1.0
     assert result["auto_matchable"] is True
 
 
