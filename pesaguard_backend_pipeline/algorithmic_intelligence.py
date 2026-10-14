@@ -153,7 +153,7 @@ def score_reconciliation_candidate(
     try:
         amount_equal = (
             incoming_amount is not None and candidate_amount is not None
-            and amount_to_minor_units(incoming_amount) == amount_to_minor_units(candidate_amount)
+            and _strict_amount_minor_units(incoming_amount) == _strict_amount_minor_units(candidate_amount)
         )
     except (ValueError, TypeError, InvalidOperation):
         amount_equal = False
