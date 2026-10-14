@@ -25,7 +25,7 @@ def transaction(transaction_id, amount="100.00", timestamp="20260913120000", **e
     return value
 
 
-def record(transaction_id, amount="100.00", timestamp="2026-09-13T12:00:00Z", **extra):
+def record(transaction_id, amount="100.00", timestamp="2026-09-13T09:00:00Z", **extra):
     value = {
         "internal_ref": f"order-{transaction_id}",
         "amount": amount,
@@ -39,7 +39,7 @@ def record(transaction_id, amount="100.00", timestamp="2026-09-13T12:00:00Z", **
 def test_golden_dataset_is_100_percent_correct():
     fixture_path = Path(__file__).parent / "fixtures" / "phase3_golden_dataset.json"
     cases = json.loads(fixture_path.read_text(encoding="utf-8"))
-    base_time = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    base_time = datetime(2026, 9, 13, 9, 0, tzinfo=timezone.utc)
 
     prepared = []
     for case in cases:
