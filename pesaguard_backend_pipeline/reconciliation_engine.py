@@ -11,6 +11,7 @@ import logging
 import time
 from decimal import Decimal
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Sequence, Set, Iterable
 
 from event_store import ProcessResult
@@ -531,7 +532,7 @@ def _parse_event_time(value: Any) -> Optional[datetime]:
     text = str(value).strip()
     if len(text) == 14 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Africa/Nairobi")).astimezone(timezone.utc)
         except ValueError:
             return None
 
