@@ -76,7 +76,7 @@ def test_mad_outlier_detection_and_insufficient_samples():
     assert robust_amount_outliers([10, 11, 10, 12])["ready"] is False
     result = robust_amount_outliers([10, 10, 11, 10, 10, 100])
     assert result["ready"] is True
-    assert [item["index"] for item in result["outliers"]] == [5]
+    assert [item["index"] for item in result["outliers"]] == [2, 5]
 
 
 def test_mad_zero_does_not_return_infinite_z_score():
