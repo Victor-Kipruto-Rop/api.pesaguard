@@ -130,3 +130,10 @@ against the deployed service.
 ## Smart reconciliation algorithms
 
 The additive, deterministic algorithm primitives and their safety/rollout contract are documented in [`docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md`](docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md). They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
+
+
+## Reconciliation algorithm evaluation
+
+The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See [`docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md`](docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md). These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
+
+The current implementation inventory and remaining production-integration gates are tracked in [`docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md`](docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md). It distinguishes existing helper functions from durable, tenant-safe production integration and calibration work.
