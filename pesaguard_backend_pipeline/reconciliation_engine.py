@@ -626,7 +626,15 @@ def _find_best_match(
     allowed_delta = max(Decimal("0.01"), abs(amount) * (tolerance_percent / Decimal("100")))
 
     candidates = []
+    excluded_scope_candidates = []
     for record in internal_records:
+        scope_conflicts = _explicit_scope_conflicts(event, record)
+        if scope_conflicts:
+            excluded_scope_candidates.append({
+                "internal_ref": str(record.get("internal_ref") or record.get("id") or "unknown"),
+                "reason_codes": scope_conflicts,
+            })
+            continue
         record_time = _parse_record_time(record.get("timestamp") or record.get("synced_at") or record.get("created_at"))
         
         latency = 0
@@ -678,6 +686,20 @@ def _find_best_match(
         })
 
     if not candidates:
+        if excluded_scope_candidates:
+            return {
+                "match_type": "ambiguous",
+                "internal_ref": None,
+                "record": None,
+                "score": 0.0,
+                "candidate_count": 0,
+                "eligible_candidate_count": 0,
+                "excluded_scope_candidate_count": len(excluded_scope_candidates),
+                "excluded_scope_candidates": excluded_scope_candidates,
+                "confidence_gap": 0.0,
+                "ambiguous": True,
+                "review_reason": "candidate_scope_conflict",
+            }
         return None
 
     priority = {"exact": 0, "fuzzy_exact": 1, "partial_fuzzy": 2, "partial": 3}
@@ -704,6 +726,9 @@ def _find_best_match(
     ambiguity_gap = 0.03
     ambiguous = bool(second and score_gap <= ambiguity_gap)
     best["candidate_count"] = len(candidates)
+    best["eligible_candidate_count"] = len(candidates)
+    best["excluded_scope_candidate_count"] = len(excluded_scope_candidates)
+    best["excluded_scope_candidates"] = excluded_scope_candidates
     best["confidence_gap"] = round(max(0.0, score_gap), 6)
     best["ambiguous"] = ambiguous
     if ambiguous:
