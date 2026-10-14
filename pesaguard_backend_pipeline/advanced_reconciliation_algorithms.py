@@ -117,7 +117,7 @@ def seasonal_amount_assessment(
         modified_z = 0.6745 * (current_float - median) / mad
         is_outlier = abs(modified_z) > modified_z_threshold
     else:
-        is_outlier = current_float != median and len(set(values)) > 1
+        is_outlier = current_float != median
     return {
         "algorithm_version": ALGORITHM_VERSION,
         "ready": True,

@@ -103,3 +103,15 @@ def test_distribution_shift_ignores_invalid_values_but_reports_them():
     assert result["invalid_reference_values"] == 1
     assert result["invalid_recent_values"] == 1
     assert result["shift_detected"] is False
+
+
+
+def test_seasonal_zero_mad_flags_deviation_without_infinite_score():
+    event_time = datetime(2026, 10, 15, 10, 0, tzinfo=timezone.utc)
+    history = _history_for(event_time, [100] * 8)
+    result = seasonal_amount_assessment(
+        "1000", history, event_time=event_time, timezone_name="UTC"
+    )
+    assert result["ready"] is True
+    assert result["is_outlier"] is True
+    assert result["modified_z"] is None
