@@ -116,12 +116,24 @@ class ReconciliationEngine:
 
         tolerant = [record for record in records if self._amount_matches(transaction, record) and self._time_matches(transaction, record)]
         if tolerant:
-            candidate = max(tolerant, key=lambda record: self._score(transaction, record))
+            candidate, ambiguous = self._select_unambiguous_candidate(transaction, tolerant)
+            if ambiguous:
+                return self._result(
+                    "EXCEPTION", None, ["ambiguous_candidates_requires_review"], 0.0,
+                    started, now, reason="multiple plausible candidates have insufficient score separation",
+                )
+            assert candidate is not None
             return self._result("PARTIAL", candidate, ["amount_within_tolerance", "timestamp_within_window"], self._score(transaction, candidate), started, now)
 
         amount_match = [record for record in records if self._amount_matches(transaction, record)]
         if amount_match:
-            candidate = max(amount_match, key=lambda record: self._score(transaction, record))
+            candidate, ambiguous = self._select_unambiguous_candidate(transaction, amount_match)
+            if ambiguous:
+                return self._result(
+                    "EXCEPTION", None, ["ambiguous_candidates_requires_review"], 0.0,
+                    started, now, reason="multiple plausible candidates have insufficient score separation",
+                )
+            assert candidate is not None
             return self._result("MISMATCH", candidate, ["amount_match", "timestamp_mismatch_or_reference_mismatch"], self._score(transaction, candidate), started, now)
 
         return self._result("UNMATCHED", None, ["no_matching_candidate"], 0.0, started, now)
@@ -212,6 +224,27 @@ class ReconciliationEngine:
                     return {**record, "_pending_match": True}
                 return record
         return None
+
+    def _select_unambiguous_candidate(
+        self,
+        transaction: Dict[str, Any],
+        candidates: Sequence[Dict[str, Any]],
+        *,
+        minimum_score_margin: float = 0.15,
+    ) -> tuple[Optional[Dict[str, Any]], bool]:
+        """Select a candidate only when its evidence is clearly stronger.
+
+        This is used after domain filters have already constrained the candidate
+        set. A near-tie is an exception for human review, never a first-row win.
+        """
+        ranked = sorted(candidates, key=lambda item: self._score(transaction, item), reverse=True)
+        if not ranked:
+            return None, False
+        if len(ranked) > 1:
+            margin = self._score(transaction, ranked[0]) - self._score(transaction, ranked[1])
+            if margin < minimum_score_margin:
+                return None, True
+        return ranked[0], False
 
     def _score(self, transaction: Dict[str, Any], record: Dict[str, Any]) -> float:
         score = Decimal("0")
