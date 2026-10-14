@@ -577,6 +577,34 @@ def evaluate_transaction(
     }
 
 
+def _explicit_scope_conflicts(event: Dict[str, Any], record: Dict[str, Any]) -> List[str]:
+    """Return explicit tenant/provider/account/currency conflicts.
+
+    Candidate queries must already be tenant-scoped. This check is defense in
+    depth: it excludes a candidate only when both sides provide comparable
+    scope metadata and those values disagree.
+    """
+    pairs = (
+        ("tenant_scope_conflict", ("tenant_id", "tenantId"), ("tenant_id", "tenantId"), False),
+        ("provider_scope_conflict", ("provider", "provider_name"), ("provider", "provider_name"), True),
+        ("account_scope_conflict", ("provider_account_id", "account_id"), ("provider_account_id", "account_id"), False),
+        ("business_code_scope_conflict", ("BusinessShortCode", "business_short_code"), ("BusinessShortCode", "business_short_code"), False),
+        ("currency_scope_conflict", ("Currency", "currency"), ("Currency", "currency"), True),
+    )
+    conflicts = []
+    for reason, event_keys, record_keys, case_insensitive in pairs:
+        left = next((event.get(key) for key in event_keys if event.get(key) not in (None, "")), None)
+        right = next((record.get(key) for key in record_keys if record.get(key) not in (None, "")), None)
+        if left is None or right is None:
+            continue
+        left_value, right_value = str(left).strip(), str(right).strip()
+        if case_insensitive:
+            left_value, right_value = left_value.casefold(), right_value.casefold()
+        if left_value != right_value:
+            conflicts.append(reason)
+    return conflicts
+
+
 def _find_best_match(
     event: Dict[str, Any],
     internal_records: Sequence[Dict[str, Any]],
@@ -584,7 +612,7 @@ def _find_best_match(
     tolerance_percent: Decimal = Decimal("0.5"),
     allow_partial: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Match callback event against candidate internal records."""
+    """Match callback event against tenant-scoped candidate internal records."""
     amount = _coerce_amount(event.get("TransAmount") or event.get("amount"))
     if amount is None or amount <= 0:
         return None
