@@ -76,7 +76,7 @@ def transaction_payload_fingerprint(payload: Mapping[str, Any]) -> str:
         "amount_minor_units": amount_to_minor_units(amount) if amount is not None else None,
         "currency": str(payload.get("Currency") or payload.get("currency") or "KES").upper().strip(),
         "timestamp": str(payload.get("TransTime") or payload.get("timestamp") or "").strip(),
-        "phone": re.sub(r"\\D", "", str(payload.get("MSISDN") or payload.get("phone_number") or "")),
+        "phone": re.sub(r"[^0-9]", "", str(payload.get("MSISDN") or payload.get("phone_number") or "")),
     }
     if not facts["transaction_id"]:
         raise ValueError("transaction_id is required to fingerprint a transaction")
@@ -154,8 +154,8 @@ def score_reconciliation_candidate(
     candidate_time = candidate.get("timestamp") or candidate.get("created_at")
     delta_seconds = _timestamp_delta_seconds(incoming_time, candidate_time)
     time_ok = delta_seconds is None or delta_seconds <= max(0, int(window_seconds))
-    incoming_phone = re.sub(r"\\D", "", str(incoming.get("MSISDN") or incoming.get("phone_number") or ""))
-    candidate_phone = re.sub(r"\\D", "", str(candidate.get("phone_number") or candidate.get("MSISDN") or ""))
+    incoming_phone = re.sub(r"[^0-9]", "", str(incoming.get("MSISDN") or incoming.get("phone_number") or ""))
+    candidate_phone = re.sub(r"[^0-9]", "", str(candidate.get("phone_number") or candidate.get("MSISDN") or ""))
     phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
 
     evidence = {
