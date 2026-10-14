@@ -6,7 +6,6 @@ signals with tenant policy, verified ledger state, and human review thresholds.
 """
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -117,7 +116,7 @@ def score_reconciliation_candidate(
         raise ValueError("amount_tolerance must be a finite non-negative number")
 
     tx_ref = _normalized_text(transaction.get("reference") or transaction.get("BillRefNumber"))
-    ca_ref = _normalized_text(candidate.get("reference") or candidate.get("merchant_ref") or candidate.get("internal_ref"))
+    ca_ref = _normalized_text(candidate.get("reference") or candidate.get("merchant_ref"))
     tx_amount = _decimal(transaction.get("amount", transaction.get("TransAmount")))
     ca_amount = _decimal(candidate.get("amount", candidate.get("TransAmount")))
     tx_phone = "".join(ch for ch in str(transaction.get("phone") or transaction.get("MSISDN") or "") if ch.isdigit())

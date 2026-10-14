@@ -2,7 +2,7 @@
 
 ## Scope and activation boundary
 
-`pesaguard_backend_pipeline/smart_reconciliation_algorithms.py` provides deterministic, pure-Python algorithm primitives. The current change is additive: it does **not** replace the existing reconciliation engine's decision path, authorize refunds, block payments, or claim fraud probabilities. Integrate through a shadow-evaluation phase before changing production matching outcomes.
+`pesaguard_backend_pipeline/smart_reconciliation_algorithms.py` provides deterministic, pure-Python algorithm primitives. The current change is additive: it does **not** replace the existing reconciliation engine's decision path, authorize refunds, block payments, or claim fraud probabilities. The engine has an opt-in shadow hook controlled by tenant settings at `reconciliation.smart_algorithms_shadow_enabled`; the default is disabled. Shadow output is attached to the internal evaluation result and does not change the legacy status or match. It is not persisted as a separate analytics record by this change.
 
 ## Included algorithms
 
@@ -21,7 +21,7 @@
 1. Normalize provider callbacks at the integration boundary. Preserve the raw event and its provenance separately.
 2. Require a non-empty `tenant_id` for fingerprinting. Never compare hashes across tenants.
 3. Store the algorithm version and explainable evidence with any shadow result. Do not store full phone numbers in algorithm telemetry.
-4. Run the current production engine and the new ranker side-by-side on the same tenant-scoped candidate set. Do not let shadow results change transaction status.
+4. Enable `tenant_settings.reconciliation.smart_algorithms_shadow_enabled = true` only in a controlled non-production tenant first. Run the current engine and the new ranker side-by-side on the same tenant-scoped candidate set. The feature is disabled by default; do not let shadow results change transaction status.
 5. Compare proposed outcomes against approved, reviewed ground truth using the existing certification process. Report precision, recall, false positives, false negatives, ambiguous-match rate, and latency by tenant/provider/amount band.
 6. Review false positives and false negatives with finance operators. Keep thresholds tenant-configurable only after approval and change audit.
 7. Enable any decision-path change gradually behind a feature flag, with an immediate rollback to the existing engine.
@@ -48,4 +48,4 @@ pytest -q
 python -m compileall -q pesaguard_backend_pipeline
 ```
 
-The focused tests cover deterministic/tenant-scoped fingerprints, normalized fallback fingerprints, explicit candidate conflicts, tie handling, MAD outliers and zero-MAD behavior, bounded risk scores, rolling windows, invalid timestamps, and data-quality findings. Full-suite and production certification results must be recorded from an actual run; they are not implied by adding these tests.
+The focused tests cover deterministic/tenant-scoped fingerprints, normalized fallback fingerprints, explicit candidate conflicts, tie handling, MAD outliers and zero-MAD behavior, bounded risk scores, rolling windows, invalid timestamps, data-quality findings, and opt-in shadow integration that asserts the legacy decision is unchanged. Full-suite and production certification results must be recorded from an actual run; they are not implied by adding these tests.

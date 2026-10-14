@@ -18,6 +18,19 @@ from event_store import ProcessResult
 from normalization import NormalizationError, normalize_amount
 from reconciliation_scoring import score_match
 
+try:
+    from .smart_reconciliation_algorithms import (
+        assess_rule_based_risk,
+        rank_reconciliation_candidates,
+        validate_transaction_quality,
+    )
+except ImportError:  # pragma: no cover - fallback for top-level script execution
+    from smart_reconciliation_algorithms import (
+        assess_rule_based_risk,
+        rank_reconciliation_candidates,
+        validate_transaction_quality,
+    )
+
 # Import normalization helpers (added in feat/phase1-reconciliation-systematic)
 try:
     from .reconciliation_utils import normalize_daraja_event, time_window_match
@@ -324,6 +337,87 @@ def record_ground_truth(
     return row
 
 
+def _smart_shadow_assessment(
+    event: Dict[str, Any],
+    internal_records: Sequence[Dict[str, Any]],
+    *,
+    tenant_id: str,
+    duplicate: bool,
+    anomalies: Sequence[str],
+    window_minutes: int,
+    tolerance_percent: Decimal,
+) -> Dict[str, Any]:
+    """Run new algorithms in shadow mode; never changes the legacy match decision."""
+    event_time = _parse_event_time(event.get("TransTime") or event.get("timestamp"))
+    normalized_event = {
+        "transaction_id": event.get("TransID") or event.get("trans_id"),
+        "reference": event.get("BillRefNumber") or event.get("reference"),
+        "amount": event.get("TransAmount", event.get("amount")),
+        "timestamp": event_time.isoformat() if event_time else None,
+        "phone": event.get("MSISDN") or event.get("phone_number"),
+    }
+    quality = validate_transaction_quality(normalized_event)
+    candidates = []
+    for record in internal_records:
+        record_time = _parse_record_time(
+            record.get("timestamp") or record.get("synced_at") or record.get("created_at")
+        )
+        candidates.append({
+            **record,
+            "internal_ref": record.get("internal_ref") or record.get("id"),
+            "reference": record.get("reference") or record.get("merchant_ref"),
+            "amount": record.get("amount"),
+            "timestamp": record_time.isoformat() if record_time else None,
+            "phone": record.get("phone_number") or record.get("msisdn"),
+        })
+    amount = _coerce_amount(normalized_event.get("amount"))
+    tolerance = max(
+        Decimal("0.01"),
+        abs(amount or Decimal("0")) * tolerance_percent / Decimal("100"),
+    )
+    ranking = rank_reconciliation_candidates(
+        normalized_event,
+        candidates,
+        window_seconds=max(0, int(window_minutes) * 60),
+        amount_tolerance=tolerance,
+    )
+    top = ranking.get("top_candidate") or {}
+    conflicts = set(top.get("conflicts") or ())
+    risk = assess_rule_based_risk(
+        duplicate=duplicate,
+        reference_conflict="reference_conflict" in conflicts,
+        phone_conflict="phone_conflict" in conflicts,
+        invalid_payload=not quality["valid_for_automatic_matching"],
+        reversal_without_original=(
+            str(event.get("TransactionType") or event.get("transaction_type") or "").strip().lower()
+            in {"refund", "reversal"}
+            and not str(
+                event.get("OriginalTransID")
+                or event.get("OriginalTransactionID")
+                or event.get("original_transaction_id")
+                or event.get("original_reference")
+                or ""
+            ).strip()
+        ),
+    )
+    return {
+        "enabled": True,
+        "mode": "shadow",
+        "algorithm_version": ranking["algorithm_version"],
+        "quality": quality,
+        "candidate_ranking": ranking,
+        "risk": {
+            "score": risk.score,
+            "level": risk.level,
+            "action": risk.action,
+            "signals": list(risk.signals),
+        },
+        "legacy_decision_unchanged": True,
+        "observed_anomalies": list(anomalies),
+        "tenant_scope": tenant_id,
+    }
+
+
 def evaluate_transaction(
     event: Dict[str, Any],
     internal_records: Sequence[Dict[str, Any]],
@@ -389,6 +483,28 @@ def evaluate_transaction(
         except (TypeError, ValueError):
             pass
 
+    smart_analysis = None
+    if reconciliation_cfg.get("smart_algorithms_shadow_enabled") is True:
+        try:
+            smart_analysis = _smart_shadow_assessment(
+                event,
+                internal_records,
+                tenant_id=str((tenant_settings or {}).get("tenant_id") or "default"),
+                duplicate=duplicate,
+                anomalies=anomalies,
+                window_minutes=window_minutes,
+                tolerance_percent=tolerance_percent,
+            )
+        except (TypeError, ValueError, ArithmeticError):
+            # Shadow analysis must never break the established payment pipeline.
+            smart_analysis = {
+                "enabled": True,
+                "mode": "shadow",
+                "available": False,
+                "reason": "shadow_analysis_unavailable",
+                "legacy_decision_unchanged": True,
+            }
+
     if not internal_records:
         return {
             "trans_id": trans_id,
@@ -397,6 +513,7 @@ def evaluate_transaction(
             "duplicate": duplicate,
             "anomalies": anomalies,
             "match": {"match_type": "none", "reason": "no_internal_records"},
+            **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
         }
 
     best_match = _find_best_match(
@@ -415,6 +532,7 @@ def evaluate_transaction(
             "duplicate": duplicate,
             "anomalies": anomalies,
             "match": {"match_type": "none", "reason": "no_matching_record"},
+            **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
         }
 
     if best_match["match_type"] in {"exact", "fuzzy_exact"}:
@@ -425,6 +543,7 @@ def evaluate_transaction(
             "duplicate": duplicate,
             "anomalies": anomalies,
             "match": best_match,
+            **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
         }
 
     return {
@@ -434,6 +553,7 @@ def evaluate_transaction(
         "duplicate": duplicate,
         "anomalies": anomalies,
         "match": best_match,
+        **({"smart_analysis": smart_analysis} if smart_analysis is not None else {}),
     }
 
 
