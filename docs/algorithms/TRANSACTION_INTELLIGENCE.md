@@ -20,7 +20,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
 | Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Missing phone data is neutral, conflicting phone data blocks auto-match, missing timestamps fail closed; callers must send ambiguous cases to review |
 | Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
-| Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
+| Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |\n| Seasonality-aware robust baseline | Compare amount, count, or latency to weekday/hour cohorts using median/MAD with explicit fallback | Implemented as a separate pure helper; caller must provide scoped history; not wired to financial decisions or a persisted workflow |
 | Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback; risk thresholds remain uncalibrated until labelled data is reviewed |
 | Replay classification | Distinguishes new events, identical replays and changed-payload replays within tenant/provider/account scope | Pure decision helper; database uniqueness and atomic writes remain authoritative |
 | Reversal amount validation | Checks original-reference linkage and cumulative reversal amount | Caller must supply only confirmed reversals from a tenant/account-scoped query; no ledger posting is performed |
@@ -65,7 +65,7 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 - Extend the existing settlement variance helper to classify timing gaps, missing records, duplicate records and amount mismatches using persisted, source-backed evidence.
 - Graph-based related-entity analysis only where lawful, necessary data and validated labels exist.
 
-The bounded settlement subset search and ambiguity-safe selection guard are implemented as review-oriented primitives. Durable settlement workflow integration remains open. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
+The seasonality-aware helper is documented in [Seasonality-aware Transaction Intelligence](SEASONALITY_AWARE_TRANSACTION_INTELLIGENCE.md). It is an additive advisory primitive, not yet wired into persisted risk/monitoring workflows.\n\nThe bounded settlement subset search and ambiguity-safe selection guard are implemented as review-oriented primitives. Durable settlement workflow integration remains open. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
 
 ## Validation
 

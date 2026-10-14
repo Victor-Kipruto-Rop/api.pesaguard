@@ -18,7 +18,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Reversal validation | Helper + tests | Must use confirmed reversals for the same account; helper does not issue refunds. |
 | Robust amount anomaly detection | Median/MAD helper and risk-feature integration | Comparable baseline required; outlier is a review signal, not a fraud verdict. |
 | Velocity screening | Trailing-window helper + tests | Caller must provide tenant/entity-scoped history and consistent timestamps. |
-| Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |
+| Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |\n| Seasonality-aware robust baseline | `seasonality_aware_baseline.py` + focused tests | Additive helper; caller must scope history and persist evidence; not wired to automatic decisions. |
 | Batch data-quality profile | Helper + tests | Counts findings; does not itself quarantine, repair, or persist rows. |
 | Transaction-quality gate | Helper + shadow hook | Confirm every actual ingestion route applies equivalent validation before financial state changes. |
 | Risk scoring | Explainable weighted rules and existing fraud features | Not calibrated probability; never auto-decline or refund based on score alone. |
@@ -48,7 +48,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 ### P2 — advanced intelligence after P0/P1
 
 14. Cross-channel entity graphs, only with reliable lawful identifiers; do not merge accounts based only on shared phone, amount, or location.
-15. Seasonality-aware baselines for business hours, weekdays, pay cycles, merchant type, and currency.
+15. Seasonality-aware production wiring: a pure robust cohort-baseline helper and focused tests now exist; tenant-scoped history retrieval, persisted assessment records, monitoring, cohort calibration, and shadow integration remain required for production.
 16. Provider-specific lifecycle/state-transition anomaly rules, including invalid reversal/original ordering.
 17. Settlement arrival-window prediction after provider calendars, merchant schedules, and holidays are configured.
 18. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
