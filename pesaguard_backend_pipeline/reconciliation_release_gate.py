@@ -26,9 +26,11 @@ class ReleaseGatePolicy:
     maximum_review_rate: float = 0.50
 
     def __post_init__(self) -> None:
-        if isinstance(self.minimum_sample_count, bool) or self.minimum_sample_count < 1:
-            raise ValueError("minimum_sample_count must be a positive integer")
-        if not isinstance(self.minimum_sample_count, int):
+        if (
+            isinstance(self.minimum_sample_count, bool)
+            or not isinstance(self.minimum_sample_count, int)
+            or self.minimum_sample_count < 1
+        ):
             raise ValueError("minimum_sample_count must be a positive integer")
         for name in _RATIO_METRICS:
             value = getattr(self, {

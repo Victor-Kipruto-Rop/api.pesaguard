@@ -192,8 +192,12 @@ def _scope_conflicts(
         candidate_value = next((candidate.get(key) for key in keys if candidate.get(key) not in (None, "")), None)
         if tx_value is None or candidate_value is None:
             continue
-        left = str(tx_value).strip().casefold()
-        right = str(candidate_value).strip().casefold()
+        left = str(tx_value).strip()
+        right = str(candidate_value).strip()
+        # Provider names and ISO currency codes are case-insensitive; tenant and
+        # account identifiers remain exact to avoid merging distinct namespaces.
+        if scope in {"provider", "currency"}:
+            left, right = left.casefold(), right.casefold()
         if left != right:
             conflicts.append(f"{scope}_scope_conflict")
     return tuple(conflicts)

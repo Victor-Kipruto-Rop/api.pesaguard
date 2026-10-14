@@ -265,3 +265,13 @@ def test_ranker_preserves_pre_scoped_legacy_candidates_without_scope_metadata():
     assert result["decision"] == "CANDIDATE"
     assert result["eligible_candidate_count"] == 1
     assert result["excluded_candidate_count"] == 0
+
+
+def test_ranker_treats_tenant_and_account_identifiers_as_case_sensitive():
+    tx = {"tenant_id": "Tenant-A", "account_id": "PayBill-A", "reference": "INV-1",
+          "amount": "10", "timestamp": "2026-10-14T10:00:00Z"}
+    candidate = {"tenant_id": "tenant-a", "account_id": "PayBill-A", "internal_ref": "ledger-1",
+                 "reference": "INV-1", "amount": "10", "timestamp": "2026-10-14T10:00:00Z"}
+    result = rank_reconciliation_candidates(tx, [candidate])
+    assert result["decision"] == "REVIEW"
+    assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
