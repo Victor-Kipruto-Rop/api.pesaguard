@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import math
 from statistics import mean, pstdev
 from typing import Any, Iterable, Mapping, Sequence
 
-MODEL_VERSION = "fraud-rules-v1"
+MODEL_VERSION = "fraud-rules-v2"
 RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
 
@@ -83,7 +85,7 @@ def _timestamp(transaction: Mapping[str, Any]) -> datetime | None:
     text = str(value or "").strip()
     if len(text) == 14 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Africa/Nairobi"))
         except ValueError:
             return None
     try:
@@ -137,8 +139,11 @@ def calculate_features(
     customer_baseline = _number(baseline.get("customer_mean_amount"), mean([_number(item.get("TransAmount") or item.get("amount")) for item in customer_history]) if customer_history else mean_amount)
     customer_history_score = min(len(customer_history) / 20.0, 1.0)
     tenant_baseline_score = min(abs(amount - mean_amount) / max(mean_amount, 1.0), 5.0) / 5.0
-    hour = current_time.hour if current_time else 12
-    time_pattern = 1.0 if hour < 5 or hour >= 23 else 0.0
+    # Daraja's compact TransTime is East Africa Time. Convert aware ISO
+    # timestamps to the same business timezone before applying local-hour rules.
+    local_time = current_time.astimezone(ZoneInfo("Africa/Nairobi")) if current_time else None
+    hour = local_time.hour if local_time else 12
+    time_pattern = 1.0 if local_time and (hour < 5 or hour >= 23) else 0.0
     return FraudFeatures(
         transaction_frequency=min(frequency, 1.0),
         amount_deviation=amount_deviation,
@@ -163,7 +168,19 @@ def evaluate_rules(
     transaction_id = _identity(transaction, "TransID", "trans_id", "transaction_id")
     duplicate = any(_identity(item, "TransID", "trans_id", "transaction_id") == transaction_id for item in history)
     amount = features.amount
-    rapid_changes = len({round(_number(item.get("TransAmount") or item.get("amount")), 2) for item in history[-5:]}) >= 4
+    customer_id = _identity(transaction, "MSISDN", "customer_id", "customer")
+    current_time = _timestamp(transaction)
+    recent_customer_amounts = []
+    if customer_id != "unknown" and current_time is not None:
+        for item in history:
+            item_customer = _identity(item, "MSISDN", "customer_id", "customer")
+            item_time = _timestamp(item)
+            if item_customer != customer_id or item_time is None:
+                continue
+            age_seconds = (current_time - item_time).total_seconds()
+            if 0 <= age_seconds <= 300:
+                recent_customer_amounts.append(round(_number(item.get("TransAmount") or item.get("amount")), 2))
+    rapid_changes = len(set(recent_customer_amounts[-5:])) >= 4
     return (
         RuleResult("velocity", features.velocity * 5 >= velocity_limit, 0.30, "transaction velocity exceeded the configured limit"),
         RuleResult("amount_threshold", amount > amount_threshold, 0.20, "transaction amount exceeded the tenant threshold"),
@@ -196,6 +213,10 @@ def assess_transaction(
     amount_threshold: float = 150_000.0,
     velocity_limit: float = 5.0,
 ) -> RiskDecision:
+    if not math.isfinite(float(amount_threshold)) or amount_threshold < 0:
+        raise ValueError("amount_threshold must be a finite non-negative number")
+    if not math.isfinite(float(velocity_limit)) or velocity_limit <= 0:
+        raise ValueError("velocity_limit must be a finite positive number")
     features = calculate_features(transaction, history, tenant_baseline)
     rules = evaluate_rules(transaction, features, history, amount_threshold=amount_threshold, velocity_limit=velocity_limit)
     feature_score = (
@@ -203,7 +224,9 @@ def assess_transaction(
         + features.velocity * 0.25
         + features.tenant_baseline * 0.20
         + features.time_pattern * 0.10
-        + min(features.customer_history, 1.0) * 0.10
+        # Established history is context, not a reason to increase suspicion.
+        # This contribution represents uncertainty for a new/unknown customer.
+        + (1.0 - min(features.customer_history, 1.0)) * 0.10
     )
     rule_score = sum(rule.weight for rule in rules if rule.triggered)
     score = round(min(1.0, max(feature_score, rule_score) + min(feature_score * rule_score, 0.25)), 4)
