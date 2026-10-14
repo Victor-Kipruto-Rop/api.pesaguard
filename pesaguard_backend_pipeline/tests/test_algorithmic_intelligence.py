@@ -189,3 +189,13 @@ def test_window_change_detection_requires_enough_baseline_and_finds_spike():
     assert result["evaluated"] is True
     assert result["changed"] is True
     assert result["relative_change"] >= 1.0
+
+
+
+def test_punctuation_only_reference_similarity_is_not_auto_match_evidence():
+    result = score_reconciliation_candidate(
+        {"reference": "INV-001", "amount": "20.00"},
+        {"reference": "INV 001", "amount": "20.00"},
+    )
+    assert result["evidence"]["reference_normalized_only"] is True
+    assert result["auto_matchable"] is False
