@@ -353,3 +353,73 @@ def _parse_datetime(value: Any):
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+
+def rank_reconciliation_candidates(
+    incoming: Mapping[str, Any],
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    window_seconds: int = 900,
+    minimum_margin: float = 0.15,
+) -> dict[str, Any]:
+    """Rank candidate evidence but refuse automatic selection when ambiguous."""
+    scored = [
+        {"candidate": candidate, **score_reconciliation_candidate(
+            incoming, candidate, window_seconds=window_seconds
+        )}
+        for candidate in candidates
+    ]
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    if not scored:
+        return {"status": "NO_CANDIDATE", "selected": None, "candidates": []}
+    if len(scored) > 1 and (scored[0]["score"] - scored[1]["score"]) < max(0.0, minimum_margin):
+        return {"status": "AMBIGUOUS", "selected": None, "candidates": scored}
+    top = scored[0]
+    if not top["auto_matchable"]:
+        return {"status": "REVIEW", "selected": None, "candidates": scored}
+    return {"status": "MATCH_CANDIDATE", "selected": top["candidate"], "candidates": scored}
+
+
+def detect_window_change(
+    baseline_values: Sequence[Any],
+    recent_values: Sequence[Any],
+    *,
+    relative_change_threshold: float = 0.5,
+    minimum_samples: int = 5,
+) -> dict[str, Any]:
+    """Detect a material shift between historical and recent numeric windows.
+
+    This simple, transparent change detector is a monitoring signal. It is not
+    a forecasting model and does not label a change as fraud or provider fault.
+    """
+    if len(baseline_values) < minimum_samples or len(recent_values) < 1:
+        return {
+            "evaluated": False, "changed": False, "reason": "insufficient_samples",
+            "baseline_median": None, "recent_median": None, "relative_change": None,
+        }
+    try:
+        baseline = [float(Decimal(str(value))) for value in baseline_values]
+        recent = [float(Decimal(str(value))) for value in recent_values]
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return {
+            "evaluated": False, "changed": False, "reason": "invalid_numeric_sample",
+            "baseline_median": None, "recent_median": None, "relative_change": None,
+        }
+    if not all(map(_is_finite, [*baseline, *recent])):
+        return {
+            "evaluated": False, "changed": False, "reason": "invalid_numeric_sample",
+            "baseline_median": None, "recent_median": None, "relative_change": None,
+        }
+    baseline_center = median(baseline)
+    recent_center = median(recent)
+    denominator = max(abs(baseline_center), 1.0)
+    relative_change = (recent_center - baseline_center) / denominator
+    return {
+        "evaluated": True,
+        "changed": abs(relative_change) >= max(0.0, float(relative_change_threshold)),
+        "reason": None,
+        "baseline_median": baseline_center,
+        "recent_median": recent_center,
+        "relative_change": round(relative_change, 6),
+    }
