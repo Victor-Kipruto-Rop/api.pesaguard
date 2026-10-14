@@ -211,3 +211,67 @@ def test_internal_ledger_id_is_not_mistaken_for_payment_reference():
     )
     assert "reference_exact" not in result.evidence
     assert "reference_missing" in result.conflicts
+
+
+def test_ranker_excludes_explicit_cross_tenant_candidates():
+    tx = {
+        "tenant_id": "tenant-a", "provider": "mpesa", "account_id": "paybill-1",
+        "currency": "KES", "reference": "INV-1", "amount": "10",
+        "timestamp": "2026-10-14T10:00:00Z",
+    }
+    wrong = {
+        "tenant_id": "tenant-b", "provider": "mpesa", "account_id": "paybill-1",
+        "currency": "KES", "internal_ref": "wrong-tenant", "reference": "INV-1",
+        "amount": "10", "timestamp": "2026-10-14T10:00:00Z",
+    }
+    result = rank_reconciliation_candidates(tx, [wrong])
+    assert result["decision"] == "REVIEW"
+    assert result["top_candidate"] is None
+    assert result["excluded_candidate_count"] == 1
+    assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
+    assert result["reason_codes"] == ["candidate_scope_conflict"]
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected_reason"),
+    [
+        ({"provider": "airtel_money"}, "provider_scope_conflict"),
+        ({"account_id": "paybill-2"}, "account_scope_conflict"),
+        ({"currency": "USD"}, "currency_scope_conflict"),
+    ],
+)
+def test_ranker_excludes_provider_account_and_currency_conflicts(scope, expected_reason):
+    tx = {
+        "tenant_id": "tenant-a", "provider": "mpesa", "account_id": "paybill-1",
+        "currency": "KES", "reference": "INV-1", "amount": "10",
+        "timestamp": "2026-10-14T10:00:00Z",
+    }
+    candidate = {
+        **tx, **scope, "internal_ref": "ledger-1",
+        "timestamp": "2026-10-14T10:00:00Z",
+    }
+    result = rank_reconciliation_candidates(tx, [candidate])
+    assert result["decision"] == "REVIEW"
+    assert result["top_candidate"] is None
+    assert result["excluded_candidates"][0]["reason_codes"] == [expected_reason]
+
+
+def test_ranker_preserves_pre_scoped_legacy_candidates_without_scope_metadata():
+    tx = {"tenant_id": "tenant-a", "reference": "INV-1", "amount": "10",
+          "timestamp": "2026-10-14T10:00:00Z"}
+    candidate = {"internal_ref": "ledger-1", "reference": "INV-1", "amount": "10",
+                 "timestamp": "2026-10-14T10:00:00Z"}
+    result = rank_reconciliation_candidates(tx, [candidate])
+    assert result["decision"] == "CANDIDATE"
+    assert result["eligible_candidate_count"] == 1
+    assert result["excluded_candidate_count"] == 0
+
+
+def test_ranker_treats_tenant_and_account_identifiers_as_case_sensitive():
+    tx = {"tenant_id": "Tenant-A", "account_id": "PayBill-A", "reference": "INV-1",
+          "amount": "10", "timestamp": "2026-10-14T10:00:00Z"}
+    candidate = {"tenant_id": "tenant-a", "account_id": "PayBill-A", "internal_ref": "ledger-1",
+                 "reference": "INV-1", "amount": "10", "timestamp": "2026-10-14T10:00:00Z"}
+    result = rank_reconciliation_candidates(tx, [candidate])
+    assert result["decision"] == "REVIEW"
+    assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]

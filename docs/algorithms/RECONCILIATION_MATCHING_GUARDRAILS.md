@@ -49,3 +49,20 @@ Before enabling this signal in production, validate baseline freshness, outlier 
 ## Automatic-match policy guardrail
 
 The legacy-compatible matcher now auto-matches only the `exact` candidate type, which requires equal normalized amounts, a matching phone number, and both event and ledger timestamps to be parseable and within the configured window. A tolerance-based amount match (`fuzzy_exact`) or missing timestamp evidence routes to `needs_review`. This avoids silently treating a monetary difference or absent time evidence as a settled transaction. Existing duplicate/idempotency controls remain separate and mandatory.
+
+
+## Candidate scope-conflict gate (2026-10)
+
+The smart candidate ranker now checks explicit tenant, provider, merchant-account, and
+currency metadata before scoring. If both the incoming transaction and a candidate
+supply a value for one of these fields and the values disagree, that candidate is
+excluded from ranking with a reason code. If every candidate is excluded by an
+explicit scope conflict, the result is `REVIEW` with no selected candidate—not
+`UNMATCHED` and never an automatic financial action.
+
+This is a second-line guard, not a substitute for tenant-scoped database queries.
+Missing candidate scope metadata is not guessed or silently treated as a mismatch;
+the caller must still prove that its candidate query was scoped to the authenticated
+tenant, provider/account, and currency. Unit tests cover cross-tenant, provider,
+account, and currency conflicts plus compatibility with already-scoped legacy
+candidate rows. Full CI and staging validation are still required before production use.

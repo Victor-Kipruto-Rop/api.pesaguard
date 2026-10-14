@@ -59,3 +59,18 @@ This inventory separates a helper's existence from end-to-end integration, persi
 Do not enable a new automatic decision rule merely because unit tests pass. Require focused tests and full backend CI, migration/concurrency/tenant-isolation tests, shadow runs on staging data, approved holdout metrics, finance review of false positives and negatives, feature-flag rollout, audit evidence, and rollback instructions.
 
 This is a code/design inventory, not a claim that the gates have passed. See [Smart Reconciliation Algorithms](SMART_RECONCILIATION_ALGORITHMS.md) and [Ground-Truth Evaluation](RECONCILIATION_GROUND_TRUTH_EVALUATION.md).
+
+
+## Offline algorithm release gate
+
+`pesaguard_backend_pipeline/reconciliation_release_gate.py` evaluates the scorecard
+from `reconciliation_evaluation.py` against explicit precision, recall, false-positive,
+review-rate, and minimum-sample thresholds. It blocks promotion when metrics are missing,
+the sample is too small, the evaluation is not declared a holdout, dataset provenance is
+missing, or a human reviewer is not named. Default thresholds are deliberately
+conservative and must be approved for the actual business cohort before use.
+
+This gate is a policy evaluator, not a deployment switch. A PASS applies only to the
+supplied scorecard; it does not prove representativeness, guarantee future performance,
+automatically enable a model, or replace staging, shadow evaluation, finance approval,
+monitoring, and rollback.
