@@ -1,5 +1,5 @@
 """Regression tests for fail-closed reconciliation candidate scoping."""
-from reconciliation_engine import evaluate_transaction
+from reconciliation_engine import ReconciliationEngine, evaluate_transaction
 
 
 EVENT = {
@@ -60,3 +60,31 @@ def test_matching_scoped_candidate_keeps_existing_exact_match_behavior():
     result = evaluate({**RECORD, "tenant_id": "tenant-a"})
     assert result["status"] == "matched"
     assert result["match"]["match_type"] == "exact"
+
+
+
+def test_class_engine_rejects_explicit_scope_conflict_before_matching():
+    transaction = {
+        "TransID": "CLASS-SCOPE-1",
+        "TransAmount": "100.00",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-SCOPE-1",
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "BusinessShortCode": "123456",
+        "currency": "KES",
+    }
+    record = {
+        "internal_ref": "ledger-cross-tenant",
+        "reference": "INV-SCOPE-1",
+        "amount": "100.00",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+        "tenant_id": "tenant-b",
+        "provider": "mpesa",
+        "provider_account_id": "123456",
+        "currency": "KES",
+    }
+    result = ReconciliationEngine().reconcile(transaction, [record])
+    assert result["status"] == "EXCEPTION"
+    assert "candidate_scope_conflict" in result["rules"]
+    assert "tenant_scope_conflict" in result["rules"]
