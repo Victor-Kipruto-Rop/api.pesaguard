@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from fraud_risk_engine import assess_transaction, calculate_features, evaluate_predictions
+from fraud_risk_engine import (
+    assess_transaction, calculate_features, detect_cumulative_subthreshold_activity, evaluate_predictions,
+)
 
 
 def tx(identifier, *, amount="1000", customer="254700000001", merchant="600000", when="20260914100000"):
@@ -119,3 +121,54 @@ def test_detection_latency_uses_event_time_not_decision_age():
     expected_ms = max(0.0, (decision.detected_at - event_time).total_seconds() * 1000)
     assert metrics["latency_sample_count"] == 1
     assert metrics["detection_latency_ms"] == expected_ms
+
+
+
+def test_cumulative_activity_counts_distinct_customer_events():
+    current = tx("current", amount="40000", when="20261014120000")
+    history = [
+        tx("prior-1", amount="35000", when="20261014115000"),
+        tx("prior-2", amount="30000", when="20261014115500"),
+        tx("prior-2", amount="30000", when="20261014115500"),
+        tx("other-customer", amount="90000", customer="254700000099", when="20261014115900"),
+        tx("stale", amount="90000", when="20261014090000"),
+    ]
+    result = detect_cumulative_subthreshold_activity(
+        current, history, threshold=100000, window_seconds=3600, min_transactions=3
+    )
+    assert result["evaluated"] is True
+    assert result["triggered"] is True
+    assert result["transaction_count"] == 3
+    assert result["total_amount"] == 105000.0
+    assert result["reason_codes"] == ["cumulative_subthreshold_activity"]
+
+
+def test_cumulative_activity_requires_valid_identity_and_subthreshold_amount():
+    large = detect_cumulative_subthreshold_activity(tx("large", amount="100000"), [], threshold=100000)
+    missing_identity = detect_cumulative_subthreshold_activity(
+        {"TransID": "no-customer", "TransAmount": "100", "TransTime": "20261014120000"},
+        [], threshold=100000
+    )
+    assert large["triggered"] is False
+    assert missing_identity["evaluated"] is False
+    assert missing_identity["triggered"] is False
+
+
+def test_cumulative_activity_signal_is_explainable_and_non_blocking():
+    current = tx("current", amount="40000", when="20261014120000")
+    history = [
+        tx("prior-1", amount="35000", when="20261014115000"),
+        tx("prior-2", amount="30000", when="20261014115500"),
+    ]
+    decision = assess_transaction(current, history, amount_threshold=100000)
+    assert "cumulative_subthreshold_activity" in decision.rules_triggered
+    assert decision.model_version
+    assert decision.action in {"process", "monitor", "review", "escalate"}
+
+
+def test_missing_transaction_ids_do_not_create_false_duplicate_risk():
+    decision = assess_transaction(
+        {"TransAmount": "1000", "MSISDN": "254700000001"},
+        [{"TransAmount": "1000", "MSISDN": "254700000001"}],
+    )
+    assert "duplicate_activity" not in decision.rules_triggered

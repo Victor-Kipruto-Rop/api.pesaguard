@@ -79,3 +79,23 @@ pytest -q pesaguard_backend_pipeline/tests/test_reconciliation_ambiguity.py
 ```
 
 The full CI suite and staging validation remain required. Synthetic tests demonstrate deterministic behavior, not production accuracy.
+
+
+## Cumulative below-threshold activity and duplicate-identity guard
+
+The fraud rules include a conservative cumulative-activity signal. It evaluates
+only tenant-scoped history with distinct transaction IDs, a matching customer
+identity, valid event timestamps inside the configured trailing window, and
+positive individual amounts below the configured threshold. A signal requires
+the combined amount to reach that threshold and at least the configured minimum
+number of transactions. Missing identity, time, or transaction IDs do not produce
+a positive signal.
+
+This is a screening feature, not a fraud verdict. It does not block payments,
+reverse transactions, or change ledger balances. The caller must scope history
+to the authenticated tenant and configure a threshold appropriate to the product
+and applicable policy. Production deployment still requires labeled-data
+validation, false-positive review, threshold governance, and monitoring before
+the signal is used to change customer outcomes. Missing transaction IDs are no
+longer treated as duplicates merely because both values normalize to the same
+unknown sentinel.
