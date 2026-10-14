@@ -48,6 +48,16 @@ def test_payload_fingerprint_is_stable_but_detects_conflicting_replay():
     assert transaction_payload_fingerprint(original) != transaction_payload_fingerprint(changed)
 
 
+
+def test_payload_fingerprint_preserves_reference_punctuation_and_rejects_invalid_precision():
+    base = {"TransID": "QWE123", "TransAmount": "100.00", "BillRefNumber": "INV-001"}
+    assert transaction_payload_fingerprint(base) != transaction_payload_fingerprint(
+        {**base, "BillRefNumber": "INV001"}
+    )
+    with pytest.raises(ValueError):
+        transaction_payload_fingerprint({**base, "TransAmount": "100.001"})
+
+
 def test_robust_outlier_detection_resists_one_extreme_historical_value():
     baseline = [100, 101, 99, 100, 102, 1000]
     assert robust_amount_zscore(100, baseline) is not None
