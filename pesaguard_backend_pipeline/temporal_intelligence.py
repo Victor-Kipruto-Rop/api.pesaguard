@@ -6,6 +6,7 @@ or label a transaction fraudulent. Callers must pass tenant/account-scoped histo
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from decimal import Decimal, InvalidOperation
 from statistics import median
 from typing import Any, Mapping, Sequence
@@ -136,8 +137,9 @@ def seasonal_amount_anomaly(
     """
     if minimum_samples < 3:
         raise ValueError("minimum_samples must be at least 3")
-    if modified_z_threshold <= 0:
-        raise ValueError("modified_z_threshold must be positive")
+    if (isinstance(modified_z_threshold, bool) or not isinstance(modified_z_threshold, (int, float))
+            or not math.isfinite(float(modified_z_threshold)) or modified_z_threshold <= 0):
+        raise ValueError("modified_z_threshold must be finite and positive")
 
     tenant = str(transaction.get("tenant_id") or "").strip()
     provider = str(transaction.get("provider") or "").strip().casefold()
@@ -161,8 +163,8 @@ def seasonal_amount_anomaly(
     if not tenant or not provider or not account:
         base["reason_codes"].append("tenant_provider_account_scope_required")
         return base
-    if amount is None or event_time is None:
-        base["reason_codes"].append("valid_amount_and_timezone_aware_event_time_required")
+    if amount is None or amount <= 0 or event_time is None:
+        base["reason_codes"].append("positive_amount_and_timezone_aware_event_time_required")
         return base
 
     zone = ZoneInfo(business_timezone)
