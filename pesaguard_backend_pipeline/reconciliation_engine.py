@@ -365,7 +365,7 @@ def _smart_shadow_assessment(
         candidates.append({
             **record,
             "internal_ref": record.get("internal_ref") or record.get("id"),
-            "reference": record.get("reference") or record.get("merchant_ref") or record.get("internal_ref"),
+            "reference": record.get("reference") or record.get("merchant_ref"),
             "amount": record.get("amount"),
             "timestamp": record_time.isoformat() if record_time else None,
             "phone": record.get("phone_number") or record.get("msisdn"),
