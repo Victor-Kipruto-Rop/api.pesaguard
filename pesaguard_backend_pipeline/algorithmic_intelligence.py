@@ -74,8 +74,8 @@ def transaction_payload_fingerprint(payload: Mapping[str, Any]) -> str:
     facts = {
         "transaction_id": str(payload.get("TransID") or payload.get("trans_id")
                                or payload.get("transaction_id") or "").strip(),
-        "reference": normalize_reference(payload.get("BillRefNumber") or payload.get("reference")),
-        "amount_minor_units": amount_to_minor_units(amount) if amount is not None else None,
+        "reference": _canonical_reference(payload.get("BillRefNumber") or payload.get("reference")),
+        "amount_minor_units": _strict_amount_minor_units(amount) if amount is not None else None,
         "currency": str(payload.get("Currency") or payload.get("currency") or "KES").upper().strip(),
         "timestamp": _canonical_timestamp(payload.get("TransTime") or payload.get("timestamp") or payload.get("created_at")),
         "phone": _canonical_phone(payload.get("MSISDN") or payload.get("phone_number") or payload.get("msisdn")),
@@ -633,6 +633,21 @@ def profile_transaction_batch(
         "schema_drift_fields": unknown_fields, "late_event_threshold_seconds": late_after_seconds,
     }
 
+
+
+def _strict_amount_minor_units(value: Any, *, decimal_places: int = 2) -> int:
+    """Convert only valid currency precision; fingerprints must not round invalid facts."""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("amount must be a finite decimal number") from exc
+    if not amount.is_finite():
+        raise ValueError("amount must be a finite decimal number")
+    quantum = Decimal(1).scaleb(-decimal_places)
+    normalized = amount.quantize(quantum, rounding=ROUND_HALF_UP)
+    if amount != normalized:
+        raise ValueError("amount has precision beyond the supported minor unit")
+    return int(normalized.scaleb(decimal_places))
 
 def _canonical_timestamp(value: Any) -> str:
     """Normalize recognized timestamps to UTC; Daraja's compact timestamp is EAT."""
