@@ -29,7 +29,7 @@ logger = logging.getLogger("pesaguard.reconciliation_engine")
 RECONCILIATION_STATUSES = frozenset({
     "MATCHED", "UNMATCHED", "PARTIAL", "MISMATCH", "DUPLICATE", "PENDING", "EXCEPTION",
 })
-ENGINE_VERSION = "phase3.1"
+ENGINE_VERSION = "phase3.2"
 
 
 class ReconciliationEngine:
@@ -116,13 +116,27 @@ class ReconciliationEngine:
 
         tolerant = [record for record in records if self._amount_matches(transaction, record) and self._time_matches(transaction, record)]
         if tolerant:
-            candidate = max(tolerant, key=lambda record: self._score(transaction, record))
-            return self._result("PARTIAL", candidate, ["amount_within_tolerance", "timestamp_within_window"], self._score(transaction, candidate), started, now)
+            ranked = sorted(
+                ((self._score(transaction, record), record) for record in tolerant),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if len(ranked) > 1 and abs(ranked[0][0] - ranked[1][0]) < 0.05:
+                return self._result("EXCEPTION", None, ["ambiguous_candidate_match"], 0.0, started, now)
+            score, candidate = ranked[0]
+            return self._result("PARTIAL", candidate, ["amount_within_tolerance", "timestamp_within_window"], score, started, now)
 
         amount_match = [record for record in records if self._amount_matches(transaction, record)]
         if amount_match:
-            candidate = max(amount_match, key=lambda record: self._score(transaction, record))
-            return self._result("MISMATCH", candidate, ["amount_match", "timestamp_mismatch_or_reference_mismatch"], self._score(transaction, candidate), started, now)
+            ranked = sorted(
+                ((self._score(transaction, record), record) for record in amount_match),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if len(ranked) > 1 and abs(ranked[0][0] - ranked[1][0]) < 0.05:
+                return self._result("EXCEPTION", None, ["ambiguous_candidate_match"], 0.0, started, now)
+            score, candidate = ranked[0]
+            return self._result("MISMATCH", candidate, ["amount_match", "timestamp_mismatch_or_reference_mismatch"], score, started, now)
 
         return self._result("UNMATCHED", None, ["no_matching_candidate"], 0.0, started, now)
 
