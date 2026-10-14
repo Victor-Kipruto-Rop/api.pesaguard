@@ -8,6 +8,8 @@ from algorithmic_intelligence import (
     detect_velocity_spike,
     is_amount_outlier,
     normalize_reference,
+    rank_reconciliation_candidates,
+    detect_window_change,
     robust_amount_deviation,
     robust_amount_zscore,
     score_reconciliation_candidate,
@@ -151,3 +153,39 @@ def test_settlement_variance_is_decomposed_without_silent_adjustment():
     unbalanced = decompose_settlement_variance(expected_gross="1000", actual_net="960", known_fees="20")
     assert unbalanced["status"] == "VARIANCE"
     assert unbalanced["unexplained_variance_minor_units"] == -2000
+
+
+
+def test_candidate_ranking_refuses_equal_scoring_ambiguous_matches():
+    incoming = {"reference": "INV-1", "amount": "10.00"}
+    candidates = [
+        {"reference": "INV-1", "amount": "10.00", "id": "A"},
+        {"reference": "INV-1", "amount": "10.00", "id": "B"},
+    ]
+    result = rank_reconciliation_candidates(incoming, candidates)
+    assert result["status"] == "AMBIGUOUS"
+    assert result["selected"] is None
+
+
+def test_candidate_ranking_selects_only_unambiguous_exact_evidence():
+    incoming = {
+        "reference": "INV-1", "amount": "10.00",
+        "timestamp": "2026-10-14T12:00:00Z", "phone_number": "254700000001",
+    }
+    candidates = [
+        {"reference": "INV-1", "amount": "10.00",
+         "timestamp": "2026-10-14T12:00:01Z", "phone_number": "254700000001", "id": "A"},
+        {"reference": "OTHER", "amount": "11.00",
+         "timestamp": "2026-10-14T12:00:01Z", "phone_number": "254700000002", "id": "B"},
+    ]
+    result = rank_reconciliation_candidates(incoming, candidates)
+    assert result["status"] == "MATCH_CANDIDATE"
+    assert result["selected"]["id"] == "A"
+
+
+def test_window_change_detection_requires_enough_baseline_and_finds_spike():
+    assert detect_window_change([10, 11], [20])["evaluated"] is False
+    result = detect_window_change([10, 11, 10, 9, 10, 10], [20, 21])
+    assert result["evaluated"] is True
+    assert result["changed"] is True
+    assert result["relative_change"] >= 1.0
