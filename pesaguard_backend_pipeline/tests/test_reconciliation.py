@@ -126,6 +126,20 @@ def test_conflicting_business_reference_is_reviewed_not_auto_matched():
     assert result["match"]["match_type"] == "fuzzy_exact"
 
 
+def test_cross_tenant_candidate_is_excluded_and_sent_to_review():
+    event = make_event(trans_id="T-CROSS-TENANT")
+    event["tenant_id"] = "tenant-a"
+    record = make_internal_record(internal_ref="ORD-CROSS-TENANT")
+    record["tenant_id"] = "tenant-b"
+
+    result = evaluate_transaction(event, [record], seen_trans_ids=set())
+
+    assert result["status"] == "needs_review"
+    assert result["match"]["match_type"] == "ambiguous"
+    assert result["match"]["review_reason"] == "candidate_scope_conflict"
+    assert result["match"]["excluded_scope_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
+
+
 
 def test_amount_within_tolerance_is_reviewed_not_auto_matched():
     event = make_event(trans_id="T-TOLERANCE", amount="100.40", phone="254700000000")
