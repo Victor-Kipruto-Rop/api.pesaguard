@@ -43,7 +43,7 @@ The candidate score is evidence, not a probability. A score of 1.0 does not mean
 
 ## Statistical baseline
 
-Daraja compact timestamps (YYYYMMDDHHMMSS) are interpreted as Africa/Nairobi local time and normalized to UTC for cross-format comparison. Naive ISO timestamps continue to be treated as UTC. Risk time-of-day features use Africa/Nairobi local time; do not compare event-time and ingestion-time fields as if they were interchangeable. Risk feature scoring treats established customer history as context rather than a positive risk signal, and rapid amount-change screening is scoped to the same customer within a five-minute window. The rule model remains heuristic, not a calibrated fraud probability. Evaluation reports detection latency only when the caller supplies an event timestamp; decision age is not a latency metric.
+Daraja compact timestamps (YYYYMMDDHHMMSS) are interpreted as Africa/Nairobi local time and normalized to UTC for cross-format comparison across the primary reconciliation engine, transaction-intelligence helpers, risk features, and legacy timestamp utilities. Naive ISO timestamps continue to be treated as UTC; the legacy utility keeps a naive-UTC return type for compatibility. Risk time-of-day features use Africa/Nairobi local time; do not compare event-time and ingestion-time fields as if they were interchangeable. Risk feature scoring treats established customer history as context rather than a positive risk signal, and rapid amount-change screening is scoped to the same customer within a five-minute window. The rule model remains heuristic, not a calibrated fraud probability. Evaluation reports detection latency only when the caller supplies an event timestamp; decision age is not a latency metric.
 
 The modified z-score is:
 
@@ -62,7 +62,7 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 - Change-point detection for sudden shifts in provider error rate, fees, transaction volume or settlement latency.
 - Calibrated risk scoring with precision/recall, false-positive rate, PR-AUC, drift monitoring and human-reviewed labels.
 - Persisted data-quality trend detection for schema drift, late-arriving events, null spikes, invalid currency/amount and provider-specific field changes. The current batch profiler reports a single batch and does not yet persist trends or emit alerts.
-- Settlement variance decomposition: fees, reversals, timing gaps, missing records, duplicate records and amount mismatch.
+- Extend the existing settlement variance helper to classify timing gaps, missing records, duplicate records and amount mismatches using persisted, source-backed evidence.
 - Graph-based related-entity analysis only where lawful, necessary data and validated labels exist.
 
 The bounded settlement subset search and ambiguity-safe selection guard are implemented as review-oriented primitives. Durable settlement workflow integration remains open. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
