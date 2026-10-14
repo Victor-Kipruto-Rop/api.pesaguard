@@ -129,8 +129,9 @@ def test_event_timing_reports_late_future_and_unknown_events():
 
 
 def test_money_algorithms_reject_non_finite_values_and_invalid_originals():
-    with pytest.raises(ValueError):
-        reconcile_settlement_batch([{"TransID": "A", "amount": "NaN"}], [])
+    result = reconcile_settlement_batch([{"TransID": "A", "amount": "NaN"}], [])
+    assert result["status"] == "EXCEPTIONS"
+    assert result["invalid_expected_rows"][0]["reason"] == "invalid_amount"
     with pytest.raises(ValueError):
         assess_reversal_lifecycle(original_transaction_id="", original_amount="10", reversals=[])
     with pytest.raises(ValueError):
