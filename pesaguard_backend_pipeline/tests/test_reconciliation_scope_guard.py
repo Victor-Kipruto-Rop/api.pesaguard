@@ -86,5 +86,5 @@ def test_class_engine_rejects_explicit_scope_conflict_before_matching():
     }
     result = ReconciliationEngine().reconcile(transaction, [record])
     assert result["status"] == "EXCEPTION"
-    assert "candidate_scope_conflict" in result["rules"]
+    assert "candidate_scope_conflict" in result["evidence"]["matching_rules"]
     assert "tenant_scope_conflict" in result["rules"]
