@@ -26,6 +26,13 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 ## Gaps to close before production certification
 
+### Completed in the current safety branch
+
+- Removed synthetic reference evidence: provider transaction IDs and local database row IDs are not merchant references.
+- Missing references fail the automatic-match quality gate.
+- Multiple ledger rows with the same reference are routed to review as ambiguous candidates rather than being counted as duplicate provider payments.
+- Added focused regression tests for these false-match and status-semantics cases; execution remains pending CI/local test evidence.
+
 ### P0 — correctness and financial safety
 
 1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency.
