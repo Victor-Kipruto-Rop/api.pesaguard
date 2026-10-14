@@ -210,3 +210,146 @@ def _timestamp_delta_seconds(left: Any, right: Any) -> float | None:
     if a is None or b is None:
         return None
     return abs((a - b).total_seconds())
+
+
+
+def aggregate_partial_payments(
+    payments: Sequence[Mapping[str, Any]],
+    expected_amount: Any,
+    *,
+    reference: str,
+    currency: str = "KES",
+) -> dict[str, Any]:
+    """Aggregate only payments sharing an explicit normalized reference/currency.
+
+    No combinatorial subset search is performed. An empty or ambiguous reference
+    is rejected; overpayments are surfaced and never silently capped.
+    """
+    target_reference = normalize_reference(reference)
+    if not target_reference:
+        raise ValueError("a non-empty reference is required for partial-payment aggregation")
+    target_currency = str(currency or "KES").upper().strip()
+    target_minor = amount_to_minor_units(expected_amount)
+    selected: list[Mapping[str, Any]] = []
+    seen_ids: set[str] = set()
+    total_minor = 0
+    for payment in payments:
+        payment_reference = normalize_reference(payment.get("BillRefNumber") or payment.get("reference"))
+        payment_currency = str(payment.get("Currency") or payment.get("currency") or "KES").upper().strip()
+        payment_id = str(payment.get("TransID") or payment.get("transaction_id") or "").strip()
+        if payment_reference != target_reference or payment_currency != target_currency:
+            continue
+        if not payment_id:
+            raise ValueError("every aggregated payment must have an external transaction ID")
+        if payment_id in seen_ids:
+            continue
+        seen_ids.add(payment_id)
+        total_minor += amount_to_minor_units(payment.get("TransAmount", payment.get("amount")))
+        selected.append(payment)
+    if total_minor == target_minor:
+        status = "MATCHED"
+    elif total_minor < target_minor:
+        status = "PARTIAL"
+    else:
+        status = "OVERPAID"
+    return {
+        "status": status,
+        "reference": target_reference,
+        "currency": target_currency,
+        "expected_minor_units": target_minor,
+        "received_minor_units": total_minor,
+        "variance_minor_units": total_minor - target_minor,
+        "payment_ids": sorted(seen_ids),
+        "payment_count": len(selected),
+    }
+
+
+def detect_velocity_spike(
+    transaction: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+    *,
+    identity_fields: Sequence[str] = ("MSISDN", "phone_number", "customer_id"),
+    window_seconds: int = 60,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Count prior events for the same identity in a trailing time window."""
+    current_identity = next(
+        (str(transaction.get(key) or "").strip() for key in identity_fields
+         if str(transaction.get(key) or "").strip()),
+        "",
+    )
+    current_time = _parse_datetime(
+        transaction.get("TransTime") or transaction.get("timestamp") or transaction.get("created_at")
+    )
+    if not current_identity or current_time is None:
+        return {"evaluated": False, "triggered": False, "count": 0, "reason": "identity_or_timestamp_missing"}
+    count = 0
+    for item in history:
+        identity = next(
+            (str(item.get(key) or "").strip() for key in identity_fields
+             if str(item.get(key) or "").strip()),
+            "",
+        )
+        timestamp = _parse_datetime(item.get("TransTime") or item.get("timestamp") or item.get("created_at"))
+        if identity != current_identity or timestamp is None:
+            continue
+        delta = (current_time - timestamp).total_seconds()
+        if 0 <= delta <= max(0, int(window_seconds)):
+            count += 1
+    return {
+        "evaluated": True,
+        "triggered": count >= max(1, int(limit)),
+        "count": count,
+        "window_seconds": max(0, int(window_seconds)),
+        "limit": max(1, int(limit)),
+    }
+
+
+def decompose_settlement_variance(
+    *,
+    expected_gross: Any,
+    actual_net: Any,
+    known_fees: Any = "0",
+    known_reversals: Any = "0",
+    known_adjustments: Any = "0",
+) -> dict[str, Any]:
+    """Explain net settlement variance using explicitly supplied components.
+
+    Values use Decimal minor units. The unexplained residual is reported, not
+    auto-adjusted; caller must define sign conventions consistently.
+    """
+    expected = amount_to_minor_units(expected_gross)
+    actual = amount_to_minor_units(actual_net)
+    fees = amount_to_minor_units(known_fees)
+    reversals = amount_to_minor_units(known_reversals)
+    adjustments = amount_to_minor_units(known_adjustments)
+    explained_net = expected - fees - reversals + adjustments
+    residual = actual - explained_net
+    return {
+        "expected_gross_minor_units": expected,
+        "actual_net_minor_units": actual,
+        "known_fees_minor_units": fees,
+        "known_reversals_minor_units": reversals,
+        "known_adjustments_minor_units": adjustments,
+        "explained_net_minor_units": explained_net,
+        "unexplained_variance_minor_units": residual,
+        "status": "BALANCED" if residual == 0 else "VARIANCE",
+    }
+
+
+def _parse_datetime(value: Any):
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value or "").strip()
+    if len(text) == 14 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
