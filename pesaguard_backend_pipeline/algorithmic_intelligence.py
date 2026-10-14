@@ -274,7 +274,8 @@ def find_unique_exact_subset(
         "target_minor_units": target_minor, "currency": expected_currency,
         "candidate_count": len(rows), "solution_count_capped": min(len(solutions), 2),
         "reason_codes": reasons,
-        "requires_human_or_policy_approval": status != "MATCH_CANDIDATE",
+        "requires_human_or_policy_approval": True,
+        "requires_manual_review": status != "MATCH_CANDIDATE",
     }
 
 

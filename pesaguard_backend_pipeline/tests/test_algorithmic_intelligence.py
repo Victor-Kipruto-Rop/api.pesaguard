@@ -110,7 +110,8 @@ def test_exact_subset_settlement_matching_requires_unique_solution():
         {"TransID": "P3", "amount": "20.00"}], "100.00")
     assert result["status"] == "MATCH_CANDIDATE"
     assert set(result["selected_transaction_ids"]) == {"P1", "P2"}
-    assert result["requires_human_or_policy_approval"] is False
+    assert result["requires_human_or_policy_approval"] is True
+    assert result["requires_manual_review"] is False
 
 
 def test_exact_subset_refuses_ambiguous_and_unbounded_matches():
@@ -121,6 +122,7 @@ def test_exact_subset_refuses_ambiguous_and_unbounded_matches():
     assert ambiguous["status"] == "AMBIGUOUS"
     assert ambiguous["selected_transaction_ids"] == []
     assert ambiguous["requires_human_or_policy_approval"] is True
+    assert ambiguous["requires_manual_review"] is True
     bounded = find_unique_exact_subset([{"TransID": f"P{i}", "amount": "1"} for i in range(19)], "10", max_candidates=18)
     assert bounded["status"] == "REVIEW_REQUIRED"
 
