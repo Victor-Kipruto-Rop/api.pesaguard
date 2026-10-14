@@ -43,7 +43,7 @@ logger = logging.getLogger("pesaguard.reconciliation_engine")
 RECONCILIATION_STATUSES = frozenset({
     "MATCHED", "UNMATCHED", "PARTIAL", "MISMATCH", "DUPLICATE", "PENDING", "EXCEPTION",
 })
-ENGINE_VERSION = "phase3.2"
+ENGINE_VERSION = "phase3.3"
 
 
 class ReconciliationEngine:
