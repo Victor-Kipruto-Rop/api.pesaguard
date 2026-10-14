@@ -77,13 +77,57 @@ def test_candidate_scoring_only_auto_matches_complete_exact_evidence():
     assert "reference_exact" in ambiguous_or_partial["reason_codes"]
 
 
-def test_candidate_scoring_does_not_assume_missing_time_is_proof_of_match():
+def test_candidate_scoring_requires_timestamp_evidence_for_auto_match():
     result = score_reconciliation_candidate(
         {"reference": "A", "amount": "10.00"},
         {"reference": "A", "amount": "10.00"},
     )
-    assert result["auto_matchable"] is True
+    assert result["auto_matchable"] is False
     assert result["evidence"]["time_delta_seconds"] is None
+    assert result["evidence"]["time_evidence_available"] is False
+    assert "timestamp_evidence_missing" in result["reason_codes"]
+
+
+def test_candidate_scoring_rejects_stale_timestamps_and_conflicting_phone():
+    incoming = {
+        "reference": "A", "amount": "10.00",
+        "timestamp": "2026-10-14T12:00:00Z", "phone_number": "254700000001",
+    }
+    stale = score_reconciliation_candidate(
+        incoming,
+        {"reference": "A", "amount": "10.00",
+         "timestamp": "2026-10-14T12:45:00Z", "phone_number": "254700000001"},
+        window_seconds=900,
+    )
+    assert stale["auto_matchable"] is False
+    assert "timestamp_outside_window" in stale["reason_codes"]
+
+    phone_conflict = score_reconciliation_candidate(
+        incoming,
+        {"reference": "A", "amount": "10.00",
+         "timestamp": "2026-10-14T12:01:00Z", "phone_number": "254700000002"},
+        window_seconds=900,
+    )
+    assert phone_conflict["auto_matchable"] is False
+    assert "phone_conflict" in phone_conflict["reason_codes"]
+
+
+def test_candidate_score_does_not_reward_missing_phone_evidence():
+    incoming = {
+        "reference": "A", "amount": "10.00",
+        "timestamp": "2026-10-14T12:00:00Z",
+    }
+    no_phone = score_reconciliation_candidate(
+        incoming, {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:01Z"}
+    )
+    matching_phone = score_reconciliation_candidate(
+        {**incoming, "phone_number": "254700000001"},
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:01Z",
+         "phone_number": "254700000001"},
+    )
+    assert no_phone["score"] == matching_phone["score"] == 1.0
+    assert no_phone["evidence"]["phone_evidence_available"] is False
+    assert matching_phone["evidence"]["phone_evidence_available"] is True
 
 
 def test_fraud_features_use_robust_baseline_when_history_is_sufficient():
