@@ -590,7 +590,11 @@ def _find_best_match(
         return None
 
     phone = str(event.get("MSISDN") or event.get("phone_number") or "").strip()
-    event_time = _parse_event_time(event.get("TransTime"))
+    event_time = _parse_event_time(event.get("TransTime") or event.get("timestamp"))
+    event_reference = str(
+        event.get("BillRefNumber") or event.get("reference")
+        or event.get("transaction_reference") or event.get("tx_ref") or ""
+    ).strip()
     allowed_delta = max(Decimal("0.01"), abs(amount) * (tolerance_percent / Decimal("100")))
 
     candidates = []
@@ -613,8 +617,17 @@ def _find_best_match(
 
         record_phone = str(record.get("phone_number") or record.get("msisdn") or "").strip()
         phone_matches = record_phone == phone and len(phone) > 0
+        record_reference = str(
+            record.get("BillRefNumber") or record.get("reference")
+            or record.get("merchant_ref") or record.get("transaction_reference") or ""
+        ).strip()
+        reference_matches = bool(
+            event_reference and record_reference and event_reference == record_reference
+        )
 
-        if phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
+        # Exact amount + phone + timestamp is not sufficient to identify an
+        # order. Require an explicit business-reference match for auto-match.
+        if reference_matches and phone_matches and amt_diff == 0 and event_time is not None and record_time is not None:
             match_type = "exact"
         elif phone_matches and amt_diff <= allowed_delta:
             # Includes near-amount matches and exact amounts without timestamp
