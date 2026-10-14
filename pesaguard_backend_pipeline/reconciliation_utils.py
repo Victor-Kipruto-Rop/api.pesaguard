@@ -51,8 +51,18 @@ def parse_daraja_time(value: str) -> Optional[datetime]:
 
 
 def _get_reference(record: Dict) -> Optional[str]:
-    """Extract a canonical reference from a record."""
-    for k in ("TransID", "reference", "transaction_reference", "tx_ref", "merchant_ref", "checkoutRequestID"):
+    """Extract an explicit business/payment reference, never provider identity."""
+    for k in (
+        "BillRefNumber",
+        "bill_ref_number",
+        "reference",
+        "transaction_reference",
+        "tx_ref",
+        "merchant_ref",
+        "AccountReference",
+        "account_reference",
+        "checkoutRequestID",
+    ):
         v = record.get(k)
         if v:
             return str(v).strip()
