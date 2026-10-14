@@ -26,21 +26,27 @@ def test_normalize_daraja_flat_c2b():
     assert n["timestamp"] == datetime(2024, 1, 1, 9, 30, 45)
 
 
-def test_exact_match_by_reference_and_amount():
-    tx = {"TransID": "REF-1", "TransAmount": "100.00"}
+def test_exact_match_requires_explicit_business_reference_and_amount():
+    tx = {"BillRefNumber": "REF-1", "TransID": "PROVIDER-1", "TransAmount": "100.00"}
     s = {"reference": "REF-1", "amount": 100}
     assert exact_match(tx, s)
 
 
+def test_provider_transaction_id_is_not_a_business_reference():
+    tx = {"TransID": "PROVIDER-1", "TransAmount": "100.00"}
+    s = {"reference": "PROVIDER-1", "amount": 100}
+    assert not exact_match(tx, s)
+
+
 def test_time_window_match_by_ref_and_time():
     now = datetime.utcnow()
-    tx = {"TransID": "R1", "TransTime": now.strftime("%Y%m%d%H%M%S"), "TransAmount": "10"}
+    tx = {"BillRefNumber": "R1", "TransID": "PROVIDER-1", "TransTime": now.strftime("%Y%m%d%H%M%S"), "TransAmount": "10"}
     settlements = [
-        {"TransID": "R1", "TransTime": (now + timedelta(seconds=10)).strftime("%Y%m%d%H%M%S"), "TransAmount": 10},
-        {"TransID": "R2", "TransTime": now.strftime("%Y%m%d%H%M%S"), "TransAmount": 5},
+        {"reference": "R1", "TransTime": (now + timedelta(seconds=10)).strftime("%Y%m%d%H%M%S"), "TransAmount": 10},
+        {"reference": "R2", "TransTime": now.strftime("%Y%m%d%H%M%S"), "TransAmount": 5},
     ]
     matched = time_window_match(tx, settlements, window_seconds=60)
-    assert matched is not None and (matched.get("TransID") == "R1" or matched.get("reference") == "R1")
+    assert matched is not None and matched.get("reference") == "R1"
 
 
 def test_validate_signature_hex():
@@ -51,9 +57,9 @@ def test_validate_signature_hex():
 
 
 def test_daraja_and_iso_timestamps_compare_in_utc():
-    compact = {"TransID": "R-UTC", "TransTime": "20240101123045", "TransAmount": "10"}
+    compact = {"BillRefNumber": "R-UTC", "TransID": "PROVIDER-UTC", "TransTime": "20240101123045", "TransAmount": "10"}
     utc_record = {
-        "TransID": "R-UTC", "timestamp": "2024-01-01T09:30:55Z", "TransAmount": "10"
+        "reference": "R-UTC", "timestamp": "2024-01-01T09:30:55Z", "TransAmount": "10"
     }
     matched = time_window_match(compact, [utc_record], window_seconds=60)
     assert matched is utc_record
