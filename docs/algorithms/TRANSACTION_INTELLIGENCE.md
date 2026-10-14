@@ -11,7 +11,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Algorithm | Purpose | Guardrail |
 |---|---|---|
 | Decimal-to-minor-unit conversion | Compare money without binary floating-point equality errors | Decimal rounding is explicit; callers must use the correct currency precision |
-| Canonical reference normalization | Reduce case, Unicode normalization, spaces and punctuation differences | Never manufactures a missing reference |
+| Canonical reference normalization | Reduce case, Unicode normalization, spaces and punctuation differences for grouping and candidate hints | Punctuation-only similarity is not sufficient for automatic matching; missing references remain missing |
 | Tenant/provider-scoped transaction identity | Build a stable deduplication key from tenant, provider and external transaction ID | Refuses missing identity fields; does not deduplicate by amount/time alone |
 | Canonical payload fingerprint | Detect a conflicting replay where the same transaction ID carries changed facts | Separate from identity: changed amount/reference deliberately changes the fingerprint |
 | Median/MAD modified z-score | Detect amount outliers despite a few extreme historical values | Requires at least five samples; not a fraud verdict |
@@ -27,7 +27,7 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 
 1. Normalize and validate the source event.
 2. Check tenant/provider-scoped external identity and replay fingerprints.
-3. Prefer exact external reference and exact amount evidence.
+3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
 4. Use time and phone consistency as corroborating signals.
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
 6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
