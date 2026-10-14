@@ -159,8 +159,8 @@ def score_reconciliation_candidate(
     delta_seconds = _timestamp_delta_seconds(incoming_time, candidate_time)
     # Missing timestamps are unknown evidence, not proof that the events are close.
     time_ok = delta_seconds is not None and delta_seconds <= max(0, int(window_seconds))
-    incoming_phone = re.sub(r"[^0-9]", "", str(incoming.get("MSISDN") or incoming.get("phone_number") or ""))
-    candidate_phone = re.sub(r"[^0-9]", "", str(candidate.get("phone_number") or candidate.get("MSISDN") or ""))
+    incoming_phone = _canonical_phone(incoming.get("MSISDN") or incoming.get("phone_number"))
+    candidate_phone = _canonical_phone(candidate.get("phone_number") or candidate.get("MSISDN"))
     phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
 
     evidence = {
