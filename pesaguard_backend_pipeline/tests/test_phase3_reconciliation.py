@@ -25,7 +25,7 @@ def transaction(transaction_id, amount="100.00", timestamp="20260913120000", **e
     return value
 
 
-def record(transaction_id, amount="100.00", timestamp="2026-09-13T12:00:00Z", **extra):
+def record(transaction_id, amount="100.00", timestamp="2026-09-13T09:00:00Z", **extra):
     value = {
         "internal_ref": f"order-{transaction_id}",
         "amount": amount,
@@ -39,7 +39,7 @@ def record(transaction_id, amount="100.00", timestamp="2026-09-13T12:00:00Z", **
 def test_golden_dataset_is_100_percent_correct():
     fixture_path = Path(__file__).parent / "fixtures" / "phase3_golden_dataset.json"
     cases = json.loads(fixture_path.read_text(encoding="utf-8"))
-    base_time = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    base_time = datetime(2026, 9, 13, 9, 0, tzinfo=timezone.utc)
 
     prepared = []
     for case in cases:
@@ -51,7 +51,7 @@ def test_golden_dataset_is_100_percent_correct():
         record_kwargs = {}
         if case.get("original_transaction_id"):
             record_kwargs["original_transaction_id"] = case["original_transaction_id"]
-        raw = transaction(case["transaction_id"], amount=case["amount"], timestamp=event_time.strftime("%Y%m%d%H%M%S"), **event_kwargs)
+        raw = transaction(case["transaction_id"], amount=case["amount"], timestamp=(event_time + timedelta(hours=3)).strftime("%Y%m%d%H%M%S"), **event_kwargs)
         records = [] if case["record_amount"] is None else [record(case["transaction_id"], amount=case["record_amount"], timestamp=record_time.isoformat().replace("+00:00", "Z"), **record_kwargs)]
         prepared.append((case["name"], raw, records, case["expected_status"]))
     results = [
@@ -84,7 +84,7 @@ def test_invalid_input_is_exception_and_pending_candidate_is_not_silent():
 
     pending = ENGINE.reconcile(
         transaction("pending", amount="100.00"),
-        [{"internal_ref": "order-pending", "amount": "100.00", "timestamp": "2026-09-13T12:00:00Z"}],
+        [{"internal_ref": "order-pending", "amount": "100.00", "timestamp": "2026-09-13T09:00:00Z"}],
     )
     assert pending["status"] == "MATCHED"
     assert pending["evidence"]["matched_record"]["internal_ref"] == "order-pending"

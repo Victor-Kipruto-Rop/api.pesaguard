@@ -10,7 +10,8 @@ Designed to be dependency-light (stdlib only).
 """
 from __future__ import annotations
 from typing import Dict, Iterable, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import logging
 import re
 
@@ -20,30 +21,31 @@ DAR_A_TIME_RE = re.compile(r"^\d{14}$")  # YYYYMMDDHHMMSS
 
 
 def parse_daraja_time(value: str) -> Optional[datetime]:
-    """Parse Daraja timestamp formats like YYYYMMDDHHMMSS or ISO-8601 strings.
-    Returns naive UTC datetime on success, None on failure.
+    """Parse timestamps and return naive UTC for legacy caller compatibility.
+
+    Daraja's compact YYYYMMDDHHMMSS timestamp represents Africa/Nairobi local
+    time. ISO timestamps with offsets are converted to UTC; naive ISO values are
+    treated as UTC. Returning naive UTC is retained for existing helper callers.
     """
     if not value:
         return None
+    if isinstance(value, datetime):
+        parsed = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
     if isinstance(value, str):
         val = value.strip()
         if DAR_A_TIME_RE.match(val):
             try:
-                return datetime(
-                    int(val[0:4]),
-                    int(val[4:6]),
-                    int(val[6:8]),
-                    int(val[8:10]),
-                    int(val[10:12]),
-                    int(val[12:14]),
-                )
-            except Exception:
+                local = datetime.strptime(val, "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Africa/Nairobi"))
+                return local.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
                 return None
-        # ISO fallback
         try:
-            # Replace trailing Z -> +00:00 for fromisoformat
-            return datetime.fromisoformat(val.replace("Z", "+00:00")).astimezone(tz=None).replace(tzinfo=None)
-        except Exception:
+            parsed = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
             return None
     return None
 
@@ -78,7 +80,7 @@ def _get_timestamp(record: Dict) -> Optional[datetime]:
             continue
         # If it's already a datetime, return it (caller must ensure timezone handling)
         if isinstance(v, datetime):
-            return v
+            return v.astimezone(timezone.utc).replace(tzinfo=None) if v.tzinfo else v
         # Parse known Daraja format or ISO
         parsed = parse_daraja_time(str(v))
         if parsed:

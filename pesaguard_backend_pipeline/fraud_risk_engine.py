@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import math
 from statistics import mean, pstdev
 from typing import Any, Iterable, Mapping, Sequence
 
-MODEL_VERSION = "fraud-rules-v1"
+MODEL_VERSION = "fraud-rules-v2"
 RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
 
@@ -71,9 +73,10 @@ class RiskDecision:
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return default
+    return number if math.isfinite(number) else default
 
 
 def _timestamp(transaction: Mapping[str, Any]) -> datetime | None:
@@ -83,7 +86,7 @@ def _timestamp(transaction: Mapping[str, Any]) -> datetime | None:
     text = str(value or "").strip()
     if len(text) == 14 and text.isdigit():
         try:
-            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Africa/Nairobi"))
         except ValueError:
             return None
     try:
@@ -137,8 +140,11 @@ def calculate_features(
     customer_baseline = _number(baseline.get("customer_mean_amount"), mean([_number(item.get("TransAmount") or item.get("amount")) for item in customer_history]) if customer_history else mean_amount)
     customer_history_score = min(len(customer_history) / 20.0, 1.0)
     tenant_baseline_score = min(abs(amount - mean_amount) / max(mean_amount, 1.0), 5.0) / 5.0
-    hour = current_time.hour if current_time else 12
-    time_pattern = 1.0 if hour < 5 or hour >= 23 else 0.0
+    # Daraja's compact TransTime is East Africa Time. Convert aware ISO
+    # timestamps to the same business timezone before applying local-hour rules.
+    local_time = current_time.astimezone(ZoneInfo("Africa/Nairobi")) if current_time else None
+    hour = local_time.hour if local_time else 12
+    time_pattern = 1.0 if local_time and (hour < 5 or hour >= 23) else 0.0
     return FraudFeatures(
         transaction_frequency=min(frequency, 1.0),
         amount_deviation=amount_deviation,
@@ -163,7 +169,19 @@ def evaluate_rules(
     transaction_id = _identity(transaction, "TransID", "trans_id", "transaction_id")
     duplicate = any(_identity(item, "TransID", "trans_id", "transaction_id") == transaction_id for item in history)
     amount = features.amount
-    rapid_changes = len({round(_number(item.get("TransAmount") or item.get("amount")), 2) for item in history[-5:]}) >= 4
+    customer_id = _identity(transaction, "MSISDN", "customer_id", "customer")
+    current_time = _timestamp(transaction)
+    recent_customer_amounts = []
+    if customer_id != "unknown" and current_time is not None:
+        for item in history:
+            item_customer = _identity(item, "MSISDN", "customer_id", "customer")
+            item_time = _timestamp(item)
+            if item_customer != customer_id or item_time is None:
+                continue
+            age_seconds = (current_time - item_time).total_seconds()
+            if 0 <= age_seconds <= 300:
+                recent_customer_amounts.append(round(_number(item.get("TransAmount") or item.get("amount")), 2))
+    rapid_changes = len(set(recent_customer_amounts[-5:])) >= 4
     return (
         RuleResult("velocity", features.velocity * 5 >= velocity_limit, 0.30, "transaction velocity exceeded the configured limit"),
         RuleResult("amount_threshold", amount > amount_threshold, 0.20, "transaction amount exceeded the tenant threshold"),
@@ -196,6 +214,10 @@ def assess_transaction(
     amount_threshold: float = 150_000.0,
     velocity_limit: float = 5.0,
 ) -> RiskDecision:
+    if not math.isfinite(float(amount_threshold)) or amount_threshold < 0:
+        raise ValueError("amount_threshold must be a finite non-negative number")
+    if not math.isfinite(float(velocity_limit)) or velocity_limit <= 0:
+        raise ValueError("velocity_limit must be a finite positive number")
     features = calculate_features(transaction, history, tenant_baseline)
     rules = evaluate_rules(transaction, features, history, amount_threshold=amount_threshold, velocity_limit=velocity_limit)
     feature_score = (
@@ -203,7 +225,9 @@ def assess_transaction(
         + features.velocity * 0.25
         + features.tenant_baseline * 0.20
         + features.time_pattern * 0.10
-        + min(features.customer_history, 1.0) * 0.10
+        # Established history is context, not a reason to increase suspicion.
+        # This contribution represents uncertainty for a new/unknown customer.
+        + (1.0 - min(features.customer_history, 1.0)) * 0.10
     )
     rule_score = sum(rule.weight for rule in rules if rule.triggered)
     score = round(min(1.0, max(feature_score, rule_score) + min(feature_score * rule_score, 0.25)), 4)
@@ -239,12 +263,21 @@ def persist_assessment(session: Any, tenant_id: str, transaction_id: str, decisi
     return assessment
 
 
-def evaluate_predictions(predictions: Iterable[tuple[RiskDecision, bool]]) -> dict[str, float]:
-    """Measure precision, recall, FP/FN counts, and average detection latency."""
+def evaluate_predictions(
+    predictions: Iterable[tuple[RiskDecision, bool] | tuple[RiskDecision, bool, datetime]],
+) -> dict[str, Any]:
+    """Measure classification metrics and latency only when event time is supplied.
+
+    Accepted rows are (decision, actual_fraud) or
+    (decision, actual_fraud, event_time). A decision's age is not detection
+    latency, so latency is left null when the source event time is unavailable.
+    """
     rows = list(predictions)
     true_positive = false_positive = false_negative = true_negative = 0
     latencies: list[float] = []
-    for decision, actual_fraud in rows:
+    for row in rows:
+        decision, actual_fraud = row[0], row[1]
+        event_time = row[2] if len(row) >= 3 else None
         predicted = decision.risk_level in {"HIGH", "CRITICAL"}
         if predicted and actual_fraud:
             true_positive += 1
@@ -254,13 +287,18 @@ def evaluate_predictions(predictions: Iterable[tuple[RiskDecision, bool]]) -> di
             false_negative += 1
         else:
             true_negative += 1
-        latency = (datetime.now(timezone.utc) - decision.detected_at).total_seconds() * 1000
-        latencies.append(max(0.0, latency))
+        if isinstance(event_time, datetime):
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=timezone.utc)
+            latency_ms = (decision.detected_at - event_time.astimezone(timezone.utc)).total_seconds() * 1000
+            if latency_ms >= 0:
+                latencies.append(latency_ms)
     return {
         "precision": true_positive / max(true_positive + false_positive, 1),
         "recall": true_positive / max(true_positive + false_negative, 1),
         "false_positives": float(false_positive),
         "false_negatives": float(false_negative),
         "true_negatives": float(true_negative),
-        "detection_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
+        "detection_latency_ms": sum(latencies) / len(latencies) if latencies else None,
+        "latency_sample_count": float(len(latencies)),
     }

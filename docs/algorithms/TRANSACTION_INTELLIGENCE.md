@@ -18,26 +18,32 @@ Implementation lives in `pesaguard_backend_pipeline/algorithmic_intelligence.py`
 | Same-reference partial-payment aggregation | Sum multiple identified payments against one expected amount | Requires explicit reference and transaction IDs; duplicate IDs count once; overpayment is surfaced |
 | Trailing-window velocity detector | Count recent events for the same identity | Requires identity and timestamp; does not treat future-dated events as recent |
 | Settlement variance decomposition | Explain expected gross vs actual net using known fees, reversals and adjustments | Uses explicit sign conventions; residual is surfaced, never posted automatically |
-| Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Does not select between competing candidates; callers must send ambiguous cases to review |
+| Conservative candidate evidence score | Explain reference, amount, time and phone evidence | Missing phone data is neutral, conflicting phone data blocks auto-match, missing timestamps fail closed; callers must send ambiguous cases to review |
 | Ambiguity-safe candidate ranking | Sort candidate evidence and detect a low score margin | Refuses automatic selection for near-ties or non-exact evidence |
 | Window-change detection | Detect median shifts in numeric windows, such as volume or latency | Requires a minimum baseline; monitoring signal only, not fraud attribution |
-| Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback and existing policy thresholds |
+| Robust fraud feature | Uses the robust amount deviation score when baseline history is sufficient | Keeps the previous small-sample fallback; risk thresholds remain uncalibrated until labelled data is reviewed |
+| Replay classification | Distinguishes new events, identical replays and changed-payload replays within tenant/provider/account scope | Pure decision helper; database uniqueness and atomic writes remain authoritative |
+| Reversal amount validation | Checks original-reference linkage and cumulative reversal amount | Caller must supply only confirmed reversals from a tenant/account-scoped query; no ledger posting is performed |
+| Transaction batch quality profile | Counts missing fields, invalid amounts/timestamps, duplicate IDs, future/late events and unknown fields | Observability signal only; never silently drops or rewrites source rows |
+| Bounded exact settlement subset search | Finds a unique set of scoped candidate transactions whose minor-unit sum equals a settlement target | Candidate count is capped; ambiguous/no-solution/invalid inputs go to review; even a unique result is not a confirmed match or ledger posting |
 
 ## Matching policy
 
 1. Normalize and validate the source event.
 2. Check tenant/provider-scoped external identity and replay fingerprints.
 3. Prefer exact external reference (preserving punctuation) and exact amount evidence; normalized-only reference similarity is review evidence, not an automatic match.
-4. Use time and phone consistency as corroborating signals.
+4. Use time and phone consistency as corroborating signals. Missing time evidence is unknown, not a successful time-window check.
 5. Never auto-match a candidate solely because amount and timestamp happen to be similar.
-6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review.
+6. If multiple candidates are plausible, candidate ranking is ambiguous, required identity is missing, or source facts conflict, create an exception for review. The reconciliation engine returns an exception rather than selecting between top tolerant/amount-only candidates whose scores differ by less than 0.05.
 7. Reconciliation detects discrepancies; it must not silently edit ledger balances or manufacture adjustment postings.
 
-Partial-payment aggregation, velocity screening and settlement variance decomposition are reusable primitives; they do not currently replace the existing reconciliation lifecycle or create ledger postings. Callers must wire them into the relevant workflow with tenant scoping and persistence before presenting them as end-to-end product features.
+Partial-payment aggregation, velocity screening, settlement variance decomposition, replay classification, reversal validation and batch quality profiling are deterministic primitives. They do not by themselves provide end-to-end durable workflows. Before claiming a production capability, callers must wire them into tenant-scoped persistence, enforce database uniqueness/locking, add audit evidence and operational alerts, and test recovery from partial failure.
 
 The candidate score is evidence, not a probability. A score of 1.0 does not mean a calibrated 100% probability of correctness.
 
 ## Statistical baseline
+
+Daraja compact timestamps (YYYYMMDDHHMMSS) are interpreted as Africa/Nairobi local time and normalized to UTC for cross-format comparison across the primary reconciliation engine, transaction-intelligence helpers, risk features, and legacy timestamp utilities. Naive ISO timestamps continue to be treated as UTC; the legacy utility keeps a naive-UTC return type for compatibility. Risk time-of-day features use Africa/Nairobi local time; do not compare event-time and ingestion-time fields as if they were interchangeable. Risk feature scoring treats established customer history as context rather than a positive risk signal, and rapid amount-change screening is scoped to the same customer within a five-minute window. The rule model remains heuristic, not a calibrated fraud probability. Evaluation reports detection latency only when the caller supplies an event timestamp; decision age is not a latency metric.
 
 The modified z-score is:
 
@@ -48,18 +54,18 @@ When MAD is zero, a conservative scale floor is used to avoid division by zero. 
 ## Next algorithms to add after data contracts and ground truth are verified
 
 - One-to-many and many-to-one settlement matching using explicit batch/settlement identifiers and amount conservation.
-- Partial-payment aggregation with exact sum constraints and bounded search; never use unbounded subset-sum on a production request.
-- Reversal/refund lifecycle graph linked to the original external transaction.
+- Integrate bounded exact subset results into the persisted settlement lifecycle with tenant-scoped retrieval, approvals, audit history, and safe retry semantics.
+- Persistent reversal/refund lifecycle graph linked to the original external transaction. The current reversal validator is a pure helper; the provider-confirmed lifecycle and database transaction still need integration.
 - Temporal/bi-temporal reconciliation using event time, settlement time and ingestion time separately.
-- Duplicate-window and conflicting-replay detection backed by database uniqueness constraints.
+- Persistence-level conflicting-replay handling backed by database uniqueness constraints, payload-fingerprint storage, and an audited operator workflow. The current replay classifier is a pure helper and must be wired into the durable ingestion transaction.
 - Merchant/customer peer-group baselines, day-of-week and hour-of-day seasonality, and robust rolling windows.
 - Change-point detection for sudden shifts in provider error rate, fees, transaction volume or settlement latency.
 - Calibrated risk scoring with precision/recall, false-positive rate, PR-AUC, drift monitoring and human-reviewed labels.
-- Data-quality anomaly detection for schema drift, late-arriving events, null spikes, invalid currency/amount and provider-specific field changes.
-- Settlement variance decomposition: fees, reversals, timing gaps, missing records, duplicate records and amount mismatch.
+- Persisted data-quality trend detection for schema drift, late-arriving events, null spikes, invalid currency/amount and provider-specific field changes. The current batch profiler reports a single batch and does not yet persist trends or emit alerts.
+- Extend the existing settlement variance helper to classify timing gaps, missing records, duplicate records and amount mismatches using persisted, source-backed evidence.
 - Graph-based related-entity analysis only where lawful, necessary data and validated labels exist.
 
-These are not claimed as implemented by this change. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
+The bounded settlement subset search and ambiguity-safe selection guard are implemented as review-oriented primitives. Durable settlement workflow integration remains open. Do not enable unsupervised auto-blocking or auto-adjustments based on anomaly scores alone.
 
 ## Validation
 
@@ -69,6 +75,7 @@ Run from the repository root with the project virtual environment active:
 export PYTHONPATH=pesaguard_backend_pipeline
 pytest -q pesaguard_backend_pipeline/tests/test_algorithmic_intelligence.py
 pytest -q pesaguard_backend_pipeline/tests/test_fraud_risk_engine.py
+pytest -q pesaguard_backend_pipeline/tests/test_reconciliation_ambiguity.py
 ```
 
 The full CI suite and staging validation remain required. Synthetic tests demonstrate deterministic behavior, not production accuracy.
