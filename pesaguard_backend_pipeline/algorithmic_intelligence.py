@@ -155,7 +155,8 @@ def score_reconciliation_candidate(
     incoming_time = incoming.get("TransTime") or incoming.get("timestamp")
     candidate_time = candidate.get("timestamp") or candidate.get("created_at")
     delta_seconds = _timestamp_delta_seconds(incoming_time, candidate_time)
-    time_ok = delta_seconds is None or delta_seconds <= max(0, int(window_seconds))
+    # Missing timestamps are unknown evidence, never proof of temporal consistency.
+    time_ok = delta_seconds is not None and delta_seconds <= max(0, int(window_seconds))
     incoming_phone = re.sub(r"[^0-9]", "", str(incoming.get("MSISDN") or incoming.get("phone_number") or ""))
     candidate_phone = re.sub(r"[^0-9]", "", str(candidate.get("phone_number") or candidate.get("MSISDN") or ""))
     phone_ok = not incoming_phone or not candidate_phone or incoming_phone == candidate_phone
