@@ -84,7 +84,7 @@ def test_invalid_input_is_exception_and_pending_candidate_is_not_silent():
 
     pending = ENGINE.reconcile(
         transaction("pending", amount="100.00"),
-        [{"internal_ref": "order-pending", "amount": "100.00", "timestamp": "2026-09-13T12:00:00Z"}],
+        [{"internal_ref": "order-pending", "amount": "100.00", "timestamp": "2026-09-13T09:00:00Z"}],
     )
     assert pending["status"] == "MATCHED"
     assert pending["evidence"]["matched_record"]["internal_ref"] == "order-pending"
