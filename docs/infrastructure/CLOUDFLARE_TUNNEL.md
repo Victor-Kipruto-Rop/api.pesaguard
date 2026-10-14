@@ -7,7 +7,7 @@ outbound from the host, so the host does not need a public IPv4 address.
 
 1. In Cloudflare Zero Trust, create a tunnel and copy its tunnel token.
 2. Add a public hostname:
-   - Hostname: `api.pesaguard.victorkipruto.com`
+   - Hostname: `api.pesaguard.co.ke`
    - Service: `http://nginx:8080`
 3. Do not create an A record for `api.pesaguard`. Cloudflare creates the tunnel
    CNAME target automatically.

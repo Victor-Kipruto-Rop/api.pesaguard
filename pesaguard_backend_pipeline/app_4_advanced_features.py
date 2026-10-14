@@ -666,7 +666,7 @@ def _resolve_oidc_provider(tenant_id: Optional[str] = None, issuer: Optional[str
             provider = query.filter(OIDCProvider.tenant_id == candidate_tenant).order_by(OIDCProvider.created_at.desc()).first()
             if provider:
                 return provider
-        env_issuer = os.getenv("OIDC_ISSUER") or (request.url_root.rstrip("/") if request.url_root else "https://api.pesaguard.victorkipruto.com")
+        env_issuer = os.getenv("OIDC_ISSUER") or (request.url_root.rstrip("/") if request.url_root else "https://api.pesaguard.co.ke")
         provider = query.filter(OIDCProvider.issuer == env_issuer).order_by(OIDCProvider.created_at.desc()).first()
         if provider:
             return provider
@@ -4063,7 +4063,7 @@ def oidc_config_route():
         finally:
             session.close()
     if provider is None:
-        issuer = os.getenv("OIDC_ISSUER") or (request.url_root.rstrip("/") or "https://api.pesaguard.victorkipruto.com")
+        issuer = os.getenv("OIDC_ISSUER") or (request.url_root.rstrip("/") or "https://api.pesaguard.co.ke")
         base_url = issuer.rstrip("/")
     else:
         base_url = provider.issuer.rstrip("/")

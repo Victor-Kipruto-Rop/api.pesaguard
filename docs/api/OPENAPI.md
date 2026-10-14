@@ -10,6 +10,10 @@ This document defines the role of **Openapi** within PesaGuard. It provides a du
 
 PesaGuard currently runs a Flask and SQLAlchemy backend with PostgreSQL as the production store, Redis and RQ for asynchronous work, Kafka for event transport, and Alembic for schema migration. M-Pesa/Daraja is the active payment scope. Capabilities described here must be marked as implemented, in progress, or planned rather than implied.
 
+## Snapshot freshness
+
+The checked-in `docs/api/openapi.implemented.json` is stale pending regeneration: its source stamp points to backend commit `8c50cad38e5176aec2513a6ef4584493364a1d42`, not current `main`. It may omit routes added after that snapshot. Do not describe it as a complete current route inventory until the docs sync workflow regenerates it and the generated diff is reviewed. The deployed `/openapi.json` remains the authority for a particular environment.
+
 ## Design principles
 
 - **Tenant isolation:** every query, mutation, export, cache key, event, audit record, and replay operation carries an authorized tenant and provider-account scope.
@@ -47,7 +51,7 @@ PesaGuard currently runs a Flask and SQLAlchemy backend with PostgreSQL as the p
 
 ## Interfaces and invariants
 
-- Public API routes belong under `/api/v1` unless a documented compatibility alias exists.
+- New public business API routes should use `/api/v1`. The current route-derived inventory also contains operational and legacy paths outside that prefix; clients must use the exact path in the deployed OpenAPI document and must not blindly prepend `/api/v1`.
 - IDs are not globally trusted: detail lookups must include tenant and account predicates.
 - A retry must be safe to run more than once.
 - A successful response must not claim durable processing when the required persistence step failed.

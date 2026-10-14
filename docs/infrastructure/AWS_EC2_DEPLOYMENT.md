@@ -1,9 +1,8 @@
 # AWS EC2 Deployment
 
-This deployment uses an AWS EC2 instance with an Elastic IP. Hosting.com remains
-your DNS provider. The public request path is:
+This is an optional AWS EC2 deployment recipe, not evidence that the current production service runs on EC2. The repository's release workflow currently uses a configured Render deployment hook; use this guide only if EC2 is the explicitly chosen deployment target. Confirm which DNS provider is authoritative before editing records. If the domain's nameservers point to Cloudflare, manage its records in Cloudflare. The public request path for this EC2 option is:
 
-`api.pesaguard.victorkipruto.com` -> Elastic IP -> host Nginx/TLS -> Docker Nginx -> backend services
+`api.pesaguard.co.ke` -> Elastic IP -> host Nginx/TLS -> Docker Nginx -> backend services
 
 ## 1. Create the AWS server
 
@@ -49,12 +48,12 @@ Address: YOUR_AWS_ELASTIC_IP
 TTL: 1 hour
 ```
 
-The resulting hostname is `api.pesaguard.victorkipruto.com`.
+The resulting hostname is `api.pesaguard.co.ke`.
 
 Verify from your computer:
 
 ```powershell
-nslookup api.pesaguard.victorkipruto.com
+nslookup api.pesaguard.co.ke
 ```
 
 Wait until it returns the Elastic IP before requesting the TLS certificate.
@@ -96,7 +95,7 @@ nano .env
 At minimum, set real values for:
 
 ```dotenv
-PESAGUARD_API_URL=https://api.pesaguard.victorkipruto.com
+PESAGUARD_API_URL=https://api.pesaguard.co.ke
 PESAGUARD_BIND_HOST=0.0.0.0
 PESAGUARD_ENVIRONMENT=production
 DATABASE_URL_DOCKER=postgresql://pesaguard:CHANGE_ME@postgres:5432/pesaguard
@@ -105,7 +104,7 @@ PESAGUARD_PAYLOAD_ENCRYPTION_KEY=GENERATE_A_FERNET_KEY
 DARAJA_CONSUMER_KEY=YOUR_VALUE
 DARAJA_CONSUMER_SECRET=YOUR_VALUE
 DARAJA_SHARED_SECRET=GENERATE_A_LONG_RANDOM_SECRET
-PESAGUARD_CORS_ALLOWED_ORIGINS=https://api.pesaguard.victorkipruto.com
+PESAGUARD_CORS_ALLOWED_ORIGINS=https://api.pesaguard.co.ke
 ```
 
 Generate secrets on the server, and do not commit `.env`:
@@ -141,7 +140,7 @@ docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose
 Test the private router from the EC2 host:
 
 ```bash
-curl -i -H 'Host: api.pesaguard.victorkipruto.com' http://127.0.0.1:8080/health
+curl -i -H 'Host: api.pesaguard.co.ke' http://127.0.0.1:8080/health
 ```
 
 ## 8. Configure host Nginx
@@ -159,7 +158,7 @@ Paste:
 server {
     listen 80;
     listen [::]:80;
-    server_name api.pesaguard.victorkipruto.com;
+    server_name api.pesaguard.co.ke;
 
     client_max_body_size 1m;
 
@@ -193,7 +192,7 @@ After DNS resolves to the Elastic IP:
 
 ```bash
 sudo certbot --nginx \
-  -d api.pesaguard.victorkipruto.com \
+  -d api.pesaguard.co.ke \
   --redirect \
   --agree-tos \
   -m YOUR_EMAIL_ADDRESS
@@ -208,8 +207,8 @@ sudo certbot renew --dry-run
 ## 10. Verify the public backend
 
 ```bash
-curl -i https://api.pesaguard.victorkipruto.com/health
-curl -i https://api.pesaguard.victorkipruto.com/metrics
+curl -i https://api.pesaguard.co.ke/health
+curl -i https://api.pesaguard.co.ke/metrics
 ```
 
 The metrics endpoint should require the configured authenticated permission.

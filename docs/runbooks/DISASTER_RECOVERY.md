@@ -1,5 +1,7 @@
 # PesaGuard Runbook
 
+> Deployment note: this repository's current release workflow uses a configured Render deployment hook. Kubernetes commands below apply only if the target environment is actually deployed to Kubernetes; do not run them against a Render or Docker Compose deployment. Confirm the deployment provider before executing provider-specific recovery steps.
+
 ## Service health checks
 1. Verify the webhook receiver and dashboard API health endpoints at http://127.0.0.1:5000/health and http://127.0.0.1:5001/health.
 2. Check the Prometheus-compatible metrics endpoints for throughput, latency, and open discrepancy counts.
@@ -132,7 +134,7 @@ dashboard unavailable but database is healthy.
 5. Verify health:
    ```bash
    kubectl rollout status deployment/pesaguard-api
-   curl -sf https://api.pesaguard.victorkipruto.com/health
+   curl -sf https://api.pesaguard.co.ke/health
    ```
 
 **Exit gate:** All pods healthy; health endpoint returns 200; Kafka

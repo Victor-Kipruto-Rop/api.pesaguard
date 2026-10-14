@@ -3,13 +3,24 @@
   "info": {
     "title": "PesaGuard Dashboard & Reconciliation API",
     "version": "2.0.0",
-    "description": "Enterprise-grade operational telemetry and reconciliation endpoints. This file mirrors the specification served at /openapi.json by a running deployment; the live deployment is authoritative.",
-    "x-documentation": "https://docs.pesaguard.victorkipruto.com/api/",
+    "description": "Implementation-derived OpenAPI snapshot last generated from backend commit 8c50cad38e5176aec2513a6ef4584493364a1d42. It has not yet been successfully regenerated against the current backend main branch and may omit routes added since that commit. Do not treat this snapshot as a complete current route inventory; verify the deployed /openapi.json and wait for a successful docs sync before integrating.",
+    "x-documentation": "https://docs.pesaguard.co.ke/api/",
     "x-generated-from": {
-      "backend": "Victor-Kipruto-Rop/api.pesaguard.victorkipruto.com",
+      "backend": "Victor-Kipruto-Rop/api.pesaguard",
       "commit": "8c50cad38e5176aec2513a6ef4584493364a1d42",
       "generator": "scripts/generate-openapi.py"
-    }
+    },
+    "x-docs-review": {
+      "checked_against_commit": "7d5e037faaf04589f1c0ca6c1bb43a3b2f2ed9b4",
+      "scope": [
+        "canonical API and docs hostnames",
+        "accepted API-key prefixes",
+        "incident filter preset GET/POST semantics"
+      ],
+      "note": "Manual corrections to identified stale fields; full route/OpenAPI regeneration and CI validation remain pending."
+    },
+    "x-snapshot-status": "stale-pending-regeneration",
+    "x-snapshot-warning": "Implementation-derived OpenAPI snapshot last generated from backend commit 8c50cad38e5176aec2513a6ef4584493364a1d42. It has not yet been successfully regenerated against the current backend main branch and may omit routes added since that commit. Do not treat this snapshot as a complete current route inventory; verify the deployed /openapi.json and wait for a successful docs sync before integrating."
   },
   "security": [
     {
@@ -30,7 +41,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Tenant API key starting with `pk_`. Used when no Authorization header is sent."
+        "description": "Provisioned tenant API key using a supported `pk_` or `pgk_` format. Use the documented `X-API-Key` header; do not send both API-key and bearer credentials in one request."
       }
     },
     "responses": {
@@ -5169,34 +5180,111 @@
         "tags": [
           "Incidents"
         ],
-        "summary": "Return and persist a minimal set of dashboard filter presets",
+        "summary": "List tenant discrepancy and incident filter presets",
         "responses": {
           "200": {
-            "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
+            "description": "Tenant filter presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "presets": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "presets"
+                  ]
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Returns the built-in `critical_open`, `needs_review`, and `all` presets, overlaid with presets persisted for the resolved tenant. The current handler falls back to tenant id `default` when no tenant context is resolved; production callers must ensure an authenticated tenant context is present. This GET operation reads presets and does not create or update a custom preset.",
+        "x-required-permission": "read:discrepancies"
       },
       "post": {
         "operationId": "incident_filter_presets_post",
         "tags": [
           "Incidents"
         ],
-        "summary": "Return and persist a minimal set of dashboard filter presets",
+        "summary": "Create or replace a tenant filter preset",
         "responses": {
-          "200": {
-            "description": "Success. This handler serves several methods on one route; per-method responses are not documented yet."
+          "201": {
+            "description": "Preset persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "saved"
+                      ]
+                    },
+                    "presets": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "presets"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "description": "Accepts an optional JSON object with optional `name` and `filters` fields. The name defaults to `custom_preset` when omitted or empty; a whitespace-only name is rejected after trimming. `filters` defaults to an empty object. The handler upserts by resolved tenant and preset name and returns HTTP 201 with `status: saved` and the merged preset map. If no tenant context is resolved, the current handler falls back to tenant id `default`. The route decorator requires `read:discrepancies`; when API authentication is required, the write path also checks `write:discrepancies`.",
+        "x-required-permission": "read:discrepancies",
+        "x-additional-required-permissions": [
+          "write:discrepancies"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "filters": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
           }
         }
       }

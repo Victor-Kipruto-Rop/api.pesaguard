@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.integration
 def test_alertmanager_routes_a_test_alert_to_the_pesa_guard_webhook():
     alertmanager_url = os.getenv("PESAGUARD_LIVE_ALERTMANAGER_URL", "http://localhost:9093").rstrip("/")
-    gateway_url = os.getenv("PESAGUARD_LIVE_GATEWAY_URL", "https://api.pesaguard.victorkipruto.com").rstrip("/")
+    gateway_url = os.getenv("PESAGUARD_LIVE_GATEWAY_URL", "https://api.pesaguard.co.ke").rstrip("/")
     timeout = float(os.getenv("PESAGUARD_LIVE_TIMEOUT_SECONDS", "15"))
     alert_name = f"PesaGuardLiveSmoke{uuid.uuid4().hex[:8]}"
 

@@ -1,8 +1,8 @@
-# Pilot Readiness: 6 Critical Features
+# Pilot Readiness: 6 Critical Features — Verification Checklist
 
 ## Overview
 
-This document outlines the 6 critical features implemented for PesaGuard pilot launch reliability, with deployment and verification instructions.
+This document is a verification checklist for six reliability controls relevant to a PesaGuard pilot. It describes intended behavior and verification steps; it is not proof that every control is implemented, enabled in the target environment, or production-validated. Confirm code evidence, passing tests, migration state, configuration, and staging results for each item before declaring it complete.
 
 ---
 
@@ -41,7 +41,7 @@ psql -c "\\d transactions" | grep uq_transaction
 # Output: uq_transaction_trans_id UNIQUE CONSTRAINT
 
 # 3. Test: Send same webhook twice
-curl -X POST https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation \
+curl -X POST https://api.pesaguard.co.ke/webhook/mpesa/confirmation \
   -H "Content-Type: application/json" \
   -d '{"TransID": "test123", "TransAmount": 100, "MSISDN": "254712345678", ...}'
 
@@ -98,7 +98,7 @@ export REDIS_URL="redis://localhost:6379/0"
 ### Verification
 ```bash
 # 1. Measure response time
-time curl -X POST https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation \
+time curl -X POST https://api.pesaguard.co.ke/webhook/mpesa/confirmation \
   -H "Content-Type: application/json" \
   -d '{...}'
 # Should be < 50ms
@@ -145,7 +145,7 @@ export DARAJA_CONSUMER_SECRET="xxxxx"
 tail /var/log/pesaguard/app.log | grep "signature\|source\|rate"
 
 # 3. Test: Send invalid signature
-curl -X POST https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation \
+curl -X POST https://api.pesaguard.co.ke/webhook/mpesa/confirmation \
   -H "X-Daraja-Signature: invalid" \
   -d '...'
 # Should return 403 Forbidden
@@ -288,7 +288,7 @@ livenessProbe:
 
 # 3. Nginx upstream health check
 upstream pesaguard {
-   server api.pesaguard.victorkipruto.com;
+   server api.pesaguard.co.ke;
   check interval=3000 rise=2 fall=5 timeout=1000 type=http;
   check_http_send "GET /health HTTP/1.0\\r\\n\\r\\n";
   check_http_expect_alive http_2xx;
@@ -298,7 +298,7 @@ upstream pesaguard {
 ### Verification
 ```bash
 # Test health endpoint
-curl https://api.pesaguard.victorkipruto.com/health
+curl https://api.pesaguard.co.ke/health
 
 # Output (ok):
 {
@@ -325,7 +325,7 @@ curl https://api.pesaguard.victorkipruto.com/health
 }
 
 # Check HTTP code
-curl -o /dev/null -w "%{http_code}" https://api.pesaguard.victorkipruto.com/health
+curl -o /dev/null -w "%{http_code}" https://api.pesaguard.co.ke/health
 # 200 if ok, 503 if degraded/failed
 ```
 
@@ -374,12 +374,12 @@ curl -o /dev/null -w "%{http_code}" https://api.pesaguard.victorkipruto.com/heal
 tail -f /var/log/pesaguard/app.log | jq 'select(.correlation_id == "a1b2c3d4")'
 
 # 3. Client can request correlation ID from response
-curl -i https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation
+curl -i https://api.pesaguard.co.ke/webhook/mpesa/confirmation
 # Headers include: X-Correlation-ID: a1b2c3d4
 
 # 4. Client can pass correlation ID for tracing
 curl -H "X-Correlation-ID: my-request-123" \
-   https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation
+   https://api.pesaguard.co.ke/webhook/mpesa/confirmation
 
 # 5. Configure ELK/Splunk to parse JSON
 # Example Filebeat config:
@@ -393,7 +393,7 @@ processors:
 ### Verification
 ```bash
 # 1. Send test webhook and capture correlation ID
-RESPONSE=$(curl -i https://api.pesaguard.victorkipruto.com/webhook/mpesa/confirmation -d '...')
+RESPONSE=$(curl -i https://api.pesaguard.co.ke/webhook/mpesa/confirmation -d '...')
 CORR_ID=$(echo "$RESPONSE" | grep X-Correlation-ID | cut -d' ' -f2)
 
 # 2. Grep all logs for that correlation ID
@@ -465,7 +465,7 @@ redis-cli INFO stats | grep "total_commands_processed"
 tail -f /var/log/pesaguard/app.log | grep "sync fallback"
 
 # Measure actual response time
-for i in {1..10}; do time curl -o /dev/null -s https://api.pesaguard.victorkipruto.com/webhook/...; done
+for i in {1..10}; do time curl -o /dev/null -s https://api.pesaguard.co.ke/webhook/...; done
 ```
 
 ### Backups not running
@@ -489,7 +489,7 @@ redis-cli PING
 kafka-console-producer --bootstrap-servers localhost:9092 --topic test
 
 # Test health endpoint directly
-curl https://api.pesaguard.victorkipruto.com/health | jq '.checks'
+curl https://api.pesaguard.co.ke/health | jq '.checks'
 ```
 
 ### Duplicate transactions detected
@@ -545,13 +545,13 @@ rate(pesaguard_backup_failed_total[1d])
 
 ## Summary
 
-| Feature | Status | Impact | Deployment |
-|---------|--------|--------|------------|
-| Webhook Idempotency | ✅ Done | Prevents duplicate processing | Migration + DB constraint |
-| Fast 200 Response | ✅ Done | Eliminates Daraja timeouts | Code change + RQ optional |
-| Signature/IP Validation | ✅ Done | Prevents spoofed webhooks | Config + environment vars |
-| Automated Backups | ✅ Done | Enables disaster recovery | Systemd timer + Python script |
-| Extended Health Check | ✅ Done | Enables orchestration | Config change |
-| Correlation IDs | ✅ Done | Enables request tracing | Automatic via middleware |
+| Control to verify | Required evidence before marking complete | Deployment dependency to verify |
+|---|---|---|
+| Webhook idempotency | Duplicate callback tests and database uniqueness evidence; retries must not create duplicate financial effects | Current schema migration applied and database constraints verified |
+| Fast callback acknowledgement | Integration test proving acknowledgement timing and durable handoff semantics under dependency failure | Worker/queue configuration and provider callback timeout behavior verified |
+| Signature and source validation | Positive and negative signature tests plus source-validation configuration evidence | Correct provider secret and trusted source configuration supplied securely |
+| Automated backups | Successful scheduled backup plus a tested restore with recorded result | Backup timer/scheduler enabled, storage reachable, retention and alerting configured |
+| Extended health checks | Tests proving readiness reflects required dependencies, not only process liveness | Deployment health probe targets the intended readiness endpoint |
+| Correlation IDs | Tests showing an incoming/request-generated ID is propagated into structured logs and responses | Log collection preserves the field and redacts sensitive data |
 
-All 6 features are production-ready for pilot launch. ✅
+Do not mark any control as complete based on this table alone. Record the test run, environment, timestamp, responsible operator, and result for each item. Pilot readiness requires the relevant checks to pass in staging; production readiness also requires the release gates in the repository README.
