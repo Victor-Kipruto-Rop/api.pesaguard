@@ -61,7 +61,6 @@ def _get_reference(record: Dict) -> Optional[str]:
         "merchant_ref",
         "AccountReference",
         "account_reference",
-        "checkoutRequestID",
     ):
         v = record.get(k)
         if v:
