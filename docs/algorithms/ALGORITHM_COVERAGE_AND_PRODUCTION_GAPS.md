@@ -28,10 +28,13 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 ### Completed in the current safety branch
 
-- Removed synthetic reference evidence: provider transaction IDs and local database row IDs are not merchant references.
+- Removed synthetic reference evidence: provider transaction IDs, checkout-request IDs, and local database row IDs are not merchant references.
+- The primary evaluate_transaction path now requires an explicit business-reference match for automatic matching; amount/phone/time agreement alone stays reviewable.
+- Explicit tenant/provider/account/business-code/currency conflicts are excluded from candidate ranking and surfaced for review if no eligible candidates remain.
+- Daraja compact timestamp scoring uses Africa/Nairobi event time consistently.
 - Missing references fail the automatic-match quality gate.
 - Multiple ledger rows with the same reference are routed to review as ambiguous candidates rather than being counted as duplicate provider payments.
-- Added focused regression tests for these false-match and status-semantics cases; execution remains pending CI/local test evidence.
+- Added focused regression tests for false-match, scope-isolation, timestamp, and status-semantics cases; execution remains pending CI/local test evidence.
 
 ### P0 — correctness and financial safety
 
