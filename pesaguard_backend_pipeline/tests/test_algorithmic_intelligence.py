@@ -287,7 +287,7 @@ def test_batch_quality_profile_reports_missing_invalid_duplicate_late_and_schema
         [
             {"TransID": "A", "TransAmount": "10.00", "TransTime": "20261014090000", "BillRefNumber": "INV-A"},
             {"TransID": "A", "TransAmount": "NaN", "TransTime": "not-a-time", "NewProviderField": "x"},
-            {"TransAmount": "0", "Currency": "KES"},
+            {"TransAmount": "0", "Currency": "KES!"},
         ],
         known_fields=("TransID", "TransAmount", "TransTime", "BillRefNumber", "Currency"),
         now=datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc),
@@ -297,6 +297,7 @@ def test_batch_quality_profile_reports_missing_invalid_duplicate_late_and_schema
     assert result["duplicate_transaction_ids"] == ["A"]
     assert result["invalid_amount_count"] == 2
     assert result["invalid_timestamp_count"] == 1
+    assert result["invalid_currency_count"] == 1
     assert result["missing_field_counts"]["transaction_id"] == 1
     assert result["late_event_count"] == 1
     assert result["schema_drift_fields"] == ["NewProviderField"]
@@ -353,5 +354,16 @@ def test_exact_subset_rejects_duplicate_ids_and_mixed_currency():
     assert duplicate["status"] == "REVIEW_REQUIRED"
     currency = find_unique_exact_subset([{"TransID": "P1", "amount": "100", "currency": "USD"}], "100", currency="KES")
     assert currency["status"] == "REVIEW_REQUIRED"
+
+
+
+
+def test_candidate_scoring_rejects_sub_minor_unit_amount_precision():
+    result = score_reconciliation_candidate(
+        {"reference": "A", "amount": "10.001", "timestamp": "2026-10-14T12:00:00Z"},
+        {"reference": "A", "amount": "10.00", "timestamp": "2026-10-14T12:00:01Z"},
+    )
+    assert result["evidence"]["amount_exact"] is False
+    assert result["auto_matchable"] is False
 
 
