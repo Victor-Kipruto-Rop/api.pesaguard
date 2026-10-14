@@ -16,6 +16,15 @@
 | Rolling-window velocity | Count events in a caller-selected window | Detects volume threshold breaches. Caller must scope input to a tenant and entity such as account/phone. |
 | Transaction data-quality gate | Required ID, finite positive amount, timezone-aware timestamp, reference | Separates malformed/incomplete events from candidates for automatic matching. |
 
+## Production safety corrections in phase3.3
+
+- Missing provider references are never fabricated from TransID, and internal database row IDs are never treated as payment references. A record can still be investigated using amount/time evidence, but that evidence does not produce an exact MATCHED result.
+- A missing reference fails the automatic-match quality gate. It remains eligible for controlled investigation and human review.
+- Multiple ledger rows sharing a reference now produce EXCEPTION with ambiguous_internal_reference; they are not mislabeled as duplicate provider payments.
+- The reconciliation engine version is bumped to phase3.3 so new decisions can be distinguished in audit evidence.
+
+These are correctness fixes, not evidence that the entire algorithm stack is production-certified. Provider/account scoping at query time, durable conflicting-replay classification, ground-truth holdout evaluation, and staged rollout gates remain separate requirements.
+
 ## Integration contract
 
 1. Normalize provider callbacks at the integration boundary. Preserve the raw event and its provenance separately.
