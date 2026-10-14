@@ -73,9 +73,10 @@ class RiskDecision:
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return default
+    return number if math.isfinite(number) else default
 
 
 def _timestamp(transaction: Mapping[str, Any]) -> datetime | None:
@@ -262,12 +263,21 @@ def persist_assessment(session: Any, tenant_id: str, transaction_id: str, decisi
     return assessment
 
 
-def evaluate_predictions(predictions: Iterable[tuple[RiskDecision, bool]]) -> dict[str, float]:
-    """Measure precision, recall, FP/FN counts, and average detection latency."""
+def evaluate_predictions(
+    predictions: Iterable[tuple[RiskDecision, bool] | tuple[RiskDecision, bool, datetime]],
+) -> dict[str, Any]:
+    """Measure classification metrics and latency only when event time is supplied.
+
+    Accepted rows are (decision, actual_fraud) or
+    (decision, actual_fraud, event_time). A decision's age is not detection
+    latency, so latency is left null when the source event time is unavailable.
+    """
     rows = list(predictions)
     true_positive = false_positive = false_negative = true_negative = 0
     latencies: list[float] = []
-    for decision, actual_fraud in rows:
+    for row in rows:
+        decision, actual_fraud = row[0], row[1]
+        event_time = row[2] if len(row) >= 3 else None
         predicted = decision.risk_level in {"HIGH", "CRITICAL"}
         if predicted and actual_fraud:
             true_positive += 1
@@ -277,13 +287,18 @@ def evaluate_predictions(predictions: Iterable[tuple[RiskDecision, bool]]) -> di
             false_negative += 1
         else:
             true_negative += 1
-        latency = (datetime.now(timezone.utc) - decision.detected_at).total_seconds() * 1000
-        latencies.append(max(0.0, latency))
+        if isinstance(event_time, datetime):
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=timezone.utc)
+            latency_ms = (decision.detected_at - event_time.astimezone(timezone.utc)).total_seconds() * 1000
+            if latency_ms >= 0:
+                latencies.append(latency_ms)
     return {
         "precision": true_positive / max(true_positive + false_positive, 1),
         "recall": true_positive / max(true_positive + false_negative, 1),
         "false_positives": float(false_positive),
         "false_negatives": float(false_negative),
         "true_negatives": float(true_negative),
-        "detection_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
+        "detection_latency_ms": sum(latencies) / len(latencies) if latencies else None,
+        "latency_sample_count": float(len(latencies)),
     }
