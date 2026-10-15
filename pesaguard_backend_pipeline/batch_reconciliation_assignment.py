@@ -41,14 +41,17 @@ def propose_batch_assignment(
     malformed identifiers, duplicate transaction IDs, invalid scores, or ambiguous
     optimum returns a fail-closed result rather than a partial assignment.
     """
-    if isinstance(max_transactions, bool) or max_transactions < 1:
+    if isinstance(max_transactions, bool) or not isinstance(max_transactions, int) or max_transactions < 1:
         raise ValueError("max_transactions must be a positive integer")
-    if isinstance(max_candidates, bool) or max_candidates < 1:
+    if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
         raise ValueError("max_candidates must be a positive integer")
     if not math.isfinite(minimum_score) or not 0 <= minimum_score <= 1:
         raise ValueError("minimum_score must be finite and between 0 and 1")
     if not math.isfinite(ambiguity_margin) or ambiguity_margin < 0:
         raise ValueError("ambiguity_margin must be finite and non-negative")
+
+    if not isinstance(transactions, Sequence) or isinstance(transactions, (str, bytes)):
+        raise ValueError("transactions must be a sequence of mappings")
 
     if len(transactions) > max_transactions:
         return _unavailable("batch_exceeds_exact_search_limit", len(transactions), max_transactions, max_candidates)
