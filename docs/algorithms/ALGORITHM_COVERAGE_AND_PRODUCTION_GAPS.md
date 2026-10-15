@@ -9,7 +9,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Decimal/minor-unit money comparison | algorithmic_intelligence.py; tests | Currency precision must be explicit; reject invalid precision. |
 | Reference normalization | Helper + tests | Candidate hint only; punctuation-insensitive similarity must not authorize a match. |
 | Tenant/provider-scoped transaction identity | Helper + tests | Database uniqueness and atomic insertion are still required. |
-| Payload fingerprint and replay classification | Helper + tests | Requires persisted prior fingerprint scoped to tenant/provider/account. |
+| Payload fingerprint and replay classification | Canonical fingerprint helper plus EventStore duplicate/conflict classification and regression tests | Conflicts are audited/quarantined when an existing scoped transaction is found; verify live PostgreSQL concurrency, legacy rows with undecryptable payloads, and all ingestion paths before certification. |
 | Candidate evidence scoring | Helper + tests | Ranking score is not a probability; missing time evidence is not positive evidence. |
 | Ambiguity-safe selection | Algorithm helpers and reconciliation engine guardrails | Close/tied candidates go to review; thresholds need labeled evaluation. |
 | Partial-payment aggregation | Helper + tests | Use confirmed tenant-scoped rows; aggregation does not post to the ledger. |
@@ -33,7 +33,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 1. **One ingestion contract:** verify webhook, retry, batch, worker, and manual replay paths share tenant resolution, validation, normalization, and idempotency. The live reconciliation matcher fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
 2. **Atomic idempotency:** enforce database uniqueness for tenant + provider/account + external transaction ID and claim it transactionally. In-memory ID sets are not concurrency controls.
-3. **Conflicting replay quarantine:** persist the original canonical payload fingerprint; distinguish identical retries from same-ID/different-payload conflicts before a second side effect.
+3. **Conflicting replay quarantine:** the EventStore now compares canonical fingerprints against the protected original payload, records a deduplicated quarantine/audit event, and returns a distinct conflict result. Still verify all ingestion entry points and PostgreSQL concurrency behavior; do not treat the new unit coverage as certification.
 4. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
 5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
 6. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
