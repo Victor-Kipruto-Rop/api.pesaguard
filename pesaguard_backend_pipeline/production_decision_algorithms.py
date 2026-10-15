@@ -9,8 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import math
-import statistics
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 ALGORITHM_VERSION = "production-decision-v1"
 _ALLOWED_STATES = {
@@ -132,8 +131,7 @@ def validate_transaction_transition(
     reasons: list[str] = []
     if previous not in _ALLOWED_STATES or following not in _ALLOWED_STATES.get(previous, set()):
         reasons.append("invalid_state_transition")
-    is_reversal = following in {"REVERSED", "PARTIALLY_REVERSED"}
-    if is_reversal:
+    if following in {"REVERSED", "PARTIALLY_REVERSED"}:
         if not original_transaction_id or not reversal_transaction_id:
             reasons.append("reversal_linkage_missing")
         elif str(original_transaction_id).strip() == str(reversal_transaction_id).strip():
@@ -178,7 +176,7 @@ def conservative_reconciliation_decision(
     Auto-match proposal requires a unique, high-scoring candidate and explicit
     verified scope/provider/quality/idempotency guards. A score is not a probability.
     """
-    if isinstance(candidate_count, bool) or candidate_count < 0:
+    if isinstance(candidate_count, bool) or not isinstance(candidate_count, int) or candidate_count < 0:
         raise ValueError("candidate_count must be a non-negative integer")
     if not math.isfinite(minimum_score) or not 0 <= minimum_score <= 1:
         raise ValueError("minimum_score must be between 0 and 1")
@@ -197,7 +195,7 @@ def conservative_reconciliation_decision(
     elif top is None:
         decision = "REVIEW"
         reasons.append("missing_candidate_score")
-    elif candidate_count > 1 and second is not None and float(top - second) < ambiguity_margin:
+    elif candidate_count > 1 and (second is None or float(top - second) < ambiguity_margin):
         decision = "REVIEW"
         reasons.append("ambiguous_candidates")
     elif not scope_verified:
@@ -247,10 +245,10 @@ def detect_velocity_burst(
     The caller MUST supply events from one tenant and one relevant entity/account.
     Missing or naive timestamps are excluded and counted, not treated as current.
     """
-    if isinstance(window_seconds, bool) or window_seconds <= 0:
-        raise ValueError("window_seconds must be positive")
-    if isinstance(count_threshold, bool) or count_threshold < 1:
-        raise ValueError("count_threshold must be at least one")
+    if isinstance(window_seconds, bool) or not isinstance(window_seconds, int) or window_seconds <= 0:
+        raise ValueError("window_seconds must be a positive integer")
+    if isinstance(count_threshold, bool) or not isinstance(count_threshold, int) or count_threshold < 1:
+        raise ValueError("count_threshold must be a positive integer")
     amount_limit = _decimal(amount_threshold) if amount_threshold is not None else None
     if amount_threshold is not None and (amount_limit is None or amount_limit < 0):
         raise ValueError("amount_threshold must be finite and non-negative")
@@ -273,7 +271,6 @@ def detect_velocity_burst(
                 invalid += 1
     count_burst = count >= count_threshold
     amount_burst = amount_limit is not None and total >= amount_limit
-    detected = count_burst or amount_burst
     reasons = []
     if count_burst:
         reasons.append("event_count_threshold_exceeded")
@@ -288,9 +285,9 @@ def detect_velocity_burst(
         "invalid_or_untimed_events": invalid,
         "count_threshold": count_threshold,
         "amount_threshold": str(amount_limit) if amount_limit is not None else None,
-        "burst_detected": detected,
+        "burst_detected": count_burst or amount_burst,
         "reason_codes": reasons,
-        "action": "INVESTIGATE" if detected else "NO_VELOCITY_SIGNAL",
+        "action": "INVESTIGATE" if (count_burst or amount_burst) else "NO_VELOCITY_SIGNAL",
         "score_is_probability": False,
     }
 
@@ -309,8 +306,8 @@ def evaluate_algorithm_release(
     reviewer: str | None,
 ) -> dict[str, Any]:
     """Evaluate explicit promotion criteria; PASS is not an automatic deployment."""
-    if isinstance(minimum_samples, bool) or minimum_samples < 1:
-        raise ValueError("minimum_samples must be positive")
+    if isinstance(minimum_samples, bool) or not isinstance(minimum_samples, int) or minimum_samples < 1:
+        raise ValueError("minimum_samples must be a positive integer")
     limits = {
         "minimum_precision": minimum_precision,
         "minimum_recall": minimum_recall,
