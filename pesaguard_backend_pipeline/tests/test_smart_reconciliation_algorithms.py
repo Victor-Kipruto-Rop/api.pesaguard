@@ -275,3 +275,41 @@ def test_ranker_treats_tenant_and_account_identifiers_as_case_sensitive():
     result = rank_reconciliation_candidates(tx, [candidate])
     assert result["decision"] == "REVIEW"
     assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
+
+
+def test_reversal_shadow_assessment_is_advisory_and_does_not_change_legacy_status():
+    from reconciliation_engine import evaluate_transaction
+
+    event = {
+        "TransID": "REV-1",
+        "TransAmount": "40",
+        "MSISDN": "254700000000",
+        "TransTime": "20261014110000",
+        "TransactionType": "reversal",
+        "OriginalTransID": "ORIG-1",
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "account_id": "paybill-1",
+        "currency": "KES",
+    }
+    records = [{
+        "transaction_id": "ORIG-1",
+        "reference": "ORIG-1",
+        "amount": "100",
+        "timestamp": "2026-10-14T10:00:00+03:00",
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "account_id": "paybill-1",
+        "currency": "KES",
+        "status": "completed",
+    }]
+    baseline = evaluate_transaction(event, records, seen_trans_ids=set())
+    shadow = evaluate_transaction(
+        event, records, seen_trans_ids=set(),
+        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": True}},
+    )
+    assert shadow["status"] == baseline["status"]
+    assert shadow["match"] == baseline["match"]
+    assert shadow["smart_analysis"]["legacy_decision_unchanged"] is True
+    assert shadow["smart_analysis"]["reversal_assessment"]["decision"] == "ELIGIBLE_FOR_REVIEW"
+    assert shadow["smart_analysis"]["reversal_assessment"]["posting_authorized"] is False
