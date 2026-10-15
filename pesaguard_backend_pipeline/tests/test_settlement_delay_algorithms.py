@@ -86,3 +86,9 @@ def test_configuration_rejects_non_finite_thresholds():
         assess(100, list(range(8)), minimum_grace_seconds=math.nan)
     with pytest.raises(ValueError):
         assess(100, list(range(8)), robust_mad_multiplier=math.inf)
+    with pytest.raises(ValueError, match="upper_quantile"):
+        assess(100, list(range(8)), upper_quantile="NaN")
+    with pytest.raises(ValueError, match="minimum_grace_seconds"):
+        assess(100, list(range(8)), minimum_grace_seconds="not-a-number")
+    with pytest.raises(ValueError, match="robust_mad_multiplier"):
+        assess(100, list(range(8)), robust_mad_multiplier="Infinity")

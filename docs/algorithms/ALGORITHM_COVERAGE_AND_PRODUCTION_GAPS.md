@@ -27,7 +27,8 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
 | Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
 | Global one-to-one batch assignment | batch_reconciliation_assignment.py (new) | Bounded exact proposal; ambiguous/oversized batches fail closed; live-engine integration and tenant-safe candidate retrieval remain separate release gates. |
-| Persisted reversal lifecycle review gate | reversal_lifecycle_integration.py + reconciliation_job.py | Tenant/provider/account-scoped history is attached to the reconciliation audit/outbox; missing, ambiguous, unknown-status, over-limit, or excessive reversal evidence routes to EXCEPTION. Review-only: no posting authority or concurrency protection. |\n| Settlement delay intelligence | settlement_delay_algorithms.py + focused tests | Robust median/MAD and upper-quantile threshold over confirmed peer-cohort settlement durations; insufficient history returns unknown. Advisory only; provider calendars and tenant-scoped history retrieval remain caller responsibilities. |
+| Persisted reversal lifecycle review gate | reversal_lifecycle_integration.py + reconciliation_job.py | Tenant/provider/account-scoped history is attached to the reconciliation audit/outbox; missing, ambiguous, unknown-status, over-limit, or excessive reversal evidence routes to EXCEPTION. Review-only: no posting authority or concurrency protection. |
+| Settlement delay intelligence | settlement_delay_algorithms.py + focused tests | Robust median/MAD and upper-quantile threshold over confirmed peer-cohort settlement durations; insufficient history returns unknown. Advisory only; provider calendars and tenant-scoped history retrieval remain caller responsibilities. |
 
 ## Gaps to close before production certification
 
@@ -58,9 +59,10 @@ The global batch-assignment helper is currently advisory and is not wired into t
 14. Cross-channel entity graphs, only with reliable lawful identifiers; do not merge accounts based only on shared phone, amount, or location.
 15. Seasonality-aware baselines for business hours, weekdays, pay cycles, merchant type, and currency.
 16. Provider-specific lifecycle/state-transition anomaly rules, including invalid reversal/original ordering.
-17. Settlement arrival-window prediction after provider calendars, merchant schedules, and holidays are configured.
-18. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
-19. Graph/unsupervised models as investigative signals only; never auto-freeze funds from uncalibrated anomaly scores.
+17. Settlement delay intelligence is available as an advisory primitive in `settlement_delay_algorithms.py`. Before operational use, source confirmed history from the same tenant/provider/account/currency and settlement class, model provider cutoffs and business calendars, calibrate the grace period against actual SLAs, add shadow telemetry and deduplicated alerts, and review false positives. It must not declare a payment failed or initiate a retry/refund.
+18. Settlement arrival-window prediction after provider calendars, merchant schedules, and holidays are configured.
+19. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
+20. Graph/unsupervised models as investigative signals only; never auto-freeze funds from uncalibrated anomaly scores.
 
 ## Release gates
 

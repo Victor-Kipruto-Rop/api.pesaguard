@@ -25,6 +25,18 @@ def _finite_seconds(value: Any) -> float | None:
     return parsed
 
 
+def _finite_config_number(value: Any, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be a finite number")
+    return parsed
+
+
 def _quantile(values: list[float], q: float) -> float:
     """Linearly interpolated quantile, independent of optional numeric packages."""
     ordered = sorted(values)
@@ -74,11 +86,14 @@ def assess_settlement_delay(
         raise ValueError("tenant_id, provider, account_id, and currency are required")
     if isinstance(minimum_samples, bool) or not isinstance(minimum_samples, int) or minimum_samples < 5:
         raise ValueError("minimum_samples must be an integer of at least 5")
-    if isinstance(upper_quantile, bool) or not math.isfinite(upper_quantile) or not 0.5 < upper_quantile < 1:
+    upper_quantile = _finite_config_number(upper_quantile, "upper_quantile")
+    minimum_grace_seconds = _finite_config_number(minimum_grace_seconds, "minimum_grace_seconds")
+    robust_mad_multiplier = _finite_config_number(robust_mad_multiplier, "robust_mad_multiplier")
+    if not 0.5 < upper_quantile < 1:
         raise ValueError("upper_quantile must be between 0.5 and 1")
-    if isinstance(minimum_grace_seconds, bool) or not math.isfinite(minimum_grace_seconds) or minimum_grace_seconds < 0:
+    if minimum_grace_seconds < 0:
         raise ValueError("minimum_grace_seconds must be finite and non-negative")
-    if isinstance(robust_mad_multiplier, bool) or not math.isfinite(robust_mad_multiplier) or robust_mad_multiplier <= 0:
+    if robust_mad_multiplier <= 0:
         raise ValueError("robust_mad_multiplier must be finite and positive")
 
     current = _finite_seconds(current_delay_seconds)
