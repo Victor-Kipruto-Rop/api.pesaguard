@@ -22,6 +22,11 @@
 2. Require a non-empty `tenant_id` for fingerprinting. Never compare hashes across tenants.
 3. Store the algorithm version and explainable evidence with any shadow result. Do not store full phone numbers in algorithm telemetry.
 4. Enable `tenant_settings.reconciliation.smart_algorithms_shadow_enabled = true` only in a controlled non-production tenant first. Run the current engine and the new ranker side-by-side on the same tenant-scoped candidate set. The feature is disabled by default; do not let shadow results change transaction status.
+   - The Kafka worker passes the resolved tenant ID separately from the settings document; the settings store does not need to duplicate that identity inside its JSON configuration.
+   - When enabled, the worker stores shadow output in the existing reconciliation outbox payload and writes a compact summary into the audit record in the same transaction.
+   - The audit summary contains the algorithm version, candidate decision/ambiguity, and risk tier/score; raw phone numbers are not copied into shadow telemetry.
+   - A failed shadow calculation is recorded as unavailable and must not fail the established reconciliation decision.
+   - This is not a separate queryable analytics table. Verify persistence and behavior in staging, and inspect alternate ingestion paths independently.
 5. Compare proposed outcomes against approved, reviewed ground truth using the existing certification process. Report precision, recall, false positives, false negatives, ambiguous-match rate, and latency by tenant/provider/amount band.
 6. Review false positives and false negatives with finance operators. Keep thresholds tenant-configurable only after approval and change audit.
 7. Enable any decision-path change gradually behind a feature flag, with an immediate rollback to the existing engine.
