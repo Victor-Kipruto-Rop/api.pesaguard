@@ -111,6 +111,10 @@ The current implementation inventory and remaining production-integration gates 
 
 The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns needs_review with a critical scope-conflict signal instead of auto-matching. This does not replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
 
+## Reversal lifecycle validation
+
+The additive transaction lifecycle algorithm checks reversal/original linkage, tenant/provider/account/currency conflicts, timestamp ordering, duplicate reversal IDs, and cumulative confirmed reversal amounts. It is advisory-only and always returns `can_auto_post=false`; it is not connected to the authoritative posting path. See docs/algorithms/TRANSACTION_LIFECYCLE_ALGORITHMS.md. Live integration still requires transaction-scoped database locking, provider-confirmed states, idempotency, audit persistence, and concurrency tests.
+
 ## Advanced analytics primitives
 
 The new advanced_reconciliation_algorithms.py module provides seasonal amount assessment and distribution-shift detection. These are advisory-only helpers, not enabled in the live matching/risk decision path. See docs/algorithms/ADVANCED_RECONCILIATION_ALGORITHMS.md for scope, safety boundaries, and test commands. Production activation requires tenant-scoped history, finance-reviewed holdout evaluation, false-positive analysis, monitoring, and an approved rollout.
