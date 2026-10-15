@@ -92,3 +92,80 @@ def test_one_hundred_identical_requests_create_one_transaction(tmp_path):
     with sessionmaker(bind=engine)() as session:
         assert session.query(Transaction).count() == 1
         assert session.query(IdempotencyRecord).count() == 1
+
+def test_conflicting_replay_is_quarantined_without_creating_second_transaction(tmp_path):
+    url, engine = _store(tmp_path)
+    store = EventStore(database_url=url)
+    original = _payload("conflicting-replay-tx")
+
+    assert store.mark_processed(original, tenant_id="tenant-a") is ProcessResult.STORED
+
+    changed = {**original, "TransAmount": "12.50"}
+    # A caller-supplied idempotency key must not bypass provider transaction identity.
+    result = store.mark_processed(
+        changed,
+        tenant_id="tenant-a",
+        idempotency_key_override="a-different-client-key",
+    )
+    assert result is ProcessResult.CONFLICT
+
+    # Repeated delivery of the same conflicting payload stays quarantined, while
+    # the event/audit evidence remains deduplicated and the financial row unchanged.
+    assert store.mark_processed(
+        changed,
+        tenant_id="tenant-a",
+        idempotency_key_override="a-different-client-key",
+    ) is ProcessResult.CONFLICT
+
+    Session = sessionmaker(bind=engine)
+    with Session() as session:
+        assert session.query(Transaction).count() == 1
+        events = session.query(TransactionEvent).filter(
+            TransactionEvent.event_type == "transaction.conflicting_replay"
+        ).all()
+        audits = session.query(AuditEvent).filter(
+            AuditEvent.event_type == "transaction.conflicting_replay"
+        ).all()
+        assert len(events) == 1
+        assert len(audits) == 1
+        assert events[0].to_state == "QUARANTINED"
+        assert "same_external_id_different_payload" in events[0].details["reason_codes"]
+
+
+def test_semantically_identical_replay_with_different_amount_format_is_duplicate(tmp_path):
+    url, _ = _store(tmp_path)
+    store = EventStore(database_url=url)
+    original = _payload("semantic-replay-tx")
+    assert store.mark_processed(original, tenant_id="tenant-a") is ProcessResult.STORED
+
+    equivalent = {**original, "TransAmount": "10.5"}
+    assert store.mark_processed(equivalent, tenant_id="tenant-a") is ProcessResult.DUPLICATE
+
+def test_conflicting_replay_is_quarantined_in_caller_session(tmp_path):
+    url, engine = _store(tmp_path)
+    store = EventStore(database_url=url)
+    original = _payload("session-conflict-tx")
+
+    with sessionmaker(bind=engine)() as session:
+        assert store.mark_processed_in_session(
+            session, original, tenant_id="tenant-a"
+        ) is ProcessResult.STORED
+        session.commit()
+
+    changed = {**original, "TransAmount": "11.75"}
+    with sessionmaker(bind=engine)() as session:
+        result = store.mark_processed_in_session(
+            session, changed, tenant_id="tenant-a"
+        )
+        assert result is ProcessResult.CONFLICT
+        session.commit()
+
+    with sessionmaker(bind=engine)() as session:
+        assert session.query(Transaction).count() == 1
+        assert session.query(TransactionEvent).filter_by(
+            event_type="transaction.conflicting_replay"
+        ).count() == 1
+        assert session.query(AuditEvent).filter_by(
+            event_type="transaction.conflicting_replay"
+        ).count() == 1
+

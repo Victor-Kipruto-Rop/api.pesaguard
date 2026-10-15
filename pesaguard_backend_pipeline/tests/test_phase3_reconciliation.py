@@ -158,3 +158,25 @@ def test_ground_truth_capture_is_immutable_and_measureable(tmp_path):
         assert row.validated_at is not None
     finally:
         session.close()
+
+def test_measure_reconciliation_undefined_precision_and_recall_are_not_perfect():
+    no_predictions = measure_reconciliation(
+        [{"status": "UNMATCHED", "processing_latency_ms": 2}],
+        ["UNMATCHED"],
+    )
+    assert no_predictions["precision"] is None
+    assert no_predictions["recall"] is None
+
+    expected_match_missed = measure_reconciliation(
+        [{"status": "UNMATCHED", "processing_latency_ms": 2}],
+        ["MATCHED"],
+    )
+    assert expected_match_missed["precision"] is None
+    assert expected_match_missed["recall"] == 0.0
+    assert expected_match_missed["false_negatives"] == 1.0
+
+
+def test_measure_reconciliation_rejects_mismatched_sample_counts():
+    with pytest.raises(ValueError, match="same number of cases"):
+        measure_reconciliation([{"status": "MATCHED"}], ["MATCHED", "UNMATCHED"])
+

@@ -182,6 +182,11 @@ def create_transaction_blueprint(
             tenant_id=tenant_id,
             idempotency_key_override=idempotency_key,
         )
+        if result is ProcessResult.CONFLICT:
+            return jsonify({
+                "error": "conflicting_transaction_replay",
+                "message": "The provider transaction ID already exists with different canonical facts; the event was quarantined for review.",
+            }), 409
         if result is ProcessResult.ERROR:
             return jsonify({"error": "transaction_not_persisted", "message": "Transaction could not be persisted."}), 500
 

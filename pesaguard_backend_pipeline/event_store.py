@@ -30,7 +30,11 @@ from normalization import normalize_amount
 from models import AuditEvent, Base, IdempotencyRecord, ProcessedTransaction, ReconciliationOutbox, Transaction, TransactionEvent, TransactionOutbox
 from transformation_store import record_transformation_stage
 from lineage import record_lineage
-from data_protection import protect_payload, tokenize_identifier
+from data_protection import protect_payload, tokenize_identifier, unprotect_payload
+try:
+    from .algorithmic_intelligence import transaction_payload_fingerprint
+except ImportError:  # pragma: no cover - top-level service execution
+    from algorithmic_intelligence import transaction_payload_fingerprint
 
 logger = logging.getLogger("pesaguard.event_store")
 
@@ -117,17 +121,18 @@ def provider_account_id(payload: Dict[str, Any]) -> str:
 
 
 class ProcessResult(str, Enum):
-    """Outcome of attempting to record a webhook callback.
+    """Outcome of attempting to record a provider transaction.
 
-    The webhook handler MUST branch on this, not treat it as a plain boolean â€”
-    STORED and DUPLICATE both mean "return 200 to Daraja, no retry needed".
-    ERROR means "return 5xx so Daraja retries" â€” a genuine failure must never
-    be indistinguishable from a benign duplicate, or real transactions can be
-    silently dropped.
+    STORED is a new durable transaction; DUPLICATE is an identical replay;
+    CONFLICT is the same scoped provider identity with conflicting facts and a
+    durable quarantine event; ERROR is a persistence/validation failure.
+    Webhook handlers acknowledge durable conflicts to avoid retry storms, while
+    authenticated API callers receive a conflict response.
     """
 
     STORED = "stored"        # new transaction, successfully recorded
     DUPLICATE = "duplicate"  # already processed before â€” safe no-op
+    CONFLICT = "conflict"    # same provider identity with conflicting facts; quarantined
     ERROR = "error"          # genuine failure â€” caller should signal retry
 
 
@@ -228,6 +233,122 @@ class EventStore:
             )
             return True
 
+    @staticmethod
+    def _classify_existing_replay(
+        session: Session,
+        payload: Dict[str, Any],
+        *,
+        tenant_id: str,
+        provider: str,
+        account_id: str,
+        trans_id: str,
+        commit: bool = True,
+    ) -> ProcessResult | None:
+        """Compare canonical facts for an existing scoped provider transaction."""
+        existing = session.query(Transaction).filter(
+            Transaction.tenant_id == tenant_id,
+            Transaction.provider == provider,
+            Transaction.provider_account_id == account_id,
+            Transaction.trans_id == trans_id,
+        ).with_for_update().one_or_none()
+        if existing is None:
+            return None
+
+        reason_codes: list[str] = []
+        incoming_fingerprint = None
+        stored_fingerprint = None
+        try:
+            incoming_fingerprint = transaction_payload_fingerprint(payload)
+            stored_payload = unprotect_payload(existing.raw_payload)
+            if not isinstance(stored_payload, dict):
+                raise ValueError("stored transaction payload is not an object")
+            stored_fingerprint = transaction_payload_fingerprint(stored_payload)
+            if incoming_fingerprint == stored_fingerprint:
+                return ProcessResult.DUPLICATE
+            reason_codes.append("same_external_id_different_payload")
+        except Exception:
+            logger.exception(
+                "Unable to compare replay payload for tenant_id=%s trans_id=%s",
+                tenant_id, trans_id,
+            )
+            reason_codes.append("replay_comparison_unavailable")
+
+        conflict_fingerprint = incoming_fingerprint or _payload_hash(payload)
+        event_key = f"conflicting-replay:{existing.id}:{conflict_fingerprint[:24]}"
+        event_exists = session.query(TransactionEvent).filter(
+            TransactionEvent.tenant_id == tenant_id,
+            TransactionEvent.event_key == event_key,
+        ).one_or_none()
+        details = {
+            "reason_codes": reason_codes,
+            "provider": provider,
+            "provider_account_id": account_id,
+            "existing_payload_fingerprint": stored_fingerprint,
+            "incoming_payload_fingerprint": incoming_fingerprint,
+            "algorithm_version": "canonical-replay-v1",
+        }
+        if event_exists is None:
+            session.add(TransactionEvent(
+                id=f"te_{hashlib.sha256(event_key.encode('utf-8')).hexdigest()[:24]}",
+                tenant_id=tenant_id,
+                transaction_id=existing.id,
+                trans_id=trans_id,
+                event_key=event_key,
+                event_type="transaction.conflicting_replay",
+                from_state=existing.status,
+                to_state="QUARANTINED",
+                actor="event_store",
+                reason="Provider transaction identity was replayed with conflicting or unverifiable facts",
+                payload_hash=_payload_hash(payload),
+                details=details,
+                created_at=datetime.now(timezone.utc),
+            ))
+        audit_exists = session.query(AuditEvent).filter(
+            AuditEvent.tenant_id == tenant_id,
+            AuditEvent.event_key == event_key,
+        ).one_or_none()
+        if audit_exists is None:
+            session.add(AuditEvent(
+                id=f"audit_{hashlib.sha256(event_key.encode('utf-8')).hexdigest()[:24]}",
+                tenant_id=tenant_id,
+                event_key=event_key,
+                event_type="transaction.conflicting_replay",
+                aggregate_type="transaction",
+                aggregate_id=existing.id,
+                actor="event_store",
+                payload_hash=_payload_hash(payload),
+                details=details,
+                created_at=datetime.now(timezone.utc),
+            ))
+        if commit:
+            session.commit()
+        logger.error(
+            "Conflicting provider replay quarantined for tenant_id=%s trans_id=%s reason_codes=%s",
+            tenant_id, trans_id, reason_codes,
+        )
+        return ProcessResult.CONFLICT
+
+    def classify_existing_replay(
+        self,
+        payload: Dict[str, Any],
+        *,
+        tenant_id: str,
+        provider: str,
+        account_id: str,
+        trans_id: str,
+    ) -> ProcessResult | None:
+        """Classify an existing transaction identity before any side effect."""
+        try:
+            self._ensure_ready()
+            with self.Session() as session:
+                return self._classify_existing_replay(
+                    session, payload, tenant_id=tenant_id, provider=provider,
+                    account_id=account_id, trans_id=trans_id,
+                )
+        except SQLAlchemyError:
+            logger.exception("Replay classification failed closed for trans_id=%s", trans_id)
+            return ProcessResult.ERROR
+
     def mark_processed(
         self,
         payload: Dict[str, Any],
@@ -314,13 +435,24 @@ class EventStore:
 
         try:
             with self.Session() as session:
+                replay_result = self._classify_existing_replay(
+                    session, payload, tenant_id=tenant_id, provider=provider,
+                    account_id=account_id, trans_id=trans_id,
+                )
+                if replay_result is not None:
+                    return replay_result
+
                 existing_identity = session.query(IdempotencyRecord).filter(
                     IdempotencyRecord.tenant_id == tenant_id,
                     IdempotencyRecord.provider == provider,
                     IdempotencyRecord.idempotency_key == idempotency_key,
                 ).one_or_none()
                 if existing_identity is not None:
-                    return ProcessResult.DUPLICATE
+                    logger.error(
+                        "Idempotency record exists without matching transaction row for tenant_id=%s trans_id=%s",
+                        tenant_id, trans_id,
+                    )
+                    return ProcessResult.ERROR
                 pt_record = ProcessedTransaction(
                     id=f"pt_{uuid.uuid4().hex[:12]}",
                     daraja_trans_id=trans_id,
@@ -429,6 +561,20 @@ class EventStore:
                 return ProcessResult.STORED
 
         except IntegrityError:
+            # A concurrent writer may have committed this provider identity
+            # after the initial lookup; compare its canonical facts after rollback.
+            try:
+                self._ensure_ready()
+                with self.Session() as replay_session:
+                    replay_result = self._classify_existing_replay(
+                        replay_session, payload, tenant_id=tenant_id, provider=provider,
+                        account_id=account_id, trans_id=trans_id,
+                    )
+                    if replay_result is not None:
+                        return replay_result
+            except SQLAlchemyError:
+                logger.exception("Could not classify concurrent transaction replay for trans_id=%s", trans_id)
+                return ProcessResult.ERROR
             if self.already_processed(trans_id, tenant_id=tenant_id, provider_account=account_id):
                 logger.info(
                     "Duplicate webhook callback ignored for trans_id=%s idempotency_key=%s",
@@ -503,14 +649,26 @@ class EventStore:
         ).to_dict()
         event_payload["TransID"] = trans_id
 
+        replay_result = self._classify_existing_replay(
+            session, payload, tenant_id=tenant_id, provider=provider,
+            account_id=account_id, trans_id=trans_id, commit=False,
+        )
+        if replay_result is not None:
+            return replay_result
+
         existing = session.query(ProcessedTransaction).filter(
             ProcessedTransaction.daraja_trans_id == trans_id,
             ProcessedTransaction.tenant_id == tenant_id,
             ProcessedTransaction.provider_account_id == account_id,
         ).first()
         if existing is not None:
-            logger.info("Duplicate trans_id=%s detected in pre-flight session check", trans_id)
-            return ProcessResult.DUPLICATE
+            # If the scoped transaction row was not found by replay classification,
+            # a processed marker without its transaction is inconsistent state.
+            logger.error(
+                "Processed marker exists without a matching transaction row for tenant_id=%s trans_id=%s",
+                tenant_id, trans_id,
+            )
+            return ProcessResult.ERROR
 
         try:
             # Create a savepoint to catch duplicate constraints without breaking the parent transaction

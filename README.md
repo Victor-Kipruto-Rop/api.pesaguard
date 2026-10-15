@@ -97,6 +97,10 @@ After deployment, verify:
 
 Email notifications are poll-based: a change can take up to five minutes to trigger a message, and an incident that begins and recovers between polls may not be observed. Production delivery is unverified until these checks pass against the deployed service.
 
+## Conflicting provider replay protection
+
+The event store compares canonical transaction facts for an already-seen tenant/provider/account-scoped transaction ID. A semantically identical retry returns DUPLICATE; a reused transaction identity with changed or unverifiable facts returns CONFLICT and persists a deduplicated transaction event plus audit event marked QUARANTINED. The M-Pesa webhook acknowledges a quarantined conflict to avoid retry storms; authenticated API ingestion returns HTTP 409. The conflicting payload is not inserted as a second financial transaction. This guard is still subject to full CI and staging concurrency/tenant-isolation verification.
+
 ## Smart reconciliation algorithms
 
 The additive, deterministic algorithm primitives and their safety/rollout contract are documented in docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md. They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
@@ -110,6 +114,10 @@ The current implementation inventory and remaining production-integration gates 
 ### Reconciliation scope safety
 
 The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns needs_review with a critical scope-conflict signal instead of auto-matching. This does not replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
+
+## Reversal lifecycle validation
+
+The additive transaction lifecycle algorithm checks reversal/original linkage, tenant/provider/account/currency conflicts, timestamp ordering, duplicate reversal IDs, and cumulative confirmed reversal amounts. It is advisory-only and always returns `can_auto_post=false`; it is not connected to the authoritative posting path. See docs/algorithms/TRANSACTION_LIFECYCLE_ALGORITHMS.md. Live integration still requires transaction-scoped database locking, provider-confirmed states, idempotency, audit persistence, and concurrency tests.
 
 ## Advanced analytics primitives
 

@@ -370,6 +370,14 @@ def mpesa_confirmation():
     trans_id = ingestion.envelope.external_reference
     idempotency_key = ingestion.envelope.idempotency_key
 
+    if ingestion.result == ProcessResult.CONFLICT:
+        record_pipeline_event("conflicting_replay", tenant_id=tenant_id, duration_ms=(time.perf_counter() - started) * 1000)
+        logger.error(
+            "Conflicting M-Pesa replay quarantined; acknowledging callback to prevent retry storm",
+            extra={"tenant_id": tenant_id, "trans_id": trans_id, "idempotency_key": idempotency_key},
+        )
+        return jsonify({"ResultCode": 0, "ResultDesc": "Conflicting replay quarantined for review"}), 200
+
     if ingestion.result == ProcessResult.DUPLICATE:
         record_pipeline_event("duplicate", tenant_id=tenant_id, duration_ms=(time.perf_counter() - started) * 1000)
         record_business_metric("duplicates")
@@ -433,6 +441,11 @@ def ingest_safaricom_api_transaction():
         ingestion = ingestion_service.ingest("safaricom-api", payload, tenant_id=tenant_id)
     except IngestionError as exc:
         return jsonify({"error": "invalid_provider_payload", "message": str(exc)}), 400
+    if ingestion.result == ProcessResult.CONFLICT:
+        return jsonify({
+            "error": "conflicting_transaction_replay",
+            "message": "The provider transaction ID already exists with different canonical facts; the event was quarantined for review.",
+        }), 409
     if ingestion.result == ProcessResult.ERROR:
         return jsonify({"error": "transaction_not_persisted"}), 500
     if ingestion.result == ProcessResult.STORED:

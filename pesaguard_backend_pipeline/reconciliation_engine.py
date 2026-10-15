@@ -293,26 +293,51 @@ class ReconciliationEngine:
         return result
 
 
-def measure_reconciliation(results: Iterable[Dict[str, Any]], expected_statuses: Iterable[str]) -> Dict[str, float]:
-    """Calculate precision, recall, error counts, latency, and throughput."""
+def measure_reconciliation(
+    results: Iterable[Dict[str, Any]],
+    expected_statuses: Iterable[str],
+) -> Dict[str, float | None]:
+    """Calculate reconciliation metrics without hiding undefined denominators.
+
+    Precision is unavailable when the engine predicts no matches; recall is
+    unavailable when the reviewed dataset contains no expected matches. Returning
+    1.0 for either case would falsely imply perfect performance. The input lengths
+    must agree so a truncated zip cannot silently discard evaluated cases.
+    """
     started = time.perf_counter()
     actual = list(results)
     expected = list(expected_statuses)
-    correct = sum(result.get("status") == expected_status for result, expected_status in zip(actual, expected))
+    if len(actual) != len(expected):
+        raise ValueError(
+            "results and expected_statuses must contain the same number of cases "
+            f"(got {len(actual)} results and {len(expected)} expected statuses)"
+        )
+
+    correct = sum(
+        result.get("status") == expected_status
+        for result, expected_status in zip(actual, expected)
+    )
     positives = sum(status == "MATCHED" for status in expected)
     predicted_positives = sum(result.get("status") == "MATCHED" for result in actual)
-    true_positives = sum(result.get("status") == expected_status == "MATCHED" for result, expected_status in zip(actual, expected))
+    true_positives = sum(
+        result.get("status") == expected_status == "MATCHED"
+        for result, expected_status in zip(actual, expected)
+    )
     false_positives = predicted_positives - true_positives
     false_negatives = positives - true_positives
+    elapsed = max(time.perf_counter() - started, 0.000001)
     return {
-        "precision": true_positives / predicted_positives if predicted_positives else 1.0,
-        "recall": true_positives / positives if positives else 1.0,
+        "precision": true_positives / predicted_positives if predicted_positives else None,
+        "recall": true_positives / positives if positives else None,
         "false_positives": float(false_positives),
         "false_negatives": float(false_negatives),
         "known_cases": float(len(expected)),
         "correct_cases": float(correct),
-        "processing_latency_ms": sum(float(result.get("processing_latency_ms", 0)) for result in actual) / max(len(actual), 1),
-        "throughput_per_second": len(actual) / max(time.perf_counter() - started, 0.000001),
+        "processing_latency_ms": (
+            sum(float(result.get("processing_latency_ms", 0)) for result in actual) / len(actual)
+            if actual else 0.0
+        ),
+        "throughput_per_second": len(actual) / elapsed,
     }
 
 
@@ -824,15 +849,41 @@ def reconcile_with_idempotency(
     trans_id = str(event.get("TransID") or event.get("trans_id") or "unknown").strip()
     account_id = str(event.get("provider_account_id") or event.get("BusinessShortCode") or event.get("business_short_code") or "legacy-default")
 
-    # Pre-flight duplicate check optimization
-    if event_store and event_store.already_processed(trans_id, tenant_id=tenant_id, provider_account=account_id):
-        logger.info("Idempotency: duplicate trans_id=%s detected prior to evaluation, skipping", trans_id)
+    # Compare canonical facts before taking the duplicate fast path. A repeated
+    # transaction ID with changed facts is quarantined, not silently accepted.
+    replay_result = None
+    if event_store and hasattr(event_store, "classify_existing_replay"):
+        replay_result = event_store.classify_existing_replay(
+            event,
+            tenant_id=str(tenant_id or "default"),
+            provider=str(event.get("provider") or event.get("provider_name") or "mpesa").strip().lower(),
+            account_id=account_id,
+            trans_id=trans_id,
+        )
+    elif event_store and event_store.already_processed(
+        trans_id, tenant_id=tenant_id, provider_account=account_id
+    ):
+        replay_result = ProcessResult.DUPLICATE
+
+    if replay_result == ProcessResult.DUPLICATE:
+        logger.info("Idempotency: identical replay trans_id=%s detected before evaluation", trans_id)
         return {
             "trans_id": trans_id,
             "status": "duplicate_ignored",
             "severity": "info",
             "anomalies": ["duplicate_transaction_id"],
         }
+    if replay_result == ProcessResult.CONFLICT:
+        logger.error("Conflicting replay trans_id=%s quarantined before reconciliation", trans_id)
+        return {
+            "trans_id": trans_id,
+            "status": "needs_review",
+            "severity": "critical",
+            "anomalies": ["conflicting_transaction_replay"],
+            "reason_codes": ["same_external_id_different_payload"],
+        }
+    if replay_result == ProcessResult.ERROR:
+        raise RuntimeError(f"replay classification failed closed for trans_id={trans_id}")
 
     seen_trans_ids: Set[str] = set()
     evaluation = evaluate_transaction(
@@ -855,6 +906,19 @@ def reconcile_with_idempotency(
                 source_ip=source_ip,
                 signature_verified=signature_verified,
             )
+
+        if result == ProcessResult.CONFLICT:
+            # The classifier wrote quarantine/audit evidence into this session.
+            # Commit only that evidence and never continue with a new transaction.
+            session.commit()
+            logger.error("Conflicting replay trans_id=%s quarantined during atomic ingestion", trans_id)
+            return {
+                "trans_id": trans_id,
+                "status": "needs_review",
+                "severity": "critical",
+                "anomalies": ["conflicting_transaction_replay"],
+                "reason_codes": ["same_external_id_different_payload"],
+            }
 
         if result == ProcessResult.DUPLICATE:
             session.rollback()
