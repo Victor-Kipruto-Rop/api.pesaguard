@@ -186,3 +186,53 @@ def test_match_quality_metrics_report_undefined_denominators():
     assert empty["precision"] is None
     with pytest.raises(ValueError):
         calculate_match_quality_metrics([{"predicted_match": 1, "actual_match": False}])
+
+
+
+def test_reversal_candidate_checks_linkage_and_cumulative_amount():
+    from pesaguard_backend_pipeline.advanced_reconciliation_algorithms import assess_reversal_candidate
+    original = {"transaction_id": "TX-1", "tenant_id": "t", "provider": "mpesa",
+                "account_id": "paybill-1", "currency": "KES", "amount": "100",
+                "timestamp": "2026-10-14T10:00:00Z"}
+    reversal = {"original_reference": "TX-1", "tenant_id": "t", "provider": "mpesa",
+                "account_id": "paybill-1", "currency": "KES", "amount": "40",
+                "timestamp": "2026-10-14T11:00:00Z"}
+    result = assess_reversal_candidate(reversal, original, [{"amount": "30", "status": "completed"}])
+    assert result["decision"] == "ELIGIBLE_FOR_REVIEW"
+    assert result["remaining_reversible_amount"] == "70"
+    assert result["posting_authorized"] is False
+
+
+def test_reversal_over_amount_or_wrong_tenant_requires_review():
+    from pesaguard_backend_pipeline.advanced_reconciliation_algorithms import assess_reversal_candidate
+    original = {"transaction_id": "TX-1", "tenant_id": "t", "provider": "mpesa",
+                "account_id": "a", "currency": "KES", "amount": "100",
+                "timestamp": "2026-10-14T10:00:00Z"}
+    reversal = {"original_reference": "TX-1", "tenant_id": "other", "provider": "mpesa",
+                "account_id": "a", "currency": "KES", "amount": "80",
+                "timestamp": "2026-10-14T11:00:00Z"}
+    result = assess_reversal_candidate(reversal, original, [{"amount": "30", "status": "successful"}])
+    assert result["decision"] == "REVIEW"
+    assert "tenant_scope_conflict" in result["reason_codes"]
+    assert "reversal_exceeds_remaining_amount" in result["reason_codes"]
+
+
+def test_reversal_without_original_or_with_bad_time_is_reviewed():
+    from pesaguard_backend_pipeline.advanced_reconciliation_algorithms import assess_reversal_candidate
+    assert assess_reversal_candidate({"amount": "5"}, None)["decision"] == "REVIEW"
+    result = assess_reversal_candidate(
+        {"original_reference": "TX-1", "tenant_id": "t", "provider": "mpesa",
+         "account_id": "a", "currency": "KES", "amount": "5", "timestamp": "2026-10-14T09:00:00Z"},
+        {"transaction_id": "TX-1", "tenant_id": "t", "provider": "mpesa",
+         "account_id": "a", "currency": "KES", "amount": "10", "timestamp": "2026-10-14T10:00:00Z"})
+    assert "reversal_precedes_original" in result["reason_codes"]
+
+
+def test_event_order_flags_late_and_future_events_without_discarding_them():
+    from datetime import datetime, timezone
+    from pesaguard_backend_pipeline.advanced_reconciliation_algorithms import assess_event_order
+    latest = datetime(2026, 10, 15, 10, 10, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 15, 10, 11, tzinfo=timezone.utc)
+    assert assess_event_order("2026-10-15T10:00:00Z", latest, now=now)["classification"] == "LATE"
+    assert assess_event_order("2026-10-15T10:20:00Z", latest, now=now)["classification"] == "FUTURE_SKEW"
+    assert assess_event_order("2026-10-15T10:10:00Z", latest, now=now)["classification"] == "IN_ORDER"

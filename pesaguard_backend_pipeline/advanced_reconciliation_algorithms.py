@@ -360,3 +360,106 @@ def calculate_match_quality_metrics(outcomes: Iterable[Mapping[str, Any]]) -> di
                "accuracy": (tp + tn) / total if total else None}
     return {"algorithm_version": ALGORITHM_VERSION, "sample_count": total, **counts, **metrics,
             "undefined_metrics": [name for name, value in metrics.items() if value is None]}
+
+
+
+def assess_reversal_candidate(reversal: Mapping[str, Any], original: Mapping[str, Any] | None,
+                              prior_reversals: Sequence[Mapping[str, Any]] = (),
+                              *, amount_tolerance: Any = "0.01") -> dict[str, Any]:
+    """Validate reversal linkage and remaining amount; never authorizes posting."""
+    tolerance = _finite_decimal(amount_tolerance)
+    if tolerance is None or tolerance < 0:
+        raise ValueError("amount_tolerance must be finite and non-negative")
+    if not original:
+        return {"algorithm_version": ALGORITHM_VERSION, "decision": "REVIEW",
+                "reason_codes": ["original_transaction_not_found"], "remaining_reversible_amount": None}
+    reasons = []
+    aliases = {"tenant": ("tenant_id", "tenantId", "TenantID"),
+               "provider": ("provider", "provider_name", "providerName"),
+               "account": ("account_id", "provider_account_id", "merchant_account_id"),
+               "currency": ("currency", "Currency")}
+    for scope, keys in aliases.items():
+        left = next((reversal.get(k) for k in keys if reversal.get(k) not in (None, "")), None)
+        right = next((original.get(k) for k in keys if original.get(k) not in (None, "")), None)
+        if left is None or right is None:
+            reasons.append(f"{scope}_scope_missing")
+            continue
+        a, b = str(left).strip(), str(right).strip()
+        if scope in {"provider", "currency"}:
+            a, b = a.casefold(), b.casefold()
+        if a != b:
+            reasons.append(f"{scope}_scope_conflict")
+    reference = str(reversal.get("original_reference") or reversal.get("original_transaction_id") or "").strip()
+    original_ids = {str(original.get(k) or "").strip() for k in
+                    ("transaction_id", "TransID", "trans_id", "reference", "provider_transaction_id")}
+    original_ids.discard("")
+    if not reference:
+        reasons.append("original_reference_missing")
+    elif reference not in original_ids:
+        reasons.append("original_reference_conflict")
+    original_amount = _finite_decimal(original.get("amount", original.get("TransAmount")))
+    reversal_amount = _finite_decimal(reversal.get("amount", reversal.get("TransAmount")))
+    if original_amount is None or original_amount <= 0:
+        reasons.append("original_amount_invalid")
+    if reversal_amount is None or reversal_amount <= 0:
+        reasons.append("reversal_amount_invalid")
+    original_time = _aware_datetime(original.get("timestamp") or original.get("TransTime"))
+    reversal_time = _aware_datetime(reversal.get("timestamp") or reversal.get("TransTime"))
+    if original_time is None or reversal_time is None:
+        reasons.append("reversal_timestamp_missing_or_ambiguous")
+    elif reversal_time < original_time:
+        reasons.append("reversal_precedes_original")
+    prior_total = Decimal("0")
+    for item in prior_reversals:
+        if str(item.get("status") or "completed").strip().casefold() not in {
+            "completed", "complete", "successful", "success", "reversed"
+        }:
+            continue
+        value = _finite_decimal(item.get("amount", item.get("TransAmount")))
+        if value is None or value < 0:
+            reasons.append("prior_reversal_amount_invalid")
+        else:
+            prior_total += value
+    remaining = None
+    if original_amount is not None and original_amount > 0:
+        remaining = max(Decimal("0"), original_amount - prior_total)
+        if prior_total - original_amount > tolerance:
+            reasons.append("prior_reversals_exceed_original_amount")
+        if reversal_amount is not None and reversal_amount > remaining + tolerance:
+            reasons.append("reversal_exceeds_remaining_amount")
+    return {"algorithm_version": ALGORITHM_VERSION,
+            "decision": "REVIEW" if reasons else "ELIGIBLE_FOR_REVIEW",
+            "reason_codes": list(dict.fromkeys(reasons)),
+            "original_amount": format(original_amount, "f") if original_amount is not None else None,
+            "prior_reversed_amount": format(prior_total, "f"),
+            "remaining_reversible_amount": format(remaining, "f") if remaining is not None else None,
+            "proposed_reversal_amount": format(reversal_amount, "f") if reversal_amount is not None else None,
+            "posting_authorized": False}
+
+
+def assess_event_order(event_time: Any, latest_seen_event_time: Any, *, now: Any,
+                       allowed_lateness_seconds: int = 300,
+                       max_future_skew_seconds: int = 60) -> dict[str, Any]:
+    """Classify event-time order without silently discarding late events."""
+    if (isinstance(allowed_lateness_seconds, bool) or allowed_lateness_seconds < 0
+            or isinstance(max_future_skew_seconds, bool) or max_future_skew_seconds < 0):
+        raise ValueError("time tolerances must be non-negative integers")
+    event, latest, current = _aware_datetime(event_time), _aware_datetime(latest_seen_event_time), _aware_datetime(now)
+    if event is None or current is None:
+        return {"algorithm_version": ALGORITHM_VERSION, "classification": "REVIEW",
+                "reason_codes": ["event_or_now_timestamp_missing_or_ambiguous"]}
+    if event > current and (event - current).total_seconds() > max_future_skew_seconds:
+        return {"algorithm_version": ALGORITHM_VERSION, "classification": "FUTURE_SKEW",
+                "reason_codes": ["event_timestamp_too_far_in_future"], "late_by_seconds": 0}
+    if latest is None:
+        return {"algorithm_version": ALGORITHM_VERSION, "classification": "FIRST_OR_UNKNOWN",
+                "reason_codes": ["watermark_unavailable"], "late_by_seconds": None}
+    if event < latest:
+        late_by = (latest - event).total_seconds()
+        if late_by > allowed_lateness_seconds:
+            return {"algorithm_version": ALGORITHM_VERSION, "classification": "LATE",
+                    "reason_codes": ["event_behind_watermark"], "late_by_seconds": round(late_by, 3)}
+        return {"algorithm_version": ALGORITHM_VERSION, "classification": "OUT_OF_ORDER_WITHIN_TOLERANCE",
+                "reason_codes": ["event_order_differs_from_arrival"], "late_by_seconds": round(late_by, 3)}
+    return {"algorithm_version": ALGORITHM_VERSION, "classification": "IN_ORDER",
+            "reason_codes": [], "late_by_seconds": 0}

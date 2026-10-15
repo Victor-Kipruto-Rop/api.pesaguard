@@ -26,3 +26,9 @@ This document supplements the existing seasonal amount baseline and distribution
     python -m compileall -q pesaguard_backend_pipeline
 
 Passing tests do not by themselves establish production readiness. Certification still requires tenant-scoped replay, transactional locking/idempotency tests, provider/database integration tests, security review, and observed CI results.
+
+
+## Additional lifecycle safeguards
+
+- Reversal assessment checks original-reference linkage, tenant/provider/account/currency scope, timezone-aware event ordering, and cumulative completed reversal amounts. Its only positive result is ELIGIBLE_FOR_REVIEW; it never authorizes posting.
+- Event-order assessment classifies in-order, out-of-order-within-tolerance, late, and future-skew events. Late events are surfaced for controlled replay rather than silently discarded.
