@@ -230,8 +230,9 @@ def find_invoice_allocation_candidates(
         raise ValueError("tenant_id and currency are required")
     if not isinstance(quantum, Decimal) or not quantum.is_finite() or quantum <= 0:
         raise ValueError("quantum must be a finite positive Decimal")
-    if isinstance(max_invoices, bool) or max_invoices < 1 or isinstance(max_states, bool) or max_states < 2:
-        raise ValueError("limits must be positive")
+    if (isinstance(max_invoices, bool) or not isinstance(max_invoices, int) or max_invoices < 1
+            or isinstance(max_states, bool) or not isinstance(max_states, int) or max_states < 2):
+        raise ValueError("limits must be positive integers")
     if len(invoices) > max_invoices:
         return {"algorithm_version": ALGORITHM_VERSION, "decision": "REVIEW",
                 "reason_codes": ["candidate_set_too_large"], "allocations": []}
@@ -408,9 +409,11 @@ def assess_reversal_candidate(reversal: Mapping[str, Any], original: Mapping[str
         reasons.append("reversal_precedes_original")
     prior_total = Decimal("0")
     for item in prior_reversals:
-        if str(item.get("status") or "completed").strip().casefold() not in {
-            "completed", "complete", "successful", "success", "reversed"
-        }:
+        state = str(item.get("status") or "").strip().casefold()
+        if not state:
+            # Unknown state is conservatively counted and requires manual review.
+            reasons.append("prior_reversal_status_missing")
+        elif state not in {"completed", "complete", "successful", "success", "reversed"}:
             continue
         value = _finite_decimal(item.get("amount", item.get("TransAmount")))
         if value is None or value < 0:

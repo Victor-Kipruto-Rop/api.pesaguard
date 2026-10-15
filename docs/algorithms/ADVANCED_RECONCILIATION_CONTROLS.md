@@ -16,7 +16,7 @@ This document supplements the existing seasonal amount baseline and distribution
 - Output is a candidate, not an accounting decision. Never apply an allocation solely from this result. Persist actor, provenance, algorithm version, chosen allocation, and audit reason.
 - Settlement totals must use provider and internal ledger records from the same window, currency, and account. Variance is not necessarily fraud; fees, timing, reversals, and cut-off differences must be modelled explicitly.
 - Metrics are valid only when outcomes are independently reviewed. Record evaluation window, tenant/provider segment, sample size, label policy, and reviewer. Do not tune and evaluate on the same holdout data.
-- These helpers are not wired into payment approval, settlement posting, refunds, or API routes. Integrate through a reviewed service layer and feature flag after staging replay, integration tests, and finance sign-off.
+- Reversal assessment is surfaced only inside the existing opt-in shadow analysis; it does not alter the legacy decision. Invoice allocation, settlement comparison, and event-order analysis remain pure primitives, not live posting or approval paths. Broader integration requires a reviewed service layer and feature flag after staging replay, integration tests, and finance sign-off.
 
 ## Verification commands
 

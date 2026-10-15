@@ -238,3 +238,17 @@ def test_event_order_flags_late_and_future_events_without_discarding_them():
     assert assess_event_order("2026-10-15T10:00:00Z", latest, now=now)["classification"] == "LATE"
     assert assess_event_order("2026-10-15T10:20:00Z", latest, now=now)["classification"] == "FUTURE_SKEW"
     assert assess_event_order("2026-10-15T10:10:00Z", latest, now=now)["classification"] == "IN_ORDER"
+
+
+def test_reversal_with_unknown_prior_status_fails_closed():
+    from pesaguard_backend_pipeline.advanced_reconciliation_algorithms import assess_reversal_candidate
+    original = {"transaction_id": "TX-1", "tenant_id": "t", "provider": "mpesa",
+                "account_id": "a", "currency": "KES", "amount": "100",
+                "timestamp": "2026-10-14T10:00:00Z"}
+    reversal = {"original_reference": "TX-1", "tenant_id": "t", "provider": "mpesa",
+                "account_id": "a", "currency": "KES", "amount": "20",
+                "timestamp": "2026-10-14T11:00:00Z"}
+    result = assess_reversal_candidate(reversal, original, [{"amount": "10"}])
+    assert result["decision"] == "REVIEW"
+    assert "prior_reversal_status_missing" in result["reason_codes"]
+    assert result["remaining_reversible_amount"] == "90"
