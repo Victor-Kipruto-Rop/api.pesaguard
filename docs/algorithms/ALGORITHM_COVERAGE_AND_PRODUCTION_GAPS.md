@@ -21,6 +21,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |
 | Batch data-quality profile | Helper + tests | Counts findings; does not itself quarantine, repair, or persist rows. |
 | Transaction-quality gate | Helper + shadow hook + enforced in `ReconciliationEngine.reconcile` after normalization | Critical/high quality findings return `EXCEPTION` with structured evidence before candidate selection. Regression tests: `tests/test_reconciliation_quality_gate.py`. Still verify all alternate ingestion/legacy paths and persistence/audit behavior. |
+| Missing ledger timestamp guard | Enforced in `ReconciliationEngine.reconcile` before exact matching | A candidate with matching reference, amount, and compatible phone but no ledger timestamp returns `EXCEPTION` with `ledger_timestamp_missing` and `manual_review_required`; absence of time evidence cannot authorize an automatic match. Regression tests: `tests/test_reconciliation_missing_ledger_timestamp.py`. Verify legacy entry points and persisted evidence before certification. |
 | Risk scoring | Explainable weighted rules and existing fraud features | Not calibrated probability; never auto-decline or refund based on score alone. |
 | Ground-truth evaluation | reconciliation_evaluation.py | Needs finance-reviewed representative labels; scorecard does not certify production. |
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
@@ -31,12 +32,13 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 ### P0 — correctness and financial safety
 
-1. **One ingestion contract:** the canonical `ReconciliationEngine.reconcile` now applies the normalized transaction-quality gate before candidate selection; verify webhook, retry, batch, worker, and manual replay paths all invoke an equivalent gate and share tenant resolution, normalization, and idempotency. The live matcher fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
-2. **Atomic idempotency:** enforce database uniqueness for tenant + provider/account + external transaction ID and claim it transactionally. In-memory ID sets are not concurrency controls.
-3. **Conflicting replay quarantine:** the EventStore now compares canonical fingerprints against the protected original payload, records a deduplicated quarantine/audit event, and returns a distinct conflict result. Still verify all ingestion entry points and PostgreSQL concurrency behavior; do not treat the new unit coverage as certification.
-4. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
-5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
-6. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
+1. **Missing ledger-time evidence:** the class-based engine now fails closed when reference/amount evidence points to a ledger row whose timestamp is absent. Run the new regression tests and verify every alternate ingestion and persistence path follows the same policy.
+2. **One ingestion contract:** the canonical `ReconciliationEngine.reconcile` now applies the normalized transaction-quality gate before candidate selection; verify webhook, retry, batch, worker, and manual replay paths all invoke an equivalent gate and share tenant resolution, normalization, and idempotency. The live matcher fails closed when candidate records explicitly disagree on tenant/provider/account/currency; database retrieval must still be tenant-scoped.
+3. **Atomic idempotency:** enforce database uniqueness for tenant + provider/account + external transaction ID and claim it transactionally. In-memory ID sets are not concurrency controls.
+4. **Conflicting replay quarantine:** the EventStore now compares canonical fingerprints against the protected original payload, records a deduplicated quarantine/audit event, and returns a distinct conflict result. Still verify all ingestion entry points and PostgreSQL concurrency behavior; do not treat the new unit coverage as certification.
+5. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
+6. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
+7. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
 
 The global batch-assignment helper is currently advisory and is not wired into the live financial posting path. Before integration, prove candidate-query tenant/provider/account/currency scoping, persist the proposal and algorithm version as audit evidence, add concurrency-safe one-to-one posting constraints, and compare it against finance-reviewed ground truth in shadow mode.
 
