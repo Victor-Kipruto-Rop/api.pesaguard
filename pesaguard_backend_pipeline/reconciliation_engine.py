@@ -849,15 +849,41 @@ def reconcile_with_idempotency(
     trans_id = str(event.get("TransID") or event.get("trans_id") or "unknown").strip()
     account_id = str(event.get("provider_account_id") or event.get("BusinessShortCode") or event.get("business_short_code") or "legacy-default")
 
-    # Pre-flight duplicate check optimization
-    if event_store and event_store.already_processed(trans_id, tenant_id=tenant_id, provider_account=account_id):
-        logger.info("Idempotency: duplicate trans_id=%s detected prior to evaluation, skipping", trans_id)
+    # Compare canonical facts before taking the duplicate fast path. A repeated
+    # transaction ID with changed facts is quarantined, not silently accepted.
+    replay_result = None
+    if event_store and hasattr(event_store, "classify_existing_replay"):
+        replay_result = event_store.classify_existing_replay(
+            event,
+            tenant_id=str(tenant_id or "default"),
+            provider=str(event.get("provider") or event.get("provider_name") or "mpesa").strip().lower(),
+            account_id=account_id,
+            trans_id=trans_id,
+        )
+    elif event_store and event_store.already_processed(
+        trans_id, tenant_id=tenant_id, provider_account=account_id
+    ):
+        replay_result = ProcessResult.DUPLICATE
+
+    if replay_result == ProcessResult.DUPLICATE:
+        logger.info("Idempotency: identical replay trans_id=%s detected before evaluation", trans_id)
         return {
             "trans_id": trans_id,
             "status": "duplicate_ignored",
             "severity": "info",
             "anomalies": ["duplicate_transaction_id"],
         }
+    if replay_result == ProcessResult.CONFLICT:
+        logger.error("Conflicting replay trans_id=%s quarantined before reconciliation", trans_id)
+        return {
+            "trans_id": trans_id,
+            "status": "needs_review",
+            "severity": "critical",
+            "anomalies": ["conflicting_transaction_replay"],
+            "reason_codes": ["same_external_id_different_payload"],
+        }
+    if replay_result == ProcessResult.ERROR:
+        raise RuntimeError(f"replay classification failed closed for trans_id={trans_id}")
 
     seen_trans_ids: Set[str] = set()
     evaluation = evaluate_transaction(
@@ -880,6 +906,19 @@ def reconcile_with_idempotency(
                 source_ip=source_ip,
                 signature_verified=signature_verified,
             )
+
+        if result == ProcessResult.CONFLICT:
+            # The classifier wrote quarantine/audit evidence into this session.
+            # Commit only that evidence and never continue with a new transaction.
+            session.commit()
+            logger.error("Conflicting replay trans_id=%s quarantined during atomic ingestion", trans_id)
+            return {
+                "trans_id": trans_id,
+                "status": "needs_review",
+                "severity": "critical",
+                "anomalies": ["conflicting_transaction_replay"],
+                "reason_codes": ["same_external_id_different_payload"],
+            }
 
         if result == ProcessResult.DUPLICATE:
             session.rollback()
