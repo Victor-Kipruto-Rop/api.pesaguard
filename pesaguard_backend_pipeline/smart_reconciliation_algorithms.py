@@ -60,30 +60,46 @@ def transaction_fingerprint(
 ) -> str:
     """Return a stable, tenant-scoped SHA-256 fingerprint for duplicate triage.
 
-    Provider transaction ID is preferred. Fallback fingerprinting is intentionally
-    conservative and uses amount/time/reference/phone; callers should mark fallback
-    collisions as candidates, not authoritative duplicates.
+    Provider transaction ID is preferred. Fallback fingerprinting requires a finite
+    amount, timezone-aware timestamp, and at least a reference or phone. Incomplete
+    payloads raise ValueError rather than collapsing into a shared empty fingerprint.
+    Fallback collisions remain candidates, not authoritative duplicates.
     """
     tenant = str(tenant_id).strip()
+    normalized_provider = _normalized_text(provider)
     if not tenant:
         raise ValueError("tenant_id is required")
+    if not normalized_provider:
+        raise ValueError("provider is required")
     tx_id = _normalized_text(
         transaction.get("transaction_id")
         or transaction.get("TransID")
         or transaction.get("trans_id")
     )
     if tx_id:
-        material = {"tenant": tenant, "provider": _normalized_text(provider), "id": tx_id}
+        material = {"tenant": tenant, "provider": normalized_provider, "id": tx_id}
     else:
         amount = _decimal(transaction.get("amount", transaction.get("TransAmount")))
         timestamp = _utc_timestamp(transaction.get("timestamp", transaction.get("TransTime")))
+        reference = _normalized_text(transaction.get("reference") or transaction.get("BillRefNumber"))
+        phone = "".join(ch for ch in str(transaction.get("phone") or transaction.get("MSISDN") or "") if ch.isdigit())
+
+        # Fail closed instead of hashing empty/partial payloads into the same
+        # fingerprint. A fallback fingerprint is useful only when it has enough
+        # independent evidence to distinguish plausible transactions.
+        if amount is None or timestamp is None or not (reference or phone):
+            raise ValueError(
+                "transaction_id is required unless fallback fingerprint has a finite amount, "
+                "timezone-aware timestamp, and reference or phone"
+            )
+
         material = {
             "tenant": tenant,
-            "provider": _normalized_text(provider),
-            "reference": _normalized_text(transaction.get("reference") or transaction.get("BillRefNumber")),
-            "amount": format(amount.quantize(CENT), "f") if amount is not None else None,
-            "timestamp": timestamp.isoformat() if timestamp else None,
-            "phone": "".join(ch for ch in str(transaction.get("phone") or transaction.get("MSISDN") or "") if ch.isdigit()),
+            "provider": normalized_provider,
+            "reference": reference,
+            "amount": format(amount.quantize(CENT), "f"),
+            "timestamp": timestamp.isoformat(),
+            "phone": phone,
         }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return sha256(encoded).hexdigest()

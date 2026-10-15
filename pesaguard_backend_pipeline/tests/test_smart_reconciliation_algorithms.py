@@ -36,6 +36,37 @@ def test_fingerprint_requires_tenant():
         transaction_fingerprint({"TransID": "x"}, tenant_id=" ")
 
 
+def test_fingerprint_requires_provider_scope():
+    with pytest.raises(ValueError, match="provider is required"):
+        transaction_fingerprint({"TransID": "x"}, tenant_id="tenant-a", provider=" ")
+
+
+@pytest.mark.parametrize(
+    "transaction",
+    [
+        {},
+        {"amount": "100.00"},
+        {"reference": "INV-1", "amount": "100.00"},
+        {"phone": "254700000000", "amount": "100.00", "timestamp": "2026-10-14T10:00:00"},
+    ],
+)
+def test_fallback_fingerprint_rejects_insufficient_identity_evidence(transaction):
+    with pytest.raises(ValueError, match="transaction_id is required"):
+        transaction_fingerprint(transaction, tenant_id="tenant-a")
+
+
+def test_fallback_fingerprint_accepts_amount_time_and_reference_without_phone():
+    tx = {
+        "reference": "INV-9",
+        "amount": "100.00",
+        "timestamp": "2026-10-14T10:00:00Z",
+    }
+    assert transaction_fingerprint(tx, tenant_id="tenant-a") == transaction_fingerprint(
+        {**tx, "reference": " inv-9 ", "timestamp": "2026-10-14T13:00:00+03:00"},
+        tenant_id="tenant-a",
+    )
+
+
 def test_candidate_score_exposes_evidence_and_conflicts():
     tx = {"reference": "INV-1", "amount": "125.00", "timestamp": "2026-10-14T10:00:00Z", "phone": "2547123"}
     candidate = {"internal_ref": "ledger-1", "reference": "INV-1", "amount": "125", "created_at": "2026-10-14T10:02:00Z", "phone_number": "2547123"}
