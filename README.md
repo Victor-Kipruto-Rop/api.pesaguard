@@ -32,14 +32,14 @@ python -m compileall -q pesaguard_backend_pipeline
 
 ## Local services
 
-Use Docker Compose after setting real local values in `.env`:
+Use Docker Compose after setting real local values in .env:
 
 ```bash
 python infra/configure.py compose -- -f infra/docker/docker-compose.yml config --quiet
 python infra/configure.py compose -- -f infra/docker/docker-compose.yml up -d --build
 ```
 
-The API exposes liveness at `/livez` and dependency readiness at `/health`. In production, PostgreSQL, Redis, Kafka/Redpanda, and configured Daraja credentials are required for a ready instance.
+The API exposes liveness at /livez and dependency readiness at /health. In production, PostgreSQL, Redis, Kafka/Redpanda, and configured Daraja credentials are required for a ready instance.
 
 ## Production release gates
 
@@ -48,97 +48,69 @@ A release must satisfy all of the following:
 1. Full CI passes, including migrations and tests.
 2. The production image builds and passes the vulnerability scan.
 3. Staging deploys using the immutable image digest.
-4. Staging `/health` reports `status: ok`.
+4. Staging /health reports status: ok.
 5. Database backup and restore validation succeeds.
-6. Production deployment is approved through the protected `production` environment.
-7. Production `/health` reports `status: ok` after deployment.
+6. Production deployment is approved through the protected production environment.
+7. Production /health reports status: ok after deployment.
 
-Do not commit `.env` or production credentials. Generate secrets outside Git and provide them through the deployment environment.
+Do not commit .env or production credentials. Generate secrets outside Git and provide them through the deployment environment.
 
 ## Documentation
 
-Operational, security, database, testing, and recovery procedures are under `docs/` and `infra/README.md`.
+Operational, security, database, testing, and recovery procedures are under docs/ and infra/README.md.
 
 ## Public status service and email subscriptions
 
 The status website uses these public API routes:
 
-- `GET /public/status` publishes API/dependency health and HTTP reachability
-  for the public website, dashboard, docs, and status site.
-- `POST /public/status/subscriptions` starts a double-opt-in subscription.
-- `POST /public/status/subscriptions/confirm` confirms the email address.
-- `POST /public/status/subscriptions/unsubscribe` removes a subscription using
-  its signed link.
-- `POST /public/status/monitor` sends change notifications to confirmed
-  subscribers. The scheduled GitHub Actions workflow calls this endpoint with
-  a bearer token.
+- GET /public/status publishes API/dependency health and HTTP reachability for the public website, dashboard, docs, and status site.
+- POST /public/status/subscriptions starts a double-opt-in subscription.
+- POST /public/status/subscriptions/confirm confirms the email address.
+- POST /public/status/subscriptions/unsubscribe removes a subscription using its signed link.
+- POST /public/status/monitor sends change notifications to confirmed subscribers. The scheduled GitHub Actions workflow calls this endpoint with a bearer token.
 
 ### Production prerequisites
 
-1. Before merging the backend change, configure the production runtime:
-   `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`, TLS (`SMTP_USE_TLS` or
-   `SMTP_USE_SSL`), and both `SMTP_USERNAME`/`SMTP_PASSWORD` when the provider
-   requires authentication. The mail transport requires TLS.
-2. Keep the existing production `JWT_SECRET_KEY` configured; it signs
-   unsubscribe links. Do not rotate it solely for this feature.
-3. Set `PESAGUARD_STATUS_MONITOR_TOKEN` to a newly generated random value of
-   at least 32 characters in the backend runtime and set the same value as the
-   GitHub Actions repository secret. Never commit the token or expose it in
-   logs.
-4. Set `PESAGUARD_CORS_ALLOWED_ORIGINS` to allow both
-   `https://api.pesaguard.co.ke` and
-   `https://status.pesaguard.co.ke`. An explicit value replaces
-   defaults, so retain any other origins required by clients.
-5. Back up the database, then run migrations from the backend checkout root
-   with production `DATABASE_URL` configured, before deploying the code:
+1. Before merging the backend change, configure the production runtime: SMTP_HOST, SMTP_PORT, SMTP_FROM_EMAIL, TLS (SMTP_USE_TLS or SMTP_USE_SSL), and both SMTP_USERNAME/SMTP_PASSWORD when the provider requires authentication. The mail transport requires TLS.
+2. Keep the existing production JWT_SECRET_KEY configured; it signs unsubscribe links. Do not rotate it solely for this feature.
+3. Set PESAGUARD_STATUS_MONITOR_TOKEN to a newly generated random value of at least 32 characters in the backend runtime and set the same value as the GitHub Actions repository secret. Never commit the token or expose it in logs.
+4. Set PESAGUARD_CORS_ALLOWED_ORIGINS to allow both https://api.pesaguard.co.ke and https://status.pesaguard.co.ke. An explicit value replaces defaults, so retain any other origins required by clients.
+5. Back up the database, then run migrations from the backend checkout root with production DATABASE_URL configured, before deploying the code:
 
    ```powershell
    python -m alembic upgrade head
    ```
 
-   This creates `public_status_subscriptions` as well as any other pending
-   schema changes. The release workflow validates migrations against CI but
-   does not apply them to production.
-6. Confirm the protected `production` GitHub environment has
-   `RENDER_PRODUCTION_DEPLOY_HOOK` and `PRODUCTION_HEALTH_URL` configured.
-   Merge the reviewed change to `main` only after these prerequisites are
-   ready; the release workflow builds and deploys on `main`.
-7. The `.github/workflows/public-status-monitor.yml` workflow runs on the
-   default branch every five minutes and can also be manually dispatched.
+   This creates public_status_subscriptions as well as any other pending schema changes. The release workflow validates migrations against CI but does not apply them to production.
+6. Confirm the protected production GitHub environment has RENDER_PRODUCTION_DEPLOY_HOOK and PRODUCTION_HEALTH_URL configured. Merge the reviewed change to main only after these prerequisites are ready; the release workflow builds and deploys on main.
+7. The .github/workflows/public-status-monitor.yml workflow runs on the default branch every five minutes and can also be manually dispatched.
 
 ### Production smoke checks
 
 After deployment, verify:
 
-1. `GET https://api.pesaguard.co.ke/public/status` returns a valid
-   `verified` payload and the expected service IDs. HTTP 503 can carry a real
-   degraded/outage payload; inspect the payload as well as the HTTP code.
-2. A browser request from the status-site origin passes CORS preflight for the
-   status GET and subscription POST.
-3. A controlled test address receives the opt-in email, confirms successfully,
-   and can unsubscribe. Avoid using real subscribers for the test.
-4. A manual monitor workflow run succeeds. Its first run establishes a status
-   baseline; it does not send a change notification.
+1. GET https://api.pesaguard.co.ke/public/status returns a valid verified payload and the expected service IDs. HTTP 503 can carry a real degraded/outage payload; inspect the payload as well as the HTTP code.
+2. A browser request from the status-site origin passes CORS preflight for the status GET and subscription POST.
+3. A controlled test address receives the opt-in email, confirms successfully, and can unsubscribe. Avoid using real subscribers for the test.
+4. A manual monitor workflow run succeeds. Its first run establishes a status baseline; it does not send a change notification.
 5. Remove the test subscription and test data and review sanitized logs.
 
-Email notifications are poll-based: a change can take up to five minutes to
-trigger a message, and an incident that begins and recovers between polls may
-not be observed. Production delivery is unverified until these checks pass
-against the deployed service.
-
+Email notifications are poll-based: a change can take up to five minutes to trigger a message, and an incident that begins and recovers between polls may not be observed. Production delivery is unverified until these checks pass against the deployed service.
 
 ## Smart reconciliation algorithms
 
-The additive, deterministic algorithm primitives and their safety/rollout contract are documented in [`docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md`](docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md). They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
-
+The additive, deterministic algorithm primitives and their safety/rollout contract are documented in docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md. They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
 
 ## Reconciliation algorithm evaluation
 
-The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See [`docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md`](docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md). These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
+The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md. These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
 
-The current implementation inventory and remaining production-integration gates are tracked in [`docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md`](docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md). It distinguishes existing helper functions from durable, tenant-safe production integration and calibration work.
-
+The current implementation inventory and remaining production-integration gates are tracked in docs/algorithms/ALGORITHM_COVERAGE_AND_PRODUCTION_GAPS.md. It distinguishes existing helper functions from durable, tenant-safe production integration and calibration work.
 
 ### Reconciliation scope safety
 
-The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns `needs_review` with a critical scope-conflict signal instead of auto-matching. This does **not** replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in `pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py`. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
+The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns needs_review with a critical scope-conflict signal instead of auto-matching. This does not replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
+
+## Advanced analytics primitives
+
+The new advanced_reconciliation_algorithms.py module provides seasonal amount assessment and distribution-shift detection. These are advisory-only helpers, not enabled in the live matching/risk decision path. See docs/algorithms/ADVANCED_RECONCILIATION_ALGORITHMS.md for scope, safety boundaries, and test commands. Production activation requires tenant-scoped history, finance-reviewed holdout evaluation, false-positive analysis, monitoring, and an approved rollout.
