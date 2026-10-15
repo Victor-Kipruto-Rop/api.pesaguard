@@ -223,7 +223,7 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
         shadow = evaluation.get("smart_analysis") or {}
         shadow_ranking = shadow.get("candidate_ranking") or {}
         shadow_risk = shadow.get("risk") or {}
-        algorithm_provenance = build_algorithm_provenance(evaluation)
+        algorithm_provenance = build_algorithm_provenance(result_payload)
         # Persist the same provenance with the published result and audit record.
         result_payload["algorithm_provenance"] = algorithm_provenance
         audit_details = {
