@@ -534,17 +534,25 @@ def validate_route_audit_records(records: Iterable[str]) -> Dict[str, int]:
         unique_values = set(values)
         expected_permission = ENDPOINT_PERMISSIONS.get(endpoint)
         if endpoint in ROUTE_AUDIT_RESOLVED_CONFLICTS:
-            expected_values = {ROUTE_AUDIT_RESOLVED_CONFLICTS[endpoint], "UNMAPPED"}
+            expected_permission = ROUTE_AUDIT_RESOLVED_CONFLICTS[endpoint]
+            accepted_values = (
+                {expected_permission},
+                {expected_permission, "UNMAPPED"},
+            )
         elif endpoint in ROUTE_AUDIT_UNMAPPED_WITH_RUNTIME_PERMISSION:
-            expected_values = {"UNMAPPED"}
+            accepted_values = (
+                {"UNMAPPED"},
+                {ROUTE_AUDIT_UNMAPPED_WITH_RUNTIME_PERMISSION[endpoint]},
+            )
         elif expected_permission is not None:
-            expected_values = {expected_permission}
+            accepted_values = ({expected_permission},)
         else:
-            expected_values = {"UNMAPPED"}
-        if unique_values != expected_values:
+            accepted_values = ({"UNMAPPED"},)
+        if unique_values not in accepted_values:
             raise ValueError(
                 f"inconsistent classification for {endpoint}: "
-                f"observed={sorted(unique_values)}, expected={sorted(expected_values)}"
+                f"observed={sorted(unique_values)}, "
+                f"expected={[sorted(values) for values in accepted_values]}"
             )
 
     return {

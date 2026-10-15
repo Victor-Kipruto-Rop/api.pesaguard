@@ -1,0 +1,54 @@
+openapi: 3.1.0
+info:
+  title: Internal PesaGuard Service API
+  version: 1.0.0
+paths:
+  /internal/v1/tenants/resolve:
+    get:
+      x-pesaguard-required-service-scope: service:tenant-resolve
+      x-pesaguard-authentication-modes:
+        HMAC_ONLY: HmacSignature
+        DUAL_REQUIRED: ServiceJwt and HmacSignature
+        JWT_PRIMARY: ServiceJwt
+  /internal/v1/developer-api-keys/sync:
+    post:
+      x-pesaguard-required-service-scope: service:developer-api-keys-sync
+      x-pesaguard-authentication-modes:
+        HMAC_ONLY: HmacSignature
+        DUAL_REQUIRED: ServiceJwt and HmacSignature
+        JWT_PRIMARY: ServiceJwt
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+  /internal/v1/keys/{key_id}/revoke:
+    post:
+      x-pesaguard-required-service-scope: service:key-revoke
+      x-pesaguard-authentication-modes:
+        HMAC_ONLY: HmacSignature
+        DUAL_REQUIRED: ServiceJwt and HmacSignature
+        JWT_PRIMARY: ServiceJwt
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+  /internal/v1/keys/{key_id}/suspend:
+    post:
+      x-pesaguard-required-service-scope: service:key-suspend
+      x-pesaguard-authentication-modes:
+        HMAC_ONLY: HmacSignature
+        DUAL_REQUIRED: ServiceJwt and HmacSignature
+        JWT_PRIMARY: ServiceJwt
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+  /internal/v1/service-jwt/jwks.json:
+    get:
+      x-pesaguard-required-service-scope: service:service-jwt-jwks
+      x-pesaguard-authentication-modes:
+        HMAC_ONLY: HmacSignature
+        DUAL_REQUIRED: ServiceJwt and HmacSignature
+        JWT_PRIMARY: ServiceJwt
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string

@@ -8,6 +8,20 @@ on:
     - cron: '0 0 * * 0'  # Weekly on Sundays
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for exposed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   python-scan:
     runs-on: ubuntu-latest
     steps:

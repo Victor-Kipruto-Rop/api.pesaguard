@@ -35,7 +35,7 @@ def test_gateway_postgres_kafka_consumer_reconciliation_notification_traceabilit
     gateway_url = os.environ["PESAGUARD_LIVE_GATEWAY_URL"].rstrip("/")
     trace_id = os.getenv("PESAGUARD_LIVE_TRACE_ID") or uuid.uuid4().hex
     transaction_id = os.getenv("PESAGUARD_LIVE_TRANSACTION_ID") or f"live-trace-{trace_id}"
-    response = requests.post(
+    response = requests.post(  # nosec B113: a bounded timeout is supplied in this request.
         f"{gateway_url}/webhook/mpesa/confirmation",
         headers={
             "X-Request-ID": f"req-{trace_id}",

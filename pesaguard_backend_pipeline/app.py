@@ -418,7 +418,7 @@ def mpesa_confirmation():
         redis_conn.set(cache_key, "1", ex=86400)
         redis_conn.set(legacy_cache_key, "1", ex=86400)
     except Exception:
-        pass
+        logger.debug("Redis warm-cache update skipped for transaction %s.", trans_id, exc_info=True)
 
     queued = enqueue_transaction_outbox_drain()
     logger.info(

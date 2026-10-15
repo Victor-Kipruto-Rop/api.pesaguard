@@ -1,0 +1,1090 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PesaGuard API",
+    "version": "1.0.0",
+    "description": "Planned target contract for tenant-scoped transaction, reconciliation, fraud, and authentication operations. This design contract is not evidence that every listed route is registered or enabled. Use docs/api/openapi.implemented.json for the route-derived implementation snapshot, and verify the deployed /openapi.json before integrating."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Transactions"
+    },
+    {
+      "name": "Reconciliation"
+    },
+    {
+      "name": "Fraud"
+    },
+    {
+      "name": "Authentication"
+    }
+  ],
+  "paths": {
+    "/transactions": {
+      "post": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Create or idempotently accept a transaction",
+        "x-required-permission": "write:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransactionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted or duplicate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/transactions/{transaction_id}": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Retrieve one tenant-scoped transaction",
+        "x-required-permission": "read:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TransactionId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Transaction"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/transactions/{transaction_id}/status": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Retrieve transaction lifecycle status",
+        "x-required-permission": "read:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TransactionId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/transactions/search": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "Search tenant-scoped transactions",
+        "x-required-permission": "read:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "$ref": "#/components/parameters/Sort"
+          },
+          {
+            "$ref": "#/components/parameters/Filter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedTransactions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/reconciliation/requests": {
+      "post": {
+        "tags": [
+          "Reconciliation"
+        ],
+        "summary": "Request reconciliation",
+        "x-required-permission": "write:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing reconciliation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResult"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/reconciliation/{transaction_id}": {
+      "get": {
+        "tags": [
+          "Reconciliation"
+        ],
+        "summary": "Get reconciliation result and history",
+        "x-required-permission": "read:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TransactionId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reconciliation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/fraud/analyse": {
+      "post": {
+        "tags": [
+          "Fraud"
+        ],
+        "summary": "Analyse a tenant-scoped transaction synchronously",
+        "x-required-permission": "write:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FraudAnalysisRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted risk assessment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskScore"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/fraud/{transaction_id}": {
+      "get": {
+        "tags": [
+          "Fraud"
+        ],
+        "summary": "Get risk score and anomalies",
+        "x-required-permission": "read:transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TransactionId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk assessment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskScore"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Authenticate a user",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Additional WebAuthn verification required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaChallenge"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Rotate a refresh token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "description": "Retries with the same key return the original durable result."
+      },
+      "TenantHeader": {
+        "name": "X-Tenant-ID",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "TransactionId": {
+        "name": "transaction_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "PerPage": {
+        "name": "per_page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "Sort": {
+        "name": "sort",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "default": "created_at:desc"
+        }
+      },
+      "Filter": {
+        "name": "filter",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "schemas": {
+      "TransactionCreate": {
+        "type": "object",
+        "anyOf": [
+          {
+            "required": [
+              "provider_transaction_id",
+              "provider_account_id"
+            ]
+          },
+          {
+            "required": [
+              "TransID",
+              "BusinessShortCode"
+            ]
+          }
+        ],
+        "required": [
+          "provider",
+          "TransAmount",
+          "Currency",
+          "MSISDN",
+          "TransTime"
+        ],
+        "properties": {
+          "provider_transaction_id": {
+            "type": "string"
+          },
+          "provider_account_id": {
+            "type": "string"
+          },
+          "TransID": {
+            "type": "string"
+          },
+          "BusinessShortCode": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "TransAmount": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]{1,2})?$"
+          },
+          "Currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "MSISDN": {
+            "type": "string"
+          },
+          "TransTime": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Transaction": {
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "trans_id",
+          "status",
+          "trans_amount",
+          "currency",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "trans_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "VALIDATED",
+              "PROCESSING",
+              "RECONCILING",
+              "RECONCILED",
+              "FAILED",
+              "REJECTED"
+            ]
+          },
+          "trans_amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TransactionAccepted": {
+        "type": "object",
+        "required": [
+          "status",
+          "duplicate"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "TransactionStatus": {
+        "type": "object",
+        "required": [
+          "transaction_id",
+          "status"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PaginatedTransactions": {
+        "type": "object",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Transaction"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReconciliationRequest": {
+        "type": "object",
+        "required": [
+          "transaction_id"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "provider_account_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "ReconciliationResult": {
+        "type": "object",
+        "required": [
+          "transaction_id",
+          "status"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "processing",
+              "matched",
+              "partial",
+              "mismatch",
+              "unmatched",
+              "failed"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "exceptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exception"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "Exception": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          }
+        }
+      },
+      "FraudAnalysisRequest": {
+        "type": "object",
+        "required": [
+          "transaction_id"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "features": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved; risk features are derived from trusted transaction history."
+          }
+        }
+      },
+      "RiskScore": {
+        "type": "object",
+        "required": [
+          "transaction_id",
+          "risk_score",
+          "risk_level"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          },
+          "risk_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              "CRITICAL"
+            ]
+          },
+          "anomalies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "format": "password"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "device_id": {
+            "type": "string"
+          },
+          "mfa_code": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "device_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "readOnly": true
+          },
+          "refresh_token": {
+            "type": "string",
+            "readOnly": true
+          },
+          "token_type": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        }
+      },
+      "MfaChallenge": {
+        "type": "object",
+        "required": [
+          "status",
+          "challenge_id",
+          "challenge_type",
+          "options",
+          "expires_in"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "mfa_challenge_required"
+          },
+          "challenge_id": {
+            "type": "string"
+          },
+          "challenge_type": {
+            "type": "string",
+            "const": "webauthn"
+          },
+          "options": {
+            "type": "object"
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Validation failure",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication required or invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Tenant or permission denied",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Idempotency or state conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal processing failure",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Problem": {
+        "description": "API error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

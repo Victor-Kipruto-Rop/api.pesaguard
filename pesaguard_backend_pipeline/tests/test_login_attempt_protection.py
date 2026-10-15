@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from test_config import configure_test_database
 
@@ -276,19 +277,12 @@ def test_ip_throttle_limits_attempts_spread_across_unknown_accounts(client, monk
 
 
 def test_credential_stuffing_attempts_are_audited_and_rate_limited(client, monkeypatch):
-    tenant_id = "credential-stuffing-tenant"
+    tenant_id = f"credential-stuffing-{uuid4().hex}"
     monkeypatch.setenv("PESAGUARD_LOGIN_ACCOUNT_RATE_LIMIT", "100")
     monkeypatch.setenv("PESAGUARD_LOGIN_IP_RATE_LIMIT", "100")
     monkeypatch.setenv("PESAGUARD_LOGIN_DEVICE_RATE_LIMIT", "100")
     monkeypatch.delenv("PESAGUARD_LOGIN_STUFFING_ACCOUNT_THRESHOLD", raising=False)
     monkeypatch.setenv("PESAGUARD_LOGIN_DETECTION_WINDOW_SECONDS", "600")
-    with SessionLocal() as session:
-        session.query(ActionAuditEntry).filter_by(
-            tenant_id=tenant_id,
-            action="login.credential_stuffing_detected",
-        ).delete(synchronize_session=False)
-        session.commit()
-
     for index in range(5):
         response = client.post(
             "/auth/login",

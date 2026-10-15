@@ -11,7 +11,7 @@ def make_event(trans_id="T1", amount="100", phone="254700000000", trans_time="20
     }
 
 
-def make_internal_record(internal_ref="ORD-1", amount=100.0, phone="254700000000", timestamp="2024-06-01T12:00:00Z", status="pending"):
+def make_internal_record(internal_ref="ORD-1", amount=100.0, phone="254700000000", timestamp="2024-06-01T09:00:00Z", status="pending"):
     return {
         "internal_ref": internal_ref,
         "amount": amount,
@@ -23,7 +23,7 @@ def make_internal_record(internal_ref="ORD-1", amount=100.0, phone="254700000000
 
 def test_exact_match_is_resolved():
     event = make_event(trans_id="T-100", amount="100", phone="254700000000", trans_time="20240601120000")
-    internal_record = make_internal_record(timestamp="2024-06-01T12:00:00Z")
+    internal_record = make_internal_record(timestamp="2024-06-01T09:00:00Z")
 
     result = evaluate_transaction(event, [internal_record], seen_trans_ids=set())
 
@@ -34,7 +34,7 @@ def test_exact_match_is_resolved():
 
 def test_partial_match_is_review_required():
     event = make_event(trans_id="T-200", amount="100", phone="254700000001", trans_time="20240601120000")
-    internal_record = make_internal_record(internal_ref="ORD-2", phone="254700000000", timestamp="2024-06-01T12:00:00Z")
+    internal_record = make_internal_record(internal_ref="ORD-2", phone="254700000000", timestamp="2024-06-01T09:00:00Z")
 
     result = evaluate_transaction(event, [internal_record], seen_trans_ids=set())
 

@@ -73,7 +73,7 @@ def _require_dashboard_auth() -> None:
             from metrics import record_security_event
             record_security_event()
         except Exception:
-            pass
+            logger.debug("Security event hook skipped for unauthorized dashboard access.", exc_info=True)
         logger.warning("Unauthorized dashboard API access attempt from IP: %s", request.remote_addr)
         abort(403, description="Forbidden: Invalid or missing administrator token.")
 

@@ -63,7 +63,7 @@ rotation needs a recovery/migration plan; do not discard keys needed to decrypt
 existing financial records. This code change does not rotate credentials or
 remove them from existing logs or previously built images.
 
-## SMTP report and escalation email
+## Transactional and alert email
 
 `EmailService` uses Python's SMTP transport, not an email-provider HTTP API.
 Configure these keys in the ignored deployment file:
@@ -114,10 +114,16 @@ to connect. Local configuration validation passed; live SMTP authentication and
 delivery remain unverified. Check outbound network policy with your administrator;
 do not disable TLS or firewall protections to work around this blocker.
 
-This configures report and escalation email in the feature applications. The
-separate discrepancy alert notifier still uses `ALERT_SMTP_HOST`,
+The report, daily-summary, account-security, and public status subscription
+messages use an inline-styled, table-based PesaGuard email layout with a
+plain-text alternative. Discrepancy alert messages use the same brand palette
+and escape provider-supplied values before rendering HTML. The layout uses an
+in-message wordmark and requires no externally hosted images. Email-client
+rendering still needs a real inbox/client review before production sign-off.
+
+This configures transactional mail in the feature applications. The separate
+discrepancy alert notifier still uses `ALERT_SMTP_HOST`,
 `ALERT_SMTP_PORT`, `ALERT_SMTP_USER`, `ALERT_SMTP_PASS`, `ALERT_EMAIL_FROM`, and
 `ALERT_EMAIL_RECIPIENTS`. The communications gateway abstraction is separate and
 is not wired to this SMTP service by this change. Mock transport tests do not
 verify live delivery, provider configuration, or recipient inbox placement.
-

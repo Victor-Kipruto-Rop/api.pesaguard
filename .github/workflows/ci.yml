@@ -87,7 +87,6 @@ jobs:
             npm --prefix frontend ci
             npm --prefix frontend test -- --watchAll=false
           fi
-        continue-on-error: true
 
   restore-drill:
     runs-on: ubuntu-latest

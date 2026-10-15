@@ -39,7 +39,6 @@ jobs:
 
   release-build:
     runs-on: ubuntu-latest
-    needs: test-and-deploy-check if omitted or test-before-publish
     needs:
       - test-before-publish
 

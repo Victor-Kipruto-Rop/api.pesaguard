@@ -12,7 +12,7 @@ from .fastapi_app import app
 if __name__ == "__main__":
     uvicorn.run(
         "pesaguard_backend_pipeline.fastapi_app:app",
-        host=os.getenv("PESAGUARD_BIND_HOST", "0.0.0.0"),
+        host=os.getenv("PESAGUARD_BIND_HOST", "0.0.0.0"),  # nosec B104: Docker ingress controls container exposure.
         port=int(os.getenv("PORT", "5001")),
         log_level=os.getenv("LOG_LEVEL", "info").lower(),
     )
