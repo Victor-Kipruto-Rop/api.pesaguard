@@ -13,6 +13,11 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 try:
+    from .normalization import NormalizationError, normalize_timestamp
+except ImportError:  # pragma: no cover - top-level service execution
+    from normalization import NormalizationError, normalize_timestamp
+
+try:
     from .models import Transaction
     from .transaction_lifecycle_algorithms import assess_reversal_lifecycle
 except ImportError:  # pragma: no cover - top-level service execution
@@ -44,6 +49,16 @@ def _first(record: Mapping[str, Any], keys: tuple[str, ...]) -> Any:
     return next((record.get(key) for key in keys if record.get(key) not in (None, "")), None)
 
 
+def _normalize_provider_time(value: Any) -> Any:
+    """Use the repository's canonical provider-time policy before lifecycle checks."""
+    try:
+        return normalize_timestamp(value)
+    except (NormalizationError, TypeError, ValueError):
+        # Preserve the original value so the lifecycle algorithm reports the
+        # missing/ambiguous timestamp instead of silently guessing.
+        return value
+
+
 def _row_record(row: Transaction) -> dict[str, Any]:
     payload = row.raw_payload if isinstance(row.raw_payload, Mapping) else {}
     result = dict(payload)
@@ -51,7 +66,7 @@ def _row_record(row: Transaction) -> dict[str, Any]:
     result.update({
         "TransID": row.trans_id,
         "TransAmount": str(row.trans_amount),
-        "TransTime": row.trans_time,
+        "TransTime": _normalize_provider_time(row.trans_time),
         "tenant_id": row.tenant_id,
         "provider": row.provider,
         "provider_account_id": row.provider_account_id,
@@ -157,6 +172,13 @@ def assess_persisted_reversal(
     current.setdefault("provider", provider)
     current.setdefault("provider_account_id", account_id)
     current.setdefault("currency", currency)
+    current_time_key = next(
+        (key for key in ("TransTime", "timestamp", "created_at", "event_time")
+         if current.get(key) not in (None, "")),
+        None,
+    )
+    if current_time_key is not None:
+        current[current_time_key] = _normalize_provider_time(current[current_time_key])
 
     original = _row_record(original_row) if original_row is not None else None
     prior: list[dict[str, Any]] = []
