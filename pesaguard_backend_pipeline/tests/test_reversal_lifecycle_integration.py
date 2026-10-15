@@ -24,10 +24,9 @@ def _row(payload, *, status="RECONCILED"):
 
 
 def test_reversal_event_detection_does_not_classify_normal_payment():
-    assert is_reversal_event({"TransID": "PAY-1", "TransAmount": "25"})
+    assert not is_reversal_event({"TransID": "PAY-1", "TransAmount": "25"})
     assert is_reversal_event({"transaction_type": "refund", "TransID": "REF-1"})
     assert is_reversal_event({"OriginalTransID": "PAY-1", "TransID": "REV-1"})
-    assert not is_reversal_event({"TransID": "PAY-1", "TransAmount": "25"})
 
 
 def test_database_reconciliation_status_is_not_provider_confirmation():
