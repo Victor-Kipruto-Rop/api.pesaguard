@@ -159,9 +159,20 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
         processed.reconciliation_error = None
         result_payload = json.loads(json.dumps(evaluation, ensure_ascii=False, default=str))
 
+        # Risk baselines must be comparable. Tenant + account alone can mix providers
+        # or currencies (for example, a shared merchant account identifier), which
+        # distorts amount/velocity features and can create false alerts.
+        try:
+            from .risk_history_scope import resolve_risk_history_scope
+        except ImportError:  # pragma: no cover - top-level service execution
+            from risk_history_scope import resolve_risk_history_scope
+
+        risk_provider, risk_currency = resolve_risk_history_scope(event)
         recent_transactions = session.query(Transaction).filter(
             Transaction.tenant_id == tenant_id,
             Transaction.provider_account_id == provider_id,
+            Transaction.provider == risk_provider,
+            Transaction.currency == risk_currency,
             Transaction.trans_id != trans_id,
         ).order_by(Transaction.created_at.desc()).limit(100).all()
         risk_history = [
