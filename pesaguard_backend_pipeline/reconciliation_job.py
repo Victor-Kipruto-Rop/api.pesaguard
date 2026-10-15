@@ -430,7 +430,9 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
                 anomalies=anomalies,
                 duplicate="duplicate_transaction_id" in anomalies,
             )
-        except (TypeError, ValueError, ArithmeticError) as exc:
+        except Exception as exc:
+            # Shadow analytics are advisory: an unexpected failure must not change
+            # or block the established reconciliation result.
             tenant_reconciliation_settings = (
                 tenant_settings.get("reconciliation")
                 if isinstance(tenant_settings, dict) else None
