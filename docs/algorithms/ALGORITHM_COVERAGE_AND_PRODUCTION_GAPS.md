@@ -46,7 +46,7 @@ The global batch-assignment helper is currently advisory and is not wired into t
 
 7. Build a privacy-controlled, finance-reviewed ground-truth dataset with unresolved labels and a separate holdout set.
 8. Wire the scorecard into a repeatable offline command/CI job; record dataset version, algorithm/config version, cohort counts, metrics, reviewer, and approval.
-9. Verify whether shadow analysis is durably persisted by every caller; returned output alone is not an audit record.
+9. The Kafka reconciliation worker now persists opt-in shadow evidence in the existing outbox payload and a compact audit summary. Verify that persistence in staging and inspect alternate webhook, synchronous API, retry, batch, and manual-replay paths; the helper still does not create a separate analytics table.
 10. Measure precision, recall, false-positive rate, coverage, ambiguity/review rate, latency, and missing-data rate by provider/tenant/currency/amount band when sample sizes permit.
 11. Monitor baseline freshness, amount distribution, velocity, score distribution, event lag, schema changes, and outlier rates. Stale/undersized baseline means unavailable, not normal.
 12. Version thresholds and require regression evaluation, shadow period, approval, gradual rollout, telemetry, and rollback.
