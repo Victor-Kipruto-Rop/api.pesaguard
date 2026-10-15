@@ -114,6 +114,8 @@ def evaluate_algorithmic_evidence(
     should be stable tenant-local identifiers (prefer keyed hashes for PII).
     Collections must be bounded and queried with tenant-safe database predicates.
     """
+    if not isinstance(scope, Mapping):
+        raise ValueError("scope must be a mapping derived from trusted server context")
     trusted_scope = _canonical_scope(scope)
     if not isinstance(transaction, Mapping):
         raise ValueError("transaction must be a mapping")
@@ -243,7 +245,7 @@ def evaluate_algorithmic_evidence(
     return {
         "pipeline_version": ALGORITHM_PIPELINE_VERSION,
         "mode": "advisory",
-        "scope_verified": True,
+        "scope_complete": True,
         "quality": quality,
         "candidate_ranking": ranking,
         "scope_exclusions": {
