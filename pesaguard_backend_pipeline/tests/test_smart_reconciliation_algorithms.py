@@ -306,3 +306,61 @@ def test_ranker_treats_tenant_and_account_identifiers_as_case_sensitive():
     result = rank_reconciliation_candidates(tx, [candidate])
     assert result["decision"] == "REVIEW"
     assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
+
+
+def test_public_shadow_adapter_is_opt_in_and_returns_advisory_evidence():
+    from reconciliation_engine import evaluate_smart_reconciliation_shadow
+
+    event = {
+        "TransID": "WORKER-SHADOW-1",
+        "TransAmount": "100",
+        "MSISDN": "254700000000",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-WORKER-1",
+    }
+    records = [{
+        "internal_ref": "ledger-worker-1",
+        "reference": "INV-WORKER-1",
+        "amount": "100",
+        "phone_number": "254700000000",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+    }]
+
+    assert evaluate_smart_reconciliation_shadow(
+        event, records,
+        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": False}},
+    ) is None
+
+    result = evaluate_smart_reconciliation_shadow(
+        event, records,
+        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": True}},
+    )
+    assert result is not None
+    assert result["mode"] == "shadow"
+    assert result["algorithm_version"] == ALGORITHM_VERSION
+    assert result["legacy_decision_unchanged"] is True
+    assert result["candidate_ranking"]["top_candidate"]["candidate_id"] == "ledger-worker-1"
+    assert result["risk"]["action"] in {"REVIEW", "CONTINUE_STANDARD_CONTROLS"}
+
+
+def test_public_shadow_adapter_requires_tenant_scope_and_valid_policy():
+    from reconciliation_engine import evaluate_smart_reconciliation_shadow
+
+    event = {
+        "TransID": "WORKER-SHADOW-2",
+        "TransAmount": "100",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-WORKER-2",
+    }
+    with pytest.raises(ValueError, match="tenant_id"):
+        evaluate_smart_reconciliation_shadow(
+            event, [],
+            tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": True}},
+        )
+    with pytest.raises(ValueError, match="tolerance_percent"):
+        evaluate_smart_reconciliation_shadow(
+            event, [],
+            tenant_settings={"tenant_id": "tenant-a", "reconciliation": {
+                "smart_algorithms_shadow_enabled": True, "tolerance_percent": "NaN",
+            }},
+        )
