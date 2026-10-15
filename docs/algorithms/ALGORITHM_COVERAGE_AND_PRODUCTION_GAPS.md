@@ -15,7 +15,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Partial-payment aggregation | Helper + tests | Use confirmed tenant-scoped rows; aggregation does not post to the ledger. |
 | Settlement subset investigation | Bounded exact subset search + tests | Unique subsets remain candidates requiring approval; ambiguity and size limits go to review. |
 | Settlement variance decomposition | Helper + tests | Unknown residuals are exposed, never auto-adjusted. |
-| Reversal validation | Helper + tests | Must use confirmed reversals for the same account; helper does not issue refunds. |
+| Reversal lifecycle validation | Existing helper plus new transaction_lifecycle_algorithms.py and focused tests | New helper checks linkage, scope, chronology, duplicate IDs, and cumulative confirmed amounts; still advisory-only and not wired into the persisted lifecycle. |
 | Robust amount anomaly detection | Median/MAD helper and risk-feature integration | Comparable baseline required; outlier is a review signal, not a fraud verdict. |
 | Velocity screening | Trailing-window helper + tests | Caller must provide tenant/entity-scoped history and consistent timestamps. |
 | Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |
