@@ -28,7 +28,13 @@ python pesaguard_backend_pipeline/operations/ground_truth_certification.py valid
   --database-url $env:DATABASE_URL
 ```
 
-The command exits with status `0` only when every approved case has a match and every actual status equals its expected status. It exits with status `2` for missing matches or mismatches.
+The command prints a scorecard with precision, recall, false positives, false
+negatives, and the approved-case count. It exits with status `0` only when every
+approved case has a match, every actual status equals its expected status,
+precision and recall are both `1.0`, and false positives and false negatives are
+both zero. A dataset without any expected `MATCHED` case has undefined precision
+and recall and cannot certify. It exits with status `2` when the scorecard does
+not pass.
 
 ## Metrics
 

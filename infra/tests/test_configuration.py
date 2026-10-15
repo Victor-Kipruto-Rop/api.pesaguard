@@ -13,6 +13,11 @@ LAUNCHER = ROOT / "infra/configure.py"
 COMPOSE = ROOT / "infra/docker"
 
 
+def test_runtime_image_defaults_to_production_health_gates():
+    dockerfile = (COMPOSE / "Dockerfile").read_text(encoding="utf-8")
+    assert "PESAGUARD_ENVIRONMENT=production" in dockerfile
+
+
 @pytest.fixture
 def deployment(tmp_path):
     values = {

@@ -2,53 +2,66 @@
 
 > **Current release decision — 2026-10-16: NOT CERTIFIED — DO NOT SHIP.**
 >
-> The detailed checklist and failure counts below are a historical assessment
-> from 2026-09-17. The current evidence and remaining release gates are recorded
-> here; the historical rows have not been re-scored one by one.
+> The current evidence and open gates are recorded below. The detailed checklist
+> beginning at “Archived assessment” is from 2026-09-17 and is not a current
+> blocker list.
 
 ## Current evidence update — 2026-10-16
 
-Evidence collected for commit `78e51c3` on branch
-`hardening/production-readiness`:
+The full-suite baseline was collected at commit `0c9a8f9` on branch
+`hardening/production-readiness`, before the local changes described here:
 
-- Full local backend suite: **841 passed, 9 skipped**, using an isolated SQLite
+- Full local backend suite: **842 passed, 9 skipped**, using an isolated SQLite
   test database with dotenv loading disabled. This does not exercise the
   PostgreSQL, Redis, or live-service paths used in production.
-- Focused configuration and alert-routing regression after the final notifier
-  change: **17 passed**.
-- `compileall`, `git diff --check`, and duplicate-key YAML parsing passed.
-- `pip-audit` reported no known vulnerabilities. The Bandit medium/high gate
-  passed with no filtered findings.
-- PR [#85](https://github.com/Victor-Kipruto-Rop/api.pesaguard/pull/85) is open.
-  Its [CI run](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436414),
-  [dependency scan](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436482),
-  and [container scan](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436422)
-  failed before executing steps because GitHub reports an account billing lock.
-  The restore-drill job did not run.
-- The production public-status endpoint timed out from the audit environment;
-  live service health remains unverified.
+- Focused post-change configuration, reconciliation-certification, and evaluator
+  tests: **45 passed**.
+- `compileall`, `git diff --check`, and YAML parsing passed. Bandit reported no
+  medium/high findings, and `pip-audit` reported no known vulnerabilities.
+- The production image now defaults to the production environment profile;
+  production and staging health checks require Redis and Kafka, and implicit
+  checkout `.env` loading is disabled for those environments.
+- The reconciliation certification command now emits precision, recall,
+  false-positive, and false-negative counts; it remains blocked until finance or
+  data owners approve representative cases and the observed scorecard passes.
+- CI and release workflows now call a shared PostgreSQL, Redis, and Kafka
+  integration workflow. It has not run on GitHub yet. Docker is unavailable in
+  this audit environment, so those service checks could not run locally.
+- The latest checks on the pre-change PR head failed before running steps, and
+  the restore drill was skipped. The recorded cause is a GitHub account billing
+  lock. The updated workflow still needs a successful GitHub run.
+- Requests to the public status site and API health endpoint did not complete
+  from this audit environment; live service health and alert delivery remain
+  unverified.
 
 ### Release gates still open
 
-1. Re-run the GitHub checks after the billing lock is cleared; require green CI,
-   dependency/security scans, image scan, and restore drill.
-2. Obtain finance/data-owner approval of reconciliation ground truth, then run
-   the certification tool and confirm precision and recall are both `1.0` with
-   zero false positives and false negatives.
-3. Run representative load, stress, spike, and soak profiles against an
-   approved production-shaped environment and preserve the results.
-4. Exercise the production backup, WAL/PITR, and recovery setup; record measured
-   RPO/RTO and the documented disaster-recovery drills.
-5. Configure the approved production secret store, rotate any credentials shared
-   outside the secret store, and record a named rotation owner and cadence.
-6. Complete staging smoke tests, verify live health and alert delivery, and fill
-   the engineering, security, and finance/data owner sign-off table below.
+1. Clear the GitHub billing lock and obtain green CI, security, image, PostgreSQL,
+   Redis, Kafka, and restore-drill checks on the updated branch.
+2. Have finance/data owners approve representative ground truth, run the database
+   certification command, and confirm precision and recall are `1.0` with zero
+   false positives and false negatives.
+3. Run and preserve representative load, stress, spike, and soak results against
+   a production-shaped staging environment using owner-approved thresholds.
+4. Exercise production backup, WAL/PITR, and recovery; record measured RPO/RTO
+   and complete the documented disaster-recovery drills.
+5. Configure the approved production secret store, rotate credentials shared
+   outside it, and record a named rotation owner and cadence.
+6. Complete staging smoke tests, verify live health and alert delivery, and get
+   engineering, security, and finance/data-owner sign-off.
 
 These local checks are engineering evidence only. **Production certification
 remains `NOT CERTIFIED` until every release gate has passing evidence and the
 named owners approve it.**
 
-> **CERTIFICATION DECISION: NOT CERTIFIED — DO NOT SHIP.**
+## Archived assessment — 2026-09-17 (superseded)
+>
+> The following suite counts, blocker IDs, and source references describe the
+> 2026-09-17 repository state. They are retained for historical context only and
+> must not be used as current findings. The current release gates are listed
+> above.
+
+> **Historical certification decision: NOT CERTIFIED — DO NOT SHIP.**
 >
 > This is the Phase 11 exit gate. It is an evidence record, not a status report.
 > Nothing below is pre-ticked. Every line is graded from evidence actually

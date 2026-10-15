@@ -16,6 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app:/app/pesaguard_backend_pipeline \
+    PESAGUARD_ENVIRONMENT=production \
     PESAGUARD_SHARED_METRICS=1 \
     PROMETHEUS_MULTIPROC_DIR=/tmp/pesaguard-prometheus \
     PORT=5001 \

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from environment import required_env
+from environment import required_env, runtime_environment
 
 import logging
 import os
@@ -21,14 +21,14 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_DATABASE_URL = required_env("DATABASE_URL")
 
-_environment = os.getenv("PESAGUARD_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).lower()
+_environment = runtime_environment()
 KAFKA_REQUIRED_FOR_OK = os.getenv(
     "PESAGUARD_HEALTH_REQUIRE_KAFKA",
-    "1" if _environment == "production" else "0",
+    "1" if _environment in {"production", "staging"} else "0",
 ) == "1"
 REDIS_REQUIRED_FOR_OK = os.getenv(
     "PESAGUARD_HEALTH_REQUIRE_REDIS",
-    "1" if _environment == "production" else "0",
+    "1" if _environment in {"production", "staging"} else "0",
 ) == "1"
 
 DARAJA_OAUTH_URL = os.getenv(

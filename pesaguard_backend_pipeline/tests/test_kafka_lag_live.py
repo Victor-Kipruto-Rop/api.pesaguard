@@ -67,6 +67,7 @@ def test_consumer_lag_registry_is_process_local_snapshot():
         enable_auto_commit=False,
         consumer_timeout_ms=10_000,
     )
+    consumer.subscribe([topic])
     consumed = 0
     for message in consumer:
         consumed += 1

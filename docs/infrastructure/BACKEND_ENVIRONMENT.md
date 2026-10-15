@@ -1,11 +1,11 @@
 # PesaGuard backend environment configuration
 
-The backend loads `c:\Users\kipru\pesaguard\.env` using the existing
-`python-dotenv` dependency. The default path is relative to the installed backend
-source, not the shell's current directory. Package startup loads it before the
-legacy compatibility imports; database consumers also import the shared loader.
-Docker services receive the file through Compose `env_file` rather than through
-an image layer.
+In development, the backend can load `.env` from the backend checkout root using
+the existing `python-dotenv` dependency. The default path is resolved from the
+installed backend source, not the shell's current directory. Package startup
+loads it before legacy compatibility imports; database consumers also import the
+shared loader. Docker services receive explicitly configured values through
+Compose `env_file`, never through an image layer.
 
 ## Precedence and required values
 
@@ -13,6 +13,10 @@ an image layer.
 - Set `PESAGUARD_ENV_FILE` to an absolute path to choose another deployment file.
   A missing explicitly selected file fails with a value-free error.
 - Set `PYTHON_DOTENV_DISABLED=1` for environment-only deployment or testing.
+- Production and staging do not load the implicit checkout `.env`; inject their
+  values from the approved deployment secret store. The API image defaults to
+  `PESAGUARD_ENVIRONMENT=production`, which makes Redis and Kafka readiness gates
+  required unless an explicit environment override is supplied.
 - An absent default file is permitted when configuration is injected externally.
 - Values are literal: `${NAME}` interpolation is disabled. Write complete URLs.
 - `DATABASE_URL` must be supplied; backend modules no longer embed database

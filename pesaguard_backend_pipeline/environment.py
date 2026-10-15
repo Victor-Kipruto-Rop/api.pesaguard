@@ -44,11 +44,14 @@ def load_backend_env(env_path: str | os.PathLike[str] | None = None) -> bool:
 
     PESAGUARD_ENV_FILE selects an explicit deployment file. Set
     PYTHON_DOTENV_DISABLED=1 for environment-only deployments and isolated tests.
+    Production and staging never load the implicit repository .env file.
     Values are literal (no ${...} expansion), including secrets containing '$'.
     """
     if os.getenv("PYTHON_DOTENV_DISABLED", "").lower() in {"1", "true", "yes", "on"}:
         return False
     configured_path = env_path if env_path is not None else os.getenv("PESAGUARD_ENV_FILE")
+    if configured_path is None and runtime_environment() in {"production", "staging"}:
+        return False
     path = Path(configured_path) if configured_path is not None else DEFAULT_ENV_FILE
     if not path.is_file():
         if configured_path is not None:

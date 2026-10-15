@@ -55,6 +55,17 @@ def test_missing_default_is_optional(monkeypatch, env_file):
     assert environment.load_backend_env() is False
 
 
+@pytest.mark.parametrize("app_environment", ["production", "staging"])
+def test_deployed_environments_do_not_load_implicit_dotenv(monkeypatch, env_file, app_environment):
+    monkeypatch.setattr(environment, "DEFAULT_ENV_FILE", env_file)
+    for name in environment._ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", app_environment)
+
+    assert environment.load_backend_env() is False
+    assert "ENV_LOADER_TEST" not in os.environ
+
+
 def test_missing_explicit_file_fails(env_file):
     with pytest.raises(RuntimeError, match="environment file is not available"):
         environment.load_backend_env(env_file.parent / "missing")

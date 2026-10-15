@@ -88,9 +88,12 @@ jobs:
             npm --prefix frontend test -- --watchAll=false
           fi
 
+  integration:
+    uses: ./.github/workflows/integration-services.yml
+
   restore-drill:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, integration]
 
     services:
       postgres:

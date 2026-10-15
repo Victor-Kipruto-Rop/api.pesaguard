@@ -43,6 +43,19 @@ def test_production_requires_redis_and_kafka_for_readiness(monkeypatch):
     assert payload["checks"]["redis"]["status"] == "failed"
 
 
+def test_staging_requires_redis_and_kafka_for_readiness(monkeypatch):
+    health = _reload_health(
+        monkeypatch,
+        PESAGUARD_ENVIRONMENT="staging",
+        DATABASE_URL="sqlite:///:memory:",
+        DARAJA_CONSUMER_KEY="",
+        DARAJA_CONSUMER_SECRET="",
+    )
+
+    assert health.KAFKA_REQUIRED_FOR_OK is True
+    assert health.REDIS_REQUIRED_FOR_OK is True
+
+
 def test_production_reports_ok_when_required_dependencies_are_healthy(monkeypatch):
     health = _reload_health(
         monkeypatch,
