@@ -24,12 +24,14 @@ try:
         rank_reconciliation_candidates,
         validate_transaction_quality,
     )
+    from .algorithm_evidence_pipeline import evaluate_algorithmic_evidence
 except ImportError:  # pragma: no cover - fallback for top-level script execution
     from smart_reconciliation_algorithms import (
         assess_rule_based_risk,
         rank_reconciliation_candidates,
         validate_transaction_quality,
     )
+    from algorithm_evidence_pipeline import evaluate_algorithmic_evidence
 
 # Import normalization helpers (added in feat/phase1-reconciliation-systematic)
 try:
@@ -451,12 +453,50 @@ def _smart_shadow_assessment(
             ).strip()
         ),
     )
+    # Run the strict scope-aware evidence bundle only when the authenticated
+    # request context supplies every required scope dimension. This remains shadow
+    # analysis and cannot alter the legacy reconciliation/posting decision.
+    provider = str(event.get("provider") or event.get("provider_name") or "mpesa").strip()
+    account_id = (
+        event.get("provider_account_id") or event.get("account_id")
+        or event.get("BusinessShortCode") or event.get("business_short_code")
+    )
+    currency = event.get("currency") or event.get("Currency")
+    if account_id not in (None, "") and currency not in (None, ""):
+        try:
+            scope_aware_evidence = evaluate_algorithmic_evidence(
+                normalized_event,
+                candidates,
+                scope={
+                    "tenant_id": tenant_id,
+                    "provider": provider,
+                    "provider_account_id": str(account_id),
+                    "currency": str(currency),
+                },
+                duplicate_candidate=duplicate,
+                window_seconds=max(0, int(window_minutes) * 60),
+                amount_tolerance=str(tolerance),
+            )
+        except (TypeError, ValueError, ArithmeticError):
+            scope_aware_evidence = {
+                "available": False,
+                "reason": "scope_aware_evidence_unavailable",
+                "automatic_financial_action": False,
+            }
+    else:
+        scope_aware_evidence = {
+            "available": False,
+            "reason": "trusted_provider_account_and_currency_required",
+            "automatic_financial_action": False,
+        }
+
     return {
         "enabled": True,
         "mode": "shadow",
         "algorithm_version": ranking["algorithm_version"],
         "quality": quality,
         "candidate_ranking": ranking,
+        "scope_aware_evidence": scope_aware_evidence,
         "risk": {
             "score": risk.score,
             "level": risk.level,
