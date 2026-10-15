@@ -171,10 +171,19 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
                 "MSISDN": item.msisdn,
                 "BusinessShortCode": item.business_short_code,
                 "TransTime": item.trans_time,
+                # Carry the exact query scope into the feature context. The risk
+                # engine refuses history rows that omit or conflict with scope.
+                "tenant_id": tenant_id,
+                "provider_account_id": provider_id,
             }
             for item in recent_transactions
         ]
-        risk_decision = assess_transaction(event, risk_history)
+        risk_transaction = {
+            **event,
+            "tenant_id": tenant_id,
+            "provider_account_id": provider_id,
+        }
+        risk_decision = assess_transaction(risk_transaction, risk_history)
         persist_assessment(session, tenant_id, trans_id, risk_decision)
         result_payload["fraud_risk"] = risk_decision.as_dict()
 
