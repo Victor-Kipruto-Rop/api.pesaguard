@@ -31,6 +31,11 @@ except ImportError:  # pragma: no cover - fallback for top-level script executio
         validate_transaction_quality,
     )
 
+try:
+    from .advanced_reconciliation_algorithms import assess_reversal_candidate
+except ImportError:  # pragma: no cover - fallback for top-level script execution
+    from advanced_reconciliation_algorithms import assess_reversal_candidate
+
 # Import normalization helpers (added in feat/phase1-reconciliation-systematic)
 try:
     from .reconciliation_utils import normalize_daraja_event, time_window_match
@@ -466,6 +471,60 @@ def _smart_shadow_assessment(
             ).strip()
         ),
     )
+    reversal_assessment = None
+    transaction_type = str(event.get("TransactionType") or event.get("transaction_type") or "").strip().casefold()
+    if transaction_type in {"refund", "reversal"}:
+        original_reference = str(
+            event.get("OriginalTransID") or event.get("OriginalTransactionID")
+            or event.get("original_transaction_id") or event.get("original_reference") or ""
+        ).strip()
+        original_record = next((
+            row for row in internal_records
+            if original_reference and original_reference in {
+                str(row.get("transaction_id") or "").strip(),
+                str(row.get("TransID") or "").strip(),
+                str(row.get("provider_transaction_id") or "").strip(),
+                str(row.get("reference") or "").strip(),
+                str(row.get("merchant_ref") or "").strip(),
+            }
+        ), None)
+        if original_record is not None:
+            original_time = _parse_record_time(
+                original_record.get("timestamp") or original_record.get("created_at") or original_record.get("synced_at")
+            )
+            normalized_original = {
+                **original_record,
+                "transaction_id": original_record.get("transaction_id") or original_record.get("TransID")
+                    or original_record.get("provider_transaction_id"),
+                "reference": original_record.get("reference") or original_record.get("merchant_ref"),
+                "amount": original_record.get("amount", original_record.get("TransAmount")),
+                "timestamp": original_time.isoformat() if original_time else None,
+                "tenant_id": original_record.get("tenant_id") or original_record.get("tenantId") or original_record.get("TenantID"),
+                "provider": original_record.get("provider") or original_record.get("provider_name") or original_record.get("providerName"),
+                "account_id": original_record.get("account_id") or original_record.get("provider_account_id") or original_record.get("merchant_account_id"),
+                "currency": original_record.get("currency") or original_record.get("Currency"),
+            }
+            normalized_reversal = {
+                **normalized_event,
+                "original_reference": original_reference,
+                "tenant_id": event.get("tenant_id") or event.get("tenantId") or event.get("TenantID"),
+                "provider": event.get("provider") or event.get("provider_name") or event.get("providerName"),
+                "account_id": event.get("account_id") or event.get("provider_account_id") or event.get("BusinessShortCode"),
+                "currency": event.get("currency") or event.get("Currency"),
+            }
+            prior_reversals = [
+                row for row in internal_records
+                if str(row.get("original_reference") or row.get("original_transaction_id") or "").strip()
+                == original_reference
+            ]
+            reversal_assessment = assess_reversal_candidate(
+                normalized_reversal, normalized_original, prior_reversals
+            )
+        else:
+            reversal_assessment = assess_reversal_candidate(
+                {"original_reference": original_reference}, None
+            )
+
     return {
         "enabled": True,
         "mode": "shadow",
@@ -481,6 +540,7 @@ def _smart_shadow_assessment(
         "legacy_decision_unchanged": True,
         "observed_anomalies": list(anomalies),
         "tenant_scope": tenant_id,
+        **({"reversal_assessment": reversal_assessment} if reversal_assessment is not None else {}),
     }
 
 
