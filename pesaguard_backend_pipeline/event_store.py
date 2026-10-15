@@ -662,8 +662,13 @@ class EventStore:
             ProcessedTransaction.provider_account_id == account_id,
         ).first()
         if existing is not None:
-            logger.info("Duplicate trans_id=%s detected in pre-flight session check", trans_id)
-            return ProcessResult.DUPLICATE
+            # If the scoped transaction row was not found by replay classification,
+            # a processed marker without its transaction is inconsistent state.
+            logger.error(
+                "Processed marker exists without a matching transaction row for tenant_id=%s trans_id=%s",
+                tenant_id, trans_id,
+            )
+            return ProcessResult.ERROR
 
         try:
             # Create a savepoint to catch duplicate constraints without breaking the parent transaction
