@@ -104,6 +104,19 @@ class ReconciliationEngine:
         if seen_transaction_ids and transaction_id in seen_transaction_ids:
             return self._result("DUPLICATE", None, ["duplicate_transaction_id"], 1.0, started, now)
 
+        # Apply the canonical quality gate after normalization, so provider-specific
+        # timestamps and amounts are evaluated in their normalized representation.
+        # A quality failure is an exception, never a candidate for automatic matching.
+        quality = validate_transaction_quality(transaction)
+        if not quality["valid_for_automatic_matching"]:
+            reason_codes = [item["code"].lower() for item in quality["findings"]]
+            return self._result(
+                "EXCEPTION", None, ["transaction_quality_gate", *reason_codes], 0.0,
+                started, now,
+                reason="transaction failed the automatic-matching data-quality gate",
+                quality_findings=quality["findings"],
+            )
+
         if transaction_type in {"refund", "reversal"}:
             records = [
                 record for record in records
@@ -275,7 +288,7 @@ class ReconciliationEngine:
         score += Decimal("0.10") if transaction["phone"] and transaction["phone"] == record["phone"] else Decimal("0")
         return float(min(Decimal("1"), score))
 
-    def _result(self, status: str, record: Optional[Dict[str, Any]], rules: List[str], score: float, started: float, now: datetime, *, reason: Optional[str] = None) -> Dict[str, Any]:
+    def _result(self, status: str, record: Optional[Dict[str, Any]], rules: List[str], score: float, started: float, now: datetime, *, reason: Optional[str] = None, quality_findings: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         evidence = {
             "matched_record": record.get("record", record) if record else None,
             "matching_rules": rules,
@@ -283,6 +296,8 @@ class ReconciliationEngine:
             "match_timestamp": now.isoformat(),
             "engine_version": ENGINE_VERSION,
         }
+        if quality_findings is not None:
+            evidence["transaction_quality_findings"] = quality_findings
         result = {
             "status": status,
             "evidence": evidence,
