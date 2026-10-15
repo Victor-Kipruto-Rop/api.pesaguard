@@ -293,26 +293,51 @@ class ReconciliationEngine:
         return result
 
 
-def measure_reconciliation(results: Iterable[Dict[str, Any]], expected_statuses: Iterable[str]) -> Dict[str, float]:
-    """Calculate precision, recall, error counts, latency, and throughput."""
+def measure_reconciliation(
+    results: Iterable[Dict[str, Any]],
+    expected_statuses: Iterable[str],
+) -> Dict[str, float | None]:
+    """Calculate reconciliation metrics without hiding undefined denominators.
+
+    Precision is unavailable when the engine predicts no matches; recall is
+    unavailable when the reviewed dataset contains no expected matches. Returning
+    1.0 for either case would falsely imply perfect performance. The input lengths
+    must agree so a truncated zip cannot silently discard evaluated cases.
+    """
     started = time.perf_counter()
     actual = list(results)
     expected = list(expected_statuses)
-    correct = sum(result.get("status") == expected_status for result, expected_status in zip(actual, expected))
+    if len(actual) != len(expected):
+        raise ValueError(
+            "results and expected_statuses must contain the same number of cases "
+            f"(got {len(actual)} results and {len(expected)} expected statuses)"
+        )
+
+    correct = sum(
+        result.get("status") == expected_status
+        for result, expected_status in zip(actual, expected)
+    )
     positives = sum(status == "MATCHED" for status in expected)
     predicted_positives = sum(result.get("status") == "MATCHED" for result in actual)
-    true_positives = sum(result.get("status") == expected_status == "MATCHED" for result, expected_status in zip(actual, expected))
+    true_positives = sum(
+        result.get("status") == expected_status == "MATCHED"
+        for result, expected_status in zip(actual, expected)
+    )
     false_positives = predicted_positives - true_positives
     false_negatives = positives - true_positives
+    elapsed = max(time.perf_counter() - started, 0.000001)
     return {
-        "precision": true_positives / predicted_positives if predicted_positives else 1.0,
-        "recall": true_positives / positives if positives else 1.0,
+        "precision": true_positives / predicted_positives if predicted_positives else None,
+        "recall": true_positives / positives if positives else None,
         "false_positives": float(false_positives),
         "false_negatives": float(false_negatives),
         "known_cases": float(len(expected)),
         "correct_cases": float(correct),
-        "processing_latency_ms": sum(float(result.get("processing_latency_ms", 0)) for result in actual) / max(len(actual), 1),
-        "throughput_per_second": len(actual) / max(time.perf_counter() - started, 0.000001),
+        "processing_latency_ms": (
+            sum(float(result.get("processing_latency_ms", 0)) for result in actual) / len(actual)
+            if actual else 0.0
+        ),
+        "throughput_per_second": len(actual) / elapsed,
     }
 
 
