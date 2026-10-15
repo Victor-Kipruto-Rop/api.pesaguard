@@ -155,8 +155,10 @@ def test_invoice_allocation_fails_closed_on_limits_precision_and_duplicate_ids()
     assert find_invoice_allocation_candidates("100", [{"id": "a", "amount": "50"}, {"id": "a", "amount": "50"}], tenant_id="t")["decision"] == "UNMATCHED"
     with pytest.raises(ValueError):
         find_invoice_allocation_candidates("100", [], tenant_id=" ", quantum=Decimal("0.01"))
-    with pytest.raises(ValueError):
-        find_invoice_allocation_candidates("100", [], tenant_id="t", quantum=Decimal("0.05"))
+    supported_quantum = find_invoice_allocation_candidates(
+        "100.00", [{"id": "a", "amount": "100.00"}], tenant_id="t", quantum=Decimal("0.05")
+    )
+    assert supported_quantum["decision"] == "UNIQUE_CANDIDATE"
 
 
 def test_settlement_comparison_checks_amount_and_count_variances():

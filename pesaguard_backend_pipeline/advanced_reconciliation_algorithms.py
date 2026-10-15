@@ -423,9 +423,9 @@ def assess_reversal_candidate(reversal: Mapping[str, Any], original: Mapping[str
     remaining = None
     if original_amount is not None and original_amount > 0:
         remaining = max(Decimal("0"), original_amount - prior_total)
-        if prior_total - original_amount > tolerance:
+        if prior_total > original_amount:
             reasons.append("prior_reversals_exceed_original_amount")
-        if reversal_amount is not None and reversal_amount > remaining + tolerance:
+        if reversal_amount is not None and reversal_amount > remaining:
             reasons.append("reversal_exceeds_remaining_amount")
     return {"algorithm_version": ALGORITHM_VERSION,
             "decision": "REVIEW" if reasons else "ELIGIBLE_FOR_REVIEW",
