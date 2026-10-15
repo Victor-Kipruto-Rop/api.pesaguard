@@ -7,7 +7,6 @@ and ledger insert, and must enforce database-level invariants as well.
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
@@ -29,6 +28,15 @@ def _money(value: Any) -> Decimal | None:
     except (InvalidOperation, ValueError, TypeError, AttributeError):
         return None
     return amount if amount.is_finite() else None
+
+
+def _fits_precision(amount: Decimal, exponent: int) -> bool:
+    """Return False rather than raising for values outside Decimal context limits."""
+    try:
+        quantum = Decimal(1).scaleb(-exponent)
+        return amount == amount.quantize(quantum)
+    except InvalidOperation:
+        return False
 
 
 def validate_journal_batch(
@@ -110,17 +118,16 @@ def validate_journal_batch(
         elif amount <= 0:
             add("NON_POSITIVE_AMOUNT", index, journal_id or None, "Journal line amount must be greater than zero.")
 
-        if amount is not None and amount > 0 and currency in exponents:
-            quantum = Decimal(1).scaleb(-exponents[currency])
-            if amount != amount.quantize(quantum):
-                add("EXCESS_CURRENCY_PRECISION", index, journal_id or None,
-                    f"Amount exceeds the configured {exponents[currency]} decimal places for {currency}.")
+        precision_ok = amount is not None and currency in exponents and _fits_precision(amount, exponents[currency])
+        if amount is not None and amount > 0 and currency in exponents and not precision_ok:
+            add("EXCESS_CURRENCY_PRECISION", index, journal_id or None,
+                f"Amount exceeds the configured {exponents[currency]} decimal places for {currency}.")
 
         # Invalid lines are never included in arithmetic, preventing malformed
         # amounts or missing scope from accidentally balancing a journal.
         if (entry_id and journal_id and account_id and currency in exponents
                 and side in {"DEBIT", "CREDIT"} and amount is not None and amount > 0
-                and amount == amount.quantize(Decimal(1).scaleb(-exponents[currency]))):
+                and precision_ok):
             key = (journal_id, currency)
             group = groups.setdefault(key, {
                 "journal_id": journal_id,
