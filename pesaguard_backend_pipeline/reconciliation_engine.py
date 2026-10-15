@@ -506,6 +506,58 @@ def _smart_shadow_assessment(
     }
 
 
+
+def evaluate_smart_reconciliation_shadow(
+    event: Dict[str, Any],
+    internal_records: Sequence[Dict[str, Any]],
+    *,
+    tenant_settings: Optional[Dict[str, Any]],
+    anomalies: Sequence[str] = (),
+    duplicate: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Run the opt-in smart ranker without repeating or changing the legacy decision.
+
+    This public adapter lets asynchronous workers persist the same advisory-only
+    evidence as synchronous callers. Disabled or missing tenant configuration
+    returns None. Invalid policy values fail to the caller, which must treat the
+    shadow result as unavailable and continue the established decision path.
+    """
+    settings = tenant_settings if isinstance(tenant_settings, dict) else {}
+    config = settings.get("reconciliation", {})
+    if not isinstance(config, dict) or config.get("smart_algorithms_shadow_enabled") is not True:
+        return None
+
+    raw_tolerance = config.get("tolerance_percent", "0.5")
+    try:
+        tolerance = Decimal(str(raw_tolerance))
+    except Exception as exc:
+        raise ValueError("reconciliation tolerance_percent must be a finite non-negative decimal") from exc
+    if not tolerance.is_finite() or tolerance < 0:
+        raise ValueError("reconciliation tolerance_percent must be a finite non-negative decimal")
+
+    raw_window = config.get("window_minutes", 15)
+    try:
+        window_minutes = int(raw_window)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reconciliation window_minutes must be a non-negative integer") from exc
+    if isinstance(raw_window, bool) or window_minutes < 0 or str(window_minutes) != str(raw_window).strip():
+        raise ValueError("reconciliation window_minutes must be a non-negative integer")
+
+    tenant_id = str(settings.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise ValueError("tenant_id is required for smart reconciliation shadow analysis")
+
+    return _smart_shadow_assessment(
+        event,
+        internal_records,
+        tenant_id=tenant_id,
+        duplicate=duplicate,
+        anomalies=tuple(str(item) for item in anomalies),
+        window_minutes=window_minutes,
+        tolerance_percent=tolerance,
+    )
+
+
 def evaluate_transaction(
     event: Dict[str, Any],
     internal_records: Sequence[Dict[str, Any]],
