@@ -357,8 +357,7 @@ def aggregate_partial_payments(
     target_currency = str(currency or "KES").upper().strip()
     if not re.fullmatch(r"[A-Z]{3}", target_currency):
         raise ValueError("currency must be a valid three-letter ISO-style code")
-    # Financial reconciliation must reject sub-minor-unit precision rather than
-    # silently rounding values into a false exact match.
+    # Financial reconciliation must reject unsupported precision instead of rounding.
     target_minor = _strict_amount_minor_units(expected_amount)
     selected: list[Mapping[str, Any]] = []
     seen_ids: set[str] = set()
@@ -377,8 +376,6 @@ def aggregate_partial_payments(
             raise ValueError("every aggregated payment must have an external transaction ID")
         if payment_id in seen_ids:
             continue
-        # Validate precision before de-duplication/aggregation so malformed
-        # financial facts cannot be rounded into an apparently balanced total.
         amount_minor = _strict_amount_minor_units(payment.get("TransAmount", payment.get("amount")))
         if amount_minor <= 0:
             raise ValueError("aggregated payment amounts must be positive")
