@@ -426,6 +426,7 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
                 event,
                 internal_records,
                 tenant_settings=tenant_settings,
+                tenant_id=tenant_id,
                 anomalies=anomalies,
                 duplicate="duplicate_transaction_id" in anomalies,
             )
