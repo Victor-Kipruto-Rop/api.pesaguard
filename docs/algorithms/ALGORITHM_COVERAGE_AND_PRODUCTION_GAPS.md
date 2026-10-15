@@ -27,7 +27,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
 | Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
 | Global one-to-one batch assignment | batch_reconciliation_assignment.py (new) | Bounded exact proposal; ambiguous/oversized batches fail closed; live-engine integration and tenant-safe candidate retrieval remain separate release gates. |
-| Persisted reversal lifecycle review gate | reversal_lifecycle_integration.py + reconciliation_job.py | Tenant/provider/account-scoped history is attached to the reconciliation audit/outbox; missing, ambiguous, unknown-status, over-limit, or excessive reversal evidence routes to EXCEPTION. Review-only: no posting authority or concurrency protection. |
+| Persisted reversal lifecycle review gate | reversal_lifecycle_integration.py + reconciliation_job.py | Tenant/provider/account-scoped history is attached to the reconciliation audit/outbox; missing, ambiguous, unknown-status, over-limit, or excessive reversal evidence routes to EXCEPTION. Review-only: no posting authority or concurrency protection. |\n| Settlement delay intelligence | settlement_delay_algorithms.py + focused tests | Robust median/MAD and upper-quantile threshold over confirmed peer-cohort settlement durations; insufficient history returns unknown. Advisory only; provider calendars and tenant-scoped history retrieval remain caller responsibilities. |
 
 ## Gaps to close before production certification
 
