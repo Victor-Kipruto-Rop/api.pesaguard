@@ -512,6 +512,7 @@ def evaluate_smart_reconciliation_shadow(
     internal_records: Sequence[Dict[str, Any]],
     *,
     tenant_settings: Optional[Dict[str, Any]],
+    tenant_id: str,
     anomalies: Sequence[str] = (),
     duplicate: bool = False,
 ) -> Optional[Dict[str, Any]]:
@@ -543,7 +544,7 @@ def evaluate_smart_reconciliation_shadow(
     if isinstance(raw_window, bool) or window_minutes < 0 or str(window_minutes) != str(raw_window).strip():
         raise ValueError("reconciliation window_minutes must be a non-negative integer")
 
-    tenant_id = str(settings.get("tenant_id") or "").strip()
+    tenant_id = str(tenant_id or "").strip()
     if not tenant_id:
         raise ValueError("tenant_id is required for smart reconciliation shadow analysis")
 
