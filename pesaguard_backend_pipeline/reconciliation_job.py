@@ -41,7 +41,7 @@ from event_store import EventStore, ProcessResult, provider_account_id
 from fraud_risk_engine import assess_transaction, persist_assessment
 from logging_utils import configure_logging
 from models import Base, Discrepancy, ProcessedTransaction, ReconciliationMatch, ReconciliationOutbox, Transaction
-from reconciliation_engine import ReconciliationEngine
+from reconciliation_engine import ReconciliationEngine, evaluate_smart_reconciliation_shadow
 from tenant_settings import TenantSettingsStore
 from communications.events import discrepancy_notification_event
 from background_tasks import enqueue_notification_event
@@ -212,11 +212,26 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
                 )
                 session.add(discrepancy)
 
+        shadow = evaluation.get("smart_analysis") or {}
+        shadow_ranking = shadow.get("candidate_ranking") or {}
+        shadow_risk = shadow.get("risk") or {}
         audit_details = {
             "trans_id": trans_id,
             "status": evaluation.get("status"),
             "match": evaluation.get("match"),
             "anomalies": evaluation.get("anomalies", []),
+            **({
+                "smart_analysis": {
+                    "mode": shadow.get("mode"),
+                    "algorithm_version": shadow.get("algorithm_version"),
+                    "available": shadow.get("available", True),
+                    "candidate_decision": shadow_ranking.get("decision"),
+                    "ambiguous": shadow_ranking.get("ambiguous"),
+                    "risk_level": shadow_risk.get("level"),
+                    "risk_score": shadow_risk.get("score"),
+                    "legacy_decision_unchanged": shadow.get("legacy_decision_unchanged") is True,
+                }
+            } if shadow else {}),
         }
         trace_context = {}
         try:
@@ -403,6 +418,40 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
             internal_records,
             seen_transaction_ids=seen_trans_ids,
         )
+        # Optional algorithm intelligence runs in shadow mode only. Its output is
+        # persisted with the transaction for evaluation, but never changes phase3_status.
+        smart_analysis = None
+        try:
+            smart_analysis = evaluate_smart_reconciliation_shadow(
+                event,
+                internal_records,
+                tenant_settings=tenant_settings,
+                anomalies=anomalies,
+                duplicate=trans_id in seen_trans_ids,
+            )
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            if (tenant_settings.get("reconciliation") or {}).get("smart_algorithms_shadow_enabled") is True:
+                logger.warning(
+                    "Smart reconciliation shadow unavailable tenant_id=%s trans_id=%s error_type=%s",
+                    tenant_id, trans_id, type(exc).__name__,
+                )
+                smart_analysis = {
+                    "enabled": True,
+                    "mode": "shadow",
+                    "available": False,
+                    "reason": "shadow_analysis_unavailable",
+                    "legacy_decision_unchanged": True,
+                }
+        if smart_analysis is not None:
+            phase3_result["smart_analysis"] = smart_analysis
+            ranking = smart_analysis.get("candidate_ranking") or {}
+            risk = smart_analysis.get("risk") or {}
+            logger.info(
+                "Smart reconciliation shadow tenant_id=%s trans_id=%s version=%s decision=%s ambiguous=%s risk_level=%s",
+                tenant_id, trans_id, smart_analysis.get("algorithm_version"),
+                ranking.get("decision", "UNAVAILABLE"), ranking.get("ambiguous", False),
+                risk.get("level", "UNAVAILABLE"),
+            )
         phase3_status = phase3_result["status"]
         compatibility = {
             "MATCHED": ("matched", "info"),
@@ -424,6 +473,11 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
             "processing_latency_ms": phase3_result["processing_latency_ms"],
             "anomalies": list(phase3_result["evidence"].get("matching_rules", [])) if phase3_status != "MATCHED" else [],
         }
+
+        if smart_analysis is not None:
+            # Durable output is attached to the existing transaction/outbox payload.
+            # No additional PII (e.g. raw phone numbers) is added to telemetry.
+            evaluation["smart_analysis"] = smart_analysis
 
         evaluation["tenant_id"] = tenant_id
         evaluation["event"] = event
