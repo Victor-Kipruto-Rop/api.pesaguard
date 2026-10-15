@@ -6,7 +6,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 
 | Algorithm | Current code evidence | Important boundary |
 |---|---|---|
-| Decimal/minor-unit money comparison | algorithmic_intelligence.py; tests | Currency precision must be explicit; reject invalid precision. |
+| Decimal/minor-unit money comparison | algorithmic_intelligence.py; tests | Financial aggregation and settlement variance reject sub-minor-unit precision and invalid currency codes instead of rounding malformed values into a false balance; generic conversion remains explicitly rounding. |
 | Reference normalization | Helper + tests | Candidate hint only; punctuation-insensitive similarity must not authorize a match. |
 | Tenant/provider-scoped transaction identity | Helper + tests | Database uniqueness and atomic insertion are still required. |
 | Payload fingerprint and replay classification | Canonical fingerprint helper plus EventStore duplicate/conflict classification and regression tests | Conflicts are audited/quarantined when an existing scoped transaction is found; verify live PostgreSQL concurrency, legacy rows with undecryptable payloads, and all ingestion paths before certification. |
