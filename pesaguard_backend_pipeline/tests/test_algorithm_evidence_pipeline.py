@@ -111,3 +111,42 @@ def test_empty_or_insufficient_history_is_unknown_not_normal():
     assert result["seasonal_amount"]["ready"] is False
     assert result["seasonal_amount"]["is_outlier"] is None
     assert result["velocity"]["ready"] is False
+
+
+
+def test_reconciliation_shadow_hook_exposes_scope_aware_evidence_without_changing_legacy_status():
+    from reconciliation_engine import evaluate_transaction
+
+    event = {
+        "TransID": "TX-SHADOW-SCOPE",
+        "TransAmount": "100.00",
+        "MSISDN": "254700000000",
+        "TransTime": "20261015030000",
+        "BillRefNumber": "INV-SCOPE",
+        "provider": "mpesa",
+        "provider_account_id": "paybill-1",
+        "currency": "KES",
+    }
+    record = {
+        **SCOPE,
+        "internal_ref": "ledger-scope",
+        "reference": "INV-SCOPE",
+        "amount": "100.00",
+        "phone_number": "254700000000",
+        "timestamp": "2026-10-15T03:00:00+03:00",
+    }
+    result = evaluate_transaction(
+        event,
+        [record],
+        seen_trans_ids=set(),
+        tenant_settings={
+            "tenant_id": "tenant-a",
+            "reconciliation": {"smart_algorithms_shadow_enabled": True},
+        },
+    )
+    assert result["status"] == "matched"
+    evidence = result["smart_analysis"]["scope_aware_evidence"]
+    assert evidence["mode"] == "advisory"
+    assert evidence["scope_verified"] is True
+    assert evidence["automatic_financial_action"] is False
+    assert result["smart_analysis"]["legacy_decision_unchanged"] is True
