@@ -175,6 +175,8 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
                 # engine refuses history rows that omit or conflict with scope.
                 "tenant_id": tenant_id,
                 "provider_account_id": provider_id,
+                "provider": event.get("provider") or event.get("provider_name"),
+                "currency": event.get("currency") or event.get("Currency"),
             }
             for item in recent_transactions
         ]
