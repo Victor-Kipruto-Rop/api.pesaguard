@@ -163,3 +163,20 @@ def test_persisted_gate_pass_is_not_posting_authority():
     finally:
         session.close()
         engine.dispose()
+
+
+def test_persisted_gate_normalizes_compact_daraja_timestamps():
+    session, engine = _session_with_rows(
+        _stored_row("ORIG-1", "100.00", {}, "20261014100000"),
+    )
+    try:
+        event = _reversal_event("25.00")
+        event["TransTime"] = "20261014101000"
+        result = assess_persisted_reversal(
+            session, event, tenant_id="tenant-a", transaction_id="REV-NEW",
+        )
+        assert result["status"] == "VALIDATION_PASS"
+        assert result["can_auto_post"] is False
+    finally:
+        session.close()
+        engine.dispose()
