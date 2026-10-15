@@ -7,17 +7,21 @@ engine query timing, and scrape-window request/sec.
 
 from __future__ import annotations
 
-from environment import required_env
-
-import logging
 import json
+import logging
 import os
-import time
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from environment import required_env
+
 logger = logging.getLogger("pesaguard.metrics")
+_prometheus_multiproc_dir = os.getenv("PROMETHEUS_MULTIPROC_DIR")
+if _prometheus_multiproc_dir:
+    Path(_prometheus_multiproc_dir).mkdir(parents=True, exist_ok=True)
+
 _metrics_engine = None
 _telemetry_lock = threading.Lock()
 _last_scrape_at: Optional[float] = None

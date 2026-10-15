@@ -4,11 +4,15 @@ engine query timing across application pools, and alert delivery accounting.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
-from sqlalchemy import create_engine, text
-
 import metrics
+import pytest
+from sqlalchemy import create_engine, text
 
 
 class _FakeRedisClient:
@@ -171,3 +175,39 @@ def test_shared_metrics_override_proceses_local_when_redis_active(monkeypatch):
     monkeypatch.setattr(metrics, "_shared_redis_client", None)
 
     assert snapshot["alert_delivery_failures"] >= 1
+
+
+def test_import_creates_missing_prometheus_multiprocess_directory(tmp_path):
+    pytest.importorskip("prometheus_client")
+    pytest.importorskip("fastapi")
+    pipeline_root = Path(__file__).resolve().parents[1]
+    repository_root = pipeline_root.parent
+    multiprocess_dir = tmp_path / "prometheus-multiprocess"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DATABASE_URL": "sqlite://",
+            "JWT_SECRET_KEY": "isolated-test-secret-with-at-least-32-bytes",
+            "PESAGUARD_API_URL": "https://api.example.invalid",
+            "PESAGUARD_ENVIRONMENT": "test",
+            "PROMETHEUS_MULTIPROC_DIR": str(multiprocess_dir),
+            "PYTHONPATH": os.pathsep.join((str(repository_root), str(pipeline_root))),
+            "PYTHON_DOTENV_DISABLED": "1",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import pesaguard_backend_pipeline.fastapi_app",
+        ],
+        cwd=repository_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert multiprocess_dir.is_dir()
