@@ -355,7 +355,11 @@ def aggregate_partial_payments(
     if not target_reference:
         raise ValueError("a non-empty reference is required for partial-payment aggregation")
     target_currency = str(currency or "KES").upper().strip()
-    target_minor = amount_to_minor_units(expected_amount)
+    if not re.fullmatch(r"[A-Z]{3}", target_currency):
+        raise ValueError("currency must be a valid three-letter ISO-style code")
+    # Financial reconciliation must reject sub-minor-unit precision rather than
+    # silently rounding values into a false exact match.
+    target_minor = _strict_amount_minor_units(expected_amount)
     selected: list[Mapping[str, Any]] = []
     seen_ids: set[str] = set()
     total_minor = 0
@@ -363,14 +367,23 @@ def aggregate_partial_payments(
         payment_reference = _canonical_reference(payment.get("BillRefNumber") or payment.get("reference"))
         payment_currency = str(payment.get("Currency") or payment.get("currency") or "KES").upper().strip()
         payment_id = str(payment.get("TransID") or payment.get("transaction_id") or "").strip()
-        if payment_reference != target_reference or payment_currency != target_currency:
+        if payment_reference != target_reference:
+            continue
+        if not re.fullmatch(r"[A-Z]{3}", payment_currency):
+            raise ValueError("matching payment has an invalid currency code")
+        if payment_currency != target_currency:
             continue
         if not payment_id:
             raise ValueError("every aggregated payment must have an external transaction ID")
         if payment_id in seen_ids:
             continue
+        # Validate precision before de-duplication/aggregation so malformed
+        # financial facts cannot be rounded into an apparently balanced total.
+        amount_minor = _strict_amount_minor_units(payment.get("TransAmount", payment.get("amount")))
+        if amount_minor <= 0:
+            raise ValueError("aggregated payment amounts must be positive")
         seen_ids.add(payment_id)
-        total_minor += amount_to_minor_units(payment.get("TransAmount", payment.get("amount")))
+        total_minor += amount_minor
         selected.append(payment)
     if total_minor == target_minor:
         status = "MATCHED"
@@ -444,11 +457,13 @@ def decompose_settlement_variance(
     Values use Decimal minor units. The unexplained residual is reported, not
     auto-adjusted; caller must define sign conventions consistently.
     """
-    expected = amount_to_minor_units(expected_gross)
-    actual = amount_to_minor_units(actual_net)
-    fees = amount_to_minor_units(known_fees)
-    reversals = amount_to_minor_units(known_reversals)
-    adjustments = amount_to_minor_units(known_adjustments)
+    # Settlement arithmetic is exact financial accounting: reject values with
+    # unsupported precision rather than rounding the unexplained residual away.
+    expected = _strict_amount_minor_units(expected_gross)
+    actual = _strict_amount_minor_units(actual_net)
+    fees = _strict_amount_minor_units(known_fees)
+    reversals = _strict_amount_minor_units(known_reversals)
+    adjustments = _strict_amount_minor_units(known_adjustments)
     explained_net = expected - fees - reversals + adjustments
     residual = actual - explained_net
     return {
