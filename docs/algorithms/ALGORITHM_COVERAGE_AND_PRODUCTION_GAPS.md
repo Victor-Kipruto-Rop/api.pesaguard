@@ -58,7 +58,7 @@ The global batch-assignment helper is currently advisory and is not wired into t
 14. Cross-channel entity graphs, only with reliable lawful identifiers; do not merge accounts based only on shared phone, amount, or location.
 15. Seasonality-aware baselines for business hours, weekdays, pay cycles, merchant type, and currency.
 16. Provider-specific lifecycle/state-transition anomaly rules, including invalid reversal/original ordering.
-17. Settlement arrival-window prediction after provider calendars, merchant schedules, and holidays are configured.
+17. Settlement arrival-window estimation now has an advisory-only empirical p50/p90 helper. Provider calendars, merchant schedules, holidays, authorized history retrieval, durable evidence, and production monitoring are still required before workflow integration.
 18. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
 19. Graph/unsupervised models as investigative signals only; never auto-freeze funds from uncalibrated anomaly scores.
 
