@@ -427,10 +427,14 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
                 internal_records,
                 tenant_settings=tenant_settings,
                 anomalies=anomalies,
-                duplicate=trans_id in seen_trans_ids,
+                duplicate="duplicate_transaction_id" in anomalies,
             )
         except (TypeError, ValueError, ArithmeticError) as exc:
-            if (tenant_settings.get("reconciliation") or {}).get("smart_algorithms_shadow_enabled") is True:
+            tenant_reconciliation_settings = (
+                tenant_settings.get("reconciliation")
+                if isinstance(tenant_settings, dict) else None
+            )
+            if isinstance(tenant_reconciliation_settings, dict) and tenant_reconciliation_settings.get("smart_algorithms_shadow_enabled") is True:
                 logger.warning(
                     "Smart reconciliation shadow unavailable tenant_id=%s trans_id=%s error_type=%s",
                     tenant_id, trans_id, type(exc).__name__,
