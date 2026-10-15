@@ -78,3 +78,15 @@ This gate is a policy evaluator, not a deployment switch. A PASS applies only to
 ## Reversal lifecycle worker wiring
 
 The reconciliation worker now calls `reversal_lifecycle_integration.py` for refund/reversal-shaped events and attaches structured lifecycle evidence to the existing output. See `docs/algorithms/REVERSAL_LIFECYCLE_INTEGRATION.md`. This blocks ordinary successful-match presentation when required evidence is incomplete, but it does not replace transactional locking, idempotency, provider confirmation, or atomic ledger posting.
+
+
+## Cohort-level quality measurement
+
+The offline `reconciliation_cohort_evaluation.py` helper now calculates the
+existing ground-truth scorecard separately for tenant/provider/currency/amount
+cohorts. Tenant remains a required dimension to prevent cross-tenant pooling.
+Cohorts below the configured sample minimum are marked insufficient and return
+no metrics rather than being treated as zero-performance or normal. This closes
+part of the P1 measurement gap; repeatable dataset ingestion/versioning,
+reviewer approval, automated release-gate wiring, and staging shadow telemetry
+remain separate work. See `docs/algorithms/COHORT_RECONCILIATION_EVALUATION.md`.
