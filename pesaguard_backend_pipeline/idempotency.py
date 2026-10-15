@@ -29,6 +29,8 @@ def _normalize_amount(value: Any) -> str:
         raise ValueError("amount must be a finite decimal number") from exc
     if not amount.is_finite():
         raise ValueError("amount must be a finite decimal number")
+    if amount <= 0:
+        raise ValueError("amount must be greater than zero")
     # Normalize equivalent representations (10, 10.0, 10.00) without
     # silently rounding or losing large decimal digits.
     return format(amount.normalize(), "f") if amount else "0"

@@ -42,7 +42,7 @@ def test_iso_timestamps_with_different_offsets_canonicalize_to_same_instant():
 
 def test_fallback_requires_a_valid_amount_timestamp_and_identity():
     base = {"amount": "10.00", "timestamp": "2026-10-14T10:00:00Z", "reference": "INV-1"}
-    for bad_amount in ("NaN", "Infinity", "not-money", None, True):
+    for bad_amount in ("NaN", "Infinity", "not-money", "0", "-1", None, True):
         with pytest.raises(ValueError):
             derive_idempotency_key({**base, "amount": bad_amount})
     with pytest.raises(ValueError, match="timezone"):
