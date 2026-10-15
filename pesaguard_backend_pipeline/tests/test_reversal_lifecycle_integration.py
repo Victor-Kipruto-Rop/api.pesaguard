@@ -54,3 +54,112 @@ def test_adapter_uses_database_columns_for_scope_and_identity():
     assert result["tenant_id"] == "tenant-a"
     assert result["provider_account_id"] == "paybill-1"
     assert result["currency"] == "KES"
+
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from pesaguard_backend_pipeline.reversal_lifecycle_integration import assess_persisted_reversal
+
+
+def _stored_row(trans_id, amount, payload, timestamp):
+    return Transaction(
+        trans_id=trans_id,
+        tenant_id="tenant-a",
+        provider_account_id="paybill-1",
+        provider="mpesa",
+        trans_amount=Decimal(amount),
+        currency="KES",
+        msisdn="254700000000",
+        business_short_code="paybill-1",
+        trans_time=timestamp,
+        raw_payload=payload,
+        status="RECONCILED",
+    )
+
+
+def _session_with_rows(*rows):
+    engine = create_engine("sqlite:///:memory:")
+    Transaction.__table__.create(engine)
+    factory = sessionmaker(bind=engine)
+    session = factory()
+    session.add_all(rows)
+    session.commit()
+    return session, engine
+
+
+def _reversal_event(amount="25.00"):
+    return {
+        "TransID": "REV-NEW",
+        "OriginalTransID": "ORIG-1",
+        "TransAmount": amount,
+        "TransTime": "2026-10-14T10:10:00+00:00",
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "provider_account_id": "paybill-1",
+        "currency": "KES",
+    }
+
+
+def test_persisted_gate_routes_cumulative_over_reversal_to_review():
+    session, engine = _session_with_rows(
+        _stored_row("ORIG-1", "100.00", {}, "2026-10-14T10:00:00+00:00"),
+        _stored_row(
+            "REV-OLD", "80.00",
+            {"OriginalTransID": "ORIG-1", "ResultCode": 0},
+            "2026-10-14T10:05:00+00:00",
+        ),
+    )
+    try:
+        result = assess_persisted_reversal(
+            session, _reversal_event("25.00"),
+            tenant_id="tenant-a", transaction_id="REV-NEW",
+        )
+        assert result["status"] == "REVIEW_REQUIRED"
+        assert "cumulative_reversal_exceeds_original_amount" in result["reason_codes"]
+        assert result["can_auto_post"] is False
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_persisted_gate_requires_review_when_prior_provider_status_is_unknown():
+    session, engine = _session_with_rows(
+        _stored_row("ORIG-1", "100.00", {}, "2026-10-14T10:00:00+00:00"),
+        _stored_row(
+            "REV-OLD", "20.00", {"OriginalTransID": "ORIG-1"},
+            "2026-10-14T10:05:00+00:00",
+        ),
+    )
+    try:
+        result = assess_persisted_reversal(
+            session, _reversal_event("25.00"),
+            tenant_id="tenant-a", transaction_id="REV-NEW",
+        )
+        assert result["status"] == "REVIEW_REQUIRED"
+        assert "prior_reversal_provider_status_unknown" in result["reason_codes"]
+        assert result["can_auto_post"] is False
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_persisted_gate_pass_is_not_posting_authority():
+    session, engine = _session_with_rows(
+        _stored_row("ORIG-1", "100.00", {}, "2026-10-14T10:00:00+00:00"),
+        _stored_row(
+            "REV-OLD", "20.00",
+            {"OriginalTransID": "ORIG-1", "ResultCode": 0},
+            "2026-10-14T10:05:00+00:00",
+        ),
+    )
+    try:
+        result = assess_persisted_reversal(
+            session, _reversal_event("25.00"),
+            tenant_id="tenant-a", transaction_id="REV-NEW",
+        )
+        assert result["status"] == "VALIDATION_PASS"
+        assert result["can_auto_post"] is False
+    finally:
+        session.close()
+        engine.dispose()
