@@ -46,6 +46,10 @@ from tenant_settings import TenantSettingsStore
 from communications.events import discrepancy_notification_event
 from background_tasks import enqueue_notification_event
 from lifecycle import transition_reconciliation
+try:
+    from .reversal_lifecycle_integration import assess_persisted_reversal, is_reversal_event
+except ImportError:  # pragma: no cover - top-level service execution
+    from reversal_lifecycle_integration import assess_persisted_reversal, is_reversal_event
 
 configure_logging()
 logger = logging.getLogger("pesaguard.reconciliation")
@@ -418,6 +422,45 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
             internal_records,
             seen_transaction_ids=seen_trans_ids,
         )
+
+        # Reversal lifecycle validation is a review-only gate. It reads only
+        # tenant/provider-account scoped persisted evidence and never authorizes
+        # a refund, ledger mutation, or automatic posting.
+        lifecycle_assessment = None
+        if is_reversal_event(event):
+            lifecycle_session = AuditSession()
+            try:
+                lifecycle_assessment = assess_persisted_reversal(
+                    lifecycle_session,
+                    event,
+                    tenant_id=tenant_id,
+                    transaction_id=trans_id,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Reversal lifecycle evidence unavailable tenant_id=%s trans_id=%s error_type=%s",
+                    tenant_id, trans_id, type(exc).__name__,
+                )
+                lifecycle_assessment = {
+                    "algorithm_version": "transaction-lifecycle-v1",
+                    "status": "REVIEW_REQUIRED",
+                    "review_required": True,
+                    "can_auto_post": False,
+                    "reason_codes": ["reversal_lifecycle_assessment_unavailable"],
+                }
+            finally:
+                lifecycle_session.close()
+
+            if lifecycle_assessment and lifecycle_assessment.get("review_required") is True:
+                phase3_result["status"] = "EXCEPTION"
+                evidence = dict(phase3_result.get("evidence") or {})
+                rules = list(evidence.get("matching_rules") or [])
+                evidence["matching_rules"] = list(dict.fromkeys(
+                    [*rules, "reversal_lifecycle_review_required"]
+                ))
+                evidence["reversal_lifecycle"] = lifecycle_assessment
+                phase3_result["evidence"] = evidence
+
         # Optional algorithm intelligence runs in shadow mode only. Its output is
         # persisted with the transaction for evaluation, but never changes phase3_status.
         smart_analysis = None
@@ -480,6 +523,9 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
             "processing_latency_ms": phase3_result["processing_latency_ms"],
             "anomalies": list(phase3_result["evidence"].get("matching_rules", [])) if phase3_status != "MATCHED" else [],
         }
+
+        if lifecycle_assessment is not None:
+            evaluation["reversal_lifecycle"] = lifecycle_assessment
 
         if smart_analysis is not None:
             # Durable output is attached to the existing transaction/outbox payload.

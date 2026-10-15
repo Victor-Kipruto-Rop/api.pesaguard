@@ -27,6 +27,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
 | Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
 | Global one-to-one batch assignment | batch_reconciliation_assignment.py (new) | Bounded exact proposal; ambiguous/oversized batches fail closed; live-engine integration and tenant-safe candidate retrieval remain separate release gates. |
+| Persisted reversal lifecycle review gate | reversal_lifecycle_integration.py + reconciliation_job.py | Tenant/provider/account-scoped history is attached to the reconciliation audit/outbox; missing, ambiguous, unknown-status, over-limit, or excessive reversal evidence routes to EXCEPTION. Review-only: no posting authority or concurrency protection. |
 
 ## Gaps to close before production certification
 
@@ -72,3 +73,8 @@ This is a code/design inventory, not a claim that the gates have passed. See Sma
 The reconciliation_release_gate.py helper evaluates the scorecard from reconciliation_evaluation.py against explicit precision, recall, false-positive, review-rate, and minimum-sample thresholds. It blocks promotion when metrics are missing, the sample is too small, the evaluation is not declared a holdout, dataset provenance is missing, or a human reviewer is not named. Default thresholds are deliberately conservative and must be approved for the actual business cohort before use.
 
 This gate is a policy evaluator, not a deployment switch. A PASS applies only to the supplied scorecard; it does not prove representativeness, guarantee future performance, automatically enable a model, or replace staging, shadow evaluation, finance approval, monitoring, and rollback.
+
+
+## Reversal lifecycle worker wiring
+
+The reconciliation worker now calls `reversal_lifecycle_integration.py` for refund/reversal-shaped events and attaches structured lifecycle evidence to the existing output. See `docs/algorithms/REVERSAL_LIFECYCLE_INTEGRATION.md`. This blocks ordinary successful-match presentation when required evidence is incomplete, but it does not replace transactional locking, idempotency, provider confirmation, or atomic ledger posting.
