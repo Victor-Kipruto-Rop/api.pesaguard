@@ -365,11 +365,8 @@ def calculate_match_quality_metrics(outcomes: Iterable[Mapping[str, Any]]) -> di
 
 def assess_reversal_candidate(reversal: Mapping[str, Any], original: Mapping[str, Any] | None,
                               prior_reversals: Sequence[Mapping[str, Any]] = (),
-                              *, amount_tolerance: Any = "0.01") -> dict[str, Any]:
+                              ) -> dict[str, Any]:
     """Validate reversal linkage and remaining amount; never authorizes posting."""
-    tolerance = _finite_decimal(amount_tolerance)
-    if tolerance is None or tolerance < 0:
-        raise ValueError("amount_tolerance must be finite and non-negative")
     if not original:
         return {"algorithm_version": ALGORITHM_VERSION, "decision": "REVIEW",
                 "reason_codes": ["original_transaction_not_found"], "remaining_reversible_amount": None}
@@ -441,8 +438,8 @@ def assess_event_order(event_time: Any, latest_seen_event_time: Any, *, now: Any
                        allowed_lateness_seconds: int = 300,
                        max_future_skew_seconds: int = 60) -> dict[str, Any]:
     """Classify event-time order without silently discarding late events."""
-    if (isinstance(allowed_lateness_seconds, bool) or allowed_lateness_seconds < 0
-            or isinstance(max_future_skew_seconds, bool) or max_future_skew_seconds < 0):
+    if (isinstance(allowed_lateness_seconds, bool) or not isinstance(allowed_lateness_seconds, int) or allowed_lateness_seconds < 0
+            or isinstance(max_future_skew_seconds, bool) or not isinstance(max_future_skew_seconds, int) or max_future_skew_seconds < 0):
         raise ValueError("time tolerances must be non-negative integers")
     event, latest, current = _aware_datetime(event_time), _aware_datetime(latest_seen_event_time), _aware_datetime(now)
     if event is None or current is None:
