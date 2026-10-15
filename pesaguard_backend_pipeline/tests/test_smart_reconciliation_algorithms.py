@@ -36,6 +36,11 @@ def test_fingerprint_requires_tenant():
         transaction_fingerprint({"TransID": "x"}, tenant_id=" ")
 
 
+def test_fingerprint_requires_provider_scope():
+    with pytest.raises(ValueError, match="provider is required"):
+        transaction_fingerprint({"TransID": "x"}, tenant_id="tenant-a", provider=" ")
+
+
 @pytest.mark.parametrize(
     "transaction",
     [
