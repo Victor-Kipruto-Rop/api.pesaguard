@@ -90,7 +90,8 @@ def arbitrate_reconciliation_evidence(
     }
     quality_valid = quality.get("valid_for_automatic_matching")
     evidence["quality_codes"] = sorted(quality_codes)
-    if quality_valid is False or quality_codes.intersection(_BLOCKING_QUALITY_CODES):
+    # Missing or unknown quality validation is not equivalent to valid data.
+    if quality_valid is not True or quality_codes.intersection(_BLOCKING_QUALITY_CODES):
         reasons.append("transaction_quality_block")
         return _result("EXCEPTION", reasons, evidence)
 
@@ -111,7 +112,7 @@ def arbitrate_reconciliation_evidence(
     if lifecycle_required:
         lifecycle_status = str(lifecycle.get("status", "")).strip().upper()
         can_auto_post = lifecycle.get("can_auto_post")
-        # A missing/unknown lifecycle status is not interpreted as successful.
+        # Lifecycle validation is advisory and never grants posting authority.
         if lifecycle_status not in {"VALID", "CONFIRMED", "CLEAR"} or can_auto_post is not False:
             evidence["lifecycle_status"] = lifecycle_status or "UNKNOWN"
             reasons.append("lifecycle_evidence_incomplete")
@@ -126,13 +127,19 @@ def arbitrate_reconciliation_evidence(
         return _result("REVIEW", reasons, evidence)
 
     decision = str(ranking.get("decision", "")).strip().upper()
+    if not decision:
+        reasons.append("candidate_decision_missing")
+        return _result("EXCEPTION", reasons, evidence)
     ambiguous = ranking.get("ambiguous")
     top_candidate = ranking.get("top_candidate")
     if ambiguous is True or decision in {"REVIEW", "AMBIGUOUS", "EXCEPTION"}:
         reasons.append("candidate_ambiguity")
         return _result("REVIEW", reasons, evidence)
 
-    if decision in {"UNMATCHED", "NO_MATCH"} or top_candidate is None:
+    if decision in {"UNMATCHED", "NO_MATCH"}:
+        if top_candidate is not None:
+            reasons.append("inconsistent_unmatched_candidate")
+            return _result("EXCEPTION", reasons, evidence)
         reasons.append("no_eligible_candidate")
         return _result("UNMATCHED", reasons, evidence)
 

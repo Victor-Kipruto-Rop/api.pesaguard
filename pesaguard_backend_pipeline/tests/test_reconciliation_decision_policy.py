@@ -36,6 +36,22 @@ def test_proposes_only_and_never_authorizes_posting():
     assert result["algorithm_version"] == ALGORITHM_VERSION
 
 
+def test_missing_quality_evidence_fails_closed():
+    result = arbitrate_reconciliation_evidence(
+        tenant_id="tenant-a", transaction_quality=None, candidate_ranking=ranking()
+    )
+    assert result["decision"] == "EXCEPTION"
+    assert result["reason_codes"] == ["transaction_quality_block"]
+
+
+def test_missing_candidate_decision_fails_closed():
+    result = arbitrate_reconciliation_evidence(
+        tenant_id="tenant-a", transaction_quality=quality(), candidate_ranking={}
+    )
+    assert result["decision"] == "EXCEPTION"
+    assert result["reason_codes"] == ["candidate_decision_missing"]
+
+
 def test_invalid_transaction_quality_fails_closed_before_candidate_selection():
     result = arbitrate_reconciliation_evidence(
         tenant_id="tenant-a",
