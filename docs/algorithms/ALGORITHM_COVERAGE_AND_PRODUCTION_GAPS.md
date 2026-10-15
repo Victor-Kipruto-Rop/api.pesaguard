@@ -26,6 +26,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
 | Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
 | Global one-to-one batch assignment | batch_reconciliation_assignment.py (new) | Bounded exact proposal; ambiguous/oversized batches fail closed; live-engine integration and tenant-safe candidate retrieval remain separate release gates. |
+| Double-entry ledger invariant validation | ledger_invariants.py (new) | Validates line shape, currency precision, duplicate line IDs, and debit/credit equality per journal/currency; advisory until invoked transactionally by every posting path. |
 
 ## Gaps to close before production certification
 
@@ -70,3 +71,8 @@ This is a code/design inventory, not a claim that the gates have passed. See Sma
 The reconciliation_release_gate.py helper evaluates the scorecard from reconciliation_evaluation.py against explicit precision, recall, false-positive, review-rate, and minimum-sample thresholds. It blocks promotion when metrics are missing, the sample is too small, the evaluation is not declared a holdout, dataset provenance is missing, or a human reviewer is not named. Default thresholds are deliberately conservative and must be approved for the actual business cohort before use.
 
 This gate is a policy evaluator, not a deployment switch. A PASS applies only to the supplied scorecard; it does not prove representativeness, guarantee future performance, automatically enable a model, or replace staging, shadow evaluation, finance approval, monitoring, and rollback.
+
+
+## Ledger posting invariant primitive
+
+`pesaguard_backend_pipeline/ledger_invariants.py` and `tests/test_ledger_invariants.py` add fail-closed checks for double-entry journal proposals. The helper rejects malformed/non-positive amounts, unsupported currency precision, duplicate entry IDs, incomplete sides, and debit/credit imbalances per journal and currency. It does not provide database atomicity, tenant authorization, idempotency claims, or live posting integration. See `docs/algorithms/LEDGER_INVARIANT_VALIDATION.md`.
