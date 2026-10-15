@@ -121,13 +121,13 @@ def provider_account_id(payload: Dict[str, Any]) -> str:
 
 
 class ProcessResult(str, Enum):
-    """Outcome of attempting to record a webhook callback.
+    """Outcome of attempting to record a provider transaction.
 
-    The webhook handler MUST branch on this, not treat it as a plain boolean â€”
-    STORED and DUPLICATE both mean "return 200 to Daraja, no retry needed".
-    ERROR means "return 5xx so Daraja retries" â€” a genuine failure must never
-    be indistinguishable from a benign duplicate, or real transactions can be
-    silently dropped.
+    STORED is a new durable transaction; DUPLICATE is an identical replay;
+    CONFLICT is the same scoped provider identity with conflicting facts and a
+    durable quarantine event; ERROR is a persistence/validation failure.
+    Webhook handlers acknowledge durable conflicts to avoid retry storms, while
+    authenticated API callers receive a conflict response.
     """
 
     STORED = "stored"        # new transaction, successfully recorded
@@ -242,6 +242,7 @@ class EventStore:
         provider: str,
         account_id: str,
         trans_id: str,
+        commit: bool = True,
     ) -> ProcessResult | None:
         """Compare canonical facts for an existing scoped provider transaction."""
         existing = session.query(Transaction).filter(
@@ -319,12 +320,34 @@ class EventStore:
                 details=details,
                 created_at=datetime.now(timezone.utc),
             ))
-        session.commit()
+        if commit:
+            session.commit()
         logger.error(
             "Conflicting provider replay quarantined for tenant_id=%s trans_id=%s reason_codes=%s",
             tenant_id, trans_id, reason_codes,
         )
         return ProcessResult.CONFLICT
+
+    def classify_existing_replay(
+        self,
+        payload: Dict[str, Any],
+        *,
+        tenant_id: str,
+        provider: str,
+        account_id: str,
+        trans_id: str,
+    ) -> ProcessResult | None:
+        """Classify an existing transaction identity before any side effect."""
+        try:
+            self._ensure_ready()
+            with self.Session() as session:
+                return self._classify_existing_replay(
+                    session, payload, tenant_id=tenant_id, provider=provider,
+                    account_id=account_id, trans_id=trans_id,
+                )
+        except SQLAlchemyError:
+            logger.exception("Replay classification failed closed for trans_id=%s", trans_id)
+            return ProcessResult.ERROR
 
     def mark_processed(
         self,
@@ -625,6 +648,13 @@ class EventStore:
             metadata=event_metadata,
         ).to_dict()
         event_payload["TransID"] = trans_id
+
+        replay_result = self._classify_existing_replay(
+            session, payload, tenant_id=tenant_id, provider=provider,
+            account_id=account_id, trans_id=trans_id, commit=False,
+        )
+        if replay_result is not None:
+            return replay_result
 
         existing = session.query(ProcessedTransaction).filter(
             ProcessedTransaction.daraja_trans_id == trans_id,
