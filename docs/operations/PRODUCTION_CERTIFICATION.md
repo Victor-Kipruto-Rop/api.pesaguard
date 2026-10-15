@@ -27,17 +27,19 @@ The full-suite baseline was collected at commit `0c9a8f9` on branch
 - CI and release workflows now call a shared PostgreSQL, Redis, and Kafka
   integration workflow. It has not run on GitHub yet. Docker is unavailable in
   this audit environment, so those service checks could not run locally.
-- The latest checks on the pre-change PR head failed before running steps, and
-  the restore drill was skipped. The recorded cause is a GitHub account billing
-  lock. The updated workflow still needs a successful GitHub run.
+- Checks triggered for commit `3f52471` [failed before executing any steps](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38823615450);
+  this includes the new integration job, and the restore drill was skipped. An
+  earlier run reported an account billing lock; the latest run has no step logs
+  that would independently identify its cause. The updated workflow still needs
+  a successful GitHub run.
 - Requests to the public status site and API health endpoint did not complete
   from this audit environment; live service health and alert delivery remain
   unverified.
 
 ### Release gates still open
 
-1. Clear the GitHub billing lock and obtain green CI, security, image, PostgreSQL,
-   Redis, Kafka, and restore-drill checks on the updated branch.
+1. Resolve the GitHub Actions run block and obtain green CI, security, image,
+   PostgreSQL, Redis, Kafka, and restore-drill checks on the updated branch.
 2. Have finance/data owners approve representative ground truth, run the database
    certification command, and confirm precision and recall are `1.0` with zero
    false positives and false negatives.
