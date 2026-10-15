@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 try:
@@ -118,12 +119,23 @@ def assess_persisted_reversal(
         Transaction.provider_account_id == account_id,
         Transaction.provider == provider,
     )
-    original_row = (
-        scoped.filter(Transaction.trans_id == original_ref).first()
-        if original_ref else None
-    )
+    if not original_ref:
+        result = assess_reversal_lifecycle(dict(event), None, ())
+        result["evidence_source"] = "tenant_scoped_transaction_store"
+        result["prior_reversal_rows_considered"] = 0
+        return result
+
+    original_row = scoped.filter(Transaction.trans_id == original_ref).first()
+    # Filter JSON payloads to the reversal's original reference before applying
+    # the safety limit. Counting all account payments would make busy accounts
+    # exceed the cap even when they have very few reversals.
+    reversal_reference_filters = [
+        Transaction.raw_payload[key].as_string() == original_ref
+        for key in _ORIGINAL_KEYS
+    ]
     rows = (
-        scoped.order_by(Transaction.created_at.desc())
+        scoped.filter(or_(*reversal_reference_filters))
+        .order_by(Transaction.created_at.desc())
         .limit(history_limit + 1)
         .all()
     )
