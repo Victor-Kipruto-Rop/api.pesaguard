@@ -21,7 +21,7 @@ def scoped_record(**extra):
 def test_returns_advisory_evidence_and_never_financial_action():
     result = evaluate_algorithmic_evidence(transaction(), [scoped_record()], scope=SCOPE, now=NOW)
     assert result["mode"] == "advisory"
-    assert result["scope_verified"] is True
+    assert result["scope_complete"] is True
     assert result["candidate_ranking"]["top_candidate"]["candidate_id"] == "ledger-1"
     assert result["automatic_financial_action"] is False
     assert result["requires_existing_policy_and_ledger_validation"] is True
@@ -147,6 +147,6 @@ def test_reconciliation_shadow_hook_exposes_scope_aware_evidence_without_changin
     assert result["status"] == "matched"
     evidence = result["smart_analysis"]["scope_aware_evidence"]
     assert evidence["mode"] == "advisory"
-    assert evidence["scope_verified"] is True
+    assert evidence["scope_complete"] is True
     assert evidence["automatic_financial_action"] is False
     assert result["smart_analysis"]["legacy_decision_unchanged"] is True
