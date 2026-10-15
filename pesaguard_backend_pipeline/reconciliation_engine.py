@@ -132,6 +132,28 @@ class ReconciliationEngine:
         if not records:
             return self._result("UNMATCHED", None, ["missing_internal_record"], 0.0, started, now)
 
+        # Missing ledger time is not evidence that the event occurred in the
+        # reconciliation window. When the reference and amount otherwise point
+        # to a candidate, fail closed for review instead of allowing
+        # _time_matches() to treat an absent timestamp as a positive match.
+        un-timed_exact_candidates = [
+            record for record in records
+            if self._reference_matches(transaction, record)
+            and record["amount"] == transaction["amount"]
+            and record["timestamp"] is None
+            and (not transaction["phone"] or not record["phone"] or transaction["phone"] == record["phone"])
+        ]
+        if un-timed_exact_candidates:
+            return self._result(
+                "EXCEPTION",
+                None,
+                ["reference_exact", "amount_exact", "ledger_timestamp_missing", "manual_review_required"],
+                0.0,
+                started,
+                now,
+                reason="candidate ledger record has no trustworthy timestamp; automatic matching is unsafe",
+            )
+
         exact = self._exact_match(transaction, records)
         if exact:
             status = "PENDING" if exact.get("_pending_match") else "MATCHED"
