@@ -161,6 +161,18 @@ def test_partial_payment_aggregation_rejects_invalid_currency_codes():
         aggregate_partial_payments([], "10.00", reference="A", currency="KES!")
 
 
+def test_partial_payment_aggregation_rejects_conflicting_duplicate_ids():
+    with pytest.raises(ValueError, match="conflicting duplicate transaction ID"):
+        aggregate_partial_payments(
+            [
+                {"TransID": "P1", "reference": "A", "amount": "40.00"},
+                {"TransID": "P1", "reference": "A", "amount": "60.00"},
+            ],
+            "100.00",
+            reference="A",
+        )
+
+
 def test_settlement_variance_rejects_sub_minor_precision():
     with pytest.raises(ValueError, match="precision beyond"):
         decompose_settlement_variance(

@@ -361,6 +361,7 @@ def aggregate_partial_payments(
     target_minor = _strict_amount_minor_units(expected_amount)
     selected: list[Mapping[str, Any]] = []
     seen_ids: set[str] = set()
+    seen_facts: dict[str, tuple[str, str, int]] = {}
     total_minor = 0
     for payment in payments:
         payment_reference = _canonical_reference(payment.get("BillRefNumber") or payment.get("reference"))
@@ -374,12 +375,16 @@ def aggregate_partial_payments(
             continue
         if not payment_id:
             raise ValueError("every aggregated payment must have an external transaction ID")
-        if payment_id in seen_ids:
-            continue
         amount_minor = _strict_amount_minor_units(payment.get("TransAmount", payment.get("amount")))
         if amount_minor <= 0:
             raise ValueError("aggregated payment amounts must be positive")
+        facts = (payment_reference, payment_currency, amount_minor)
+        if payment_id in seen_ids:
+            if seen_facts[payment_id] != facts:
+                raise ValueError("conflicting duplicate transaction ID in partial-payment aggregation")
+            continue
         seen_ids.add(payment_id)
+        seen_facts[payment_id] = facts
         total_minor += amount_minor
         selected.append(payment)
     if total_minor == target_minor:
