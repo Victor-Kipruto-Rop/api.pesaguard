@@ -66,15 +66,18 @@ def transaction_fingerprint(
     Fallback collisions remain candidates, not authoritative duplicates.
     """
     tenant = str(tenant_id).strip()
+    normalized_provider = _normalized_text(provider)
     if not tenant:
         raise ValueError("tenant_id is required")
+    if not normalized_provider:
+        raise ValueError("provider is required")
     tx_id = _normalized_text(
         transaction.get("transaction_id")
         or transaction.get("TransID")
         or transaction.get("trans_id")
     )
     if tx_id:
-        material = {"tenant": tenant, "provider": _normalized_text(provider), "id": tx_id}
+        material = {"tenant": tenant, "provider": normalized_provider, "id": tx_id}
     else:
         amount = _decimal(transaction.get("amount", transaction.get("TransAmount")))
         timestamp = _utc_timestamp(transaction.get("timestamp", transaction.get("TransTime")))
@@ -92,7 +95,7 @@ def transaction_fingerprint(
 
         material = {
             "tenant": tenant,
-            "provider": _normalized_text(provider),
+            "provider": normalized_provider,
             "reference": reference,
             "amount": format(amount.quantize(CENT), "f"),
             "timestamp": timestamp.isoformat(),
