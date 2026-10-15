@@ -141,3 +141,31 @@ def test_semantically_identical_replay_with_different_amount_format_is_duplicate
     equivalent = {**original, "TransAmount": "10.5"}
     assert store.mark_processed(equivalent, tenant_id="tenant-a") is ProcessResult.DUPLICATE
 
+def test_conflicting_replay_is_quarantined_in_caller_session(tmp_path):
+    url, engine = _store(tmp_path)
+    store = EventStore(database_url=url)
+    original = _payload("session-conflict-tx")
+
+    with sessionmaker(bind=engine)() as session:
+        assert store.mark_processed_in_session(
+            session, original, tenant_id="tenant-a"
+        ) is ProcessResult.STORED
+        session.commit()
+
+    changed = {**original, "TransAmount": "11.75"}
+    with sessionmaker(bind=engine)() as session:
+        result = store.mark_processed_in_session(
+            session, changed, tenant_id="tenant-a"
+        )
+        assert result is ProcessResult.CONFLICT
+        session.commit()
+
+    with sessionmaker(bind=engine)() as session:
+        assert session.query(Transaction).count() == 1
+        assert session.query(TransactionEvent).filter_by(
+            event_type="transaction.conflicting_replay"
+        ).count() == 1
+        assert session.query(AuditEvent).filter_by(
+            event_type="transaction.conflicting_replay"
+        ).count() == 1
+
