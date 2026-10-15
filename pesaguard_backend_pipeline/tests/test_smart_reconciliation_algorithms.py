@@ -327,13 +327,13 @@ def test_public_shadow_adapter_is_opt_in_and_returns_advisory_evidence():
     }]
 
     assert evaluate_smart_reconciliation_shadow(
-        event, records,
-        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": False}},
+        event, records, tenant_id="tenant-a",
+        tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": False}},
     ) is None
 
     result = evaluate_smart_reconciliation_shadow(
-        event, records,
-        tenant_settings={"tenant_id": "tenant-a", "reconciliation": {"smart_algorithms_shadow_enabled": True}},
+        event, records, tenant_id="tenant-a",
+        tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": True}},
     )
     assert result is not None
     assert result["mode"] == "shadow"
@@ -354,13 +354,13 @@ def test_public_shadow_adapter_requires_tenant_scope_and_valid_policy():
     }
     with pytest.raises(ValueError, match="tenant_id"):
         evaluate_smart_reconciliation_shadow(
-            event, [],
+            event, [], tenant_id="",
             tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": True}},
         )
     with pytest.raises(ValueError, match="tolerance_percent"):
         evaluate_smart_reconciliation_shadow(
-            event, [],
-            tenant_settings={"tenant_id": "tenant-a", "reconciliation": {
+            event, [], tenant_id="tenant-a",
+            tenant_settings={"reconciliation": {
                 "smart_algorithms_shadow_enabled": True, "tolerance_percent": "NaN",
             }},
         )
