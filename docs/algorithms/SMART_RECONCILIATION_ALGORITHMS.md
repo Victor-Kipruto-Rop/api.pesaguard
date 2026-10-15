@@ -8,7 +8,7 @@
 
 | Algorithm | Method | Output and safe use |
 |---|---|---|
-| Tenant-scoped transaction fingerprint | SHA-256 over provider + provider transaction ID; conservative normalized fallback when no ID exists | Duplicate candidate key. A fallback fingerprint is not proof of duplication. |
+| Tenant-scoped transaction fingerprint | SHA-256 over provider + provider transaction ID; fallback requires finite amount, timezone-aware timestamp, and reference or phone | Weak/incomplete fallback payloads raise an error rather than collapsing into a shared fingerprint. A fallback fingerprint is not proof of duplication. |
 | Candidate evidence scoring | Weighted reference, amount, timestamp, and phone evidence | Ranking signal with explicit conflicts. Score is not a probability. |
 | Ambiguity detection | Deterministic ranking + configurable top-score margin | Emits `REVIEW` when top candidates are too close; never guesses between tied ledger rows. |
 | Amount outlier detection | Median absolute deviation (MAD), modified z-score | Flags unusual amounts for review; requires a minimum sample count and reports insufficient-data state. |
@@ -33,7 +33,7 @@
 - Outlier detection is not ready until the minimum number of valid observations exists; do not treat an empty result as normality.
 - Velocity detection is only correct when the caller supplies the correct tenant/entity history and uses consistent UTC timestamps.
 - ISO timestamps without an explicit timezone are rejected as ambiguous. Normalize timestamps before calling.
-- Exact provider transaction IDs should be the primary idempotency key. Fallback fingerprints are useful for investigation but can collide.
+- Exact provider transaction IDs should be the primary idempotency key. Fallback fingerprints require a finite amount, timezone-aware timestamp, and reference or phone; incomplete payloads are rejected. Fallback fingerprints can still collide and are investigative hints only.
 - Do not use unsupervised anomaly results as sole evidence of fraud or as the sole reason to hold customer funds.
 - Retain tenant isolation, audit records, idempotency, and existing authorization controls.
 
