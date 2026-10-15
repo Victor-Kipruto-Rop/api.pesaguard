@@ -25,6 +25,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Ground-truth evaluation | reconciliation_evaluation.py | Needs finance-reviewed representative labels; scorecard does not certify production. |
 | Seasonal amount assessment | advanced_reconciliation_algorithms.py (new) | Same weekday/hour/currency cohort; tenant/account scoping remains caller responsibility. |
 | Distribution-shift detection | advanced_reconciliation_algorithms.py (new) | Monitoring signal only; windows must be comparable and seasonally aligned. |
+| Global one-to-one batch assignment | batch_reconciliation_assignment.py (new) | Bounded exact proposal; ambiguous/oversized batches fail closed; live-engine integration and tenant-safe candidate retrieval remain separate release gates. |
 
 ## Gaps to close before production certification
 
@@ -36,6 +37,8 @@ This inventory separates a helper's existence from end-to-end integration, persi
 4. **Tenant-safe inputs:** every candidate list, history window, reversal list, settlement batch, and labeled dataset must be scoped to the authenticated tenant and provider/account before the algorithm runs.
 5. **Ledger invariants:** keep algorithms in the proposal/exception layer; posting must remain transactional, balanced, idempotent, and auditable.
 6. **Reversal lifecycle:** validate original linkage, confirmed cumulative reversals, currency, provider status, and duplicate callbacks in the transaction that records the reversal.
+
+The global batch-assignment helper is currently advisory and is not wired into the live financial posting path. Before integration, prove candidate-query tenant/provider/account/currency scoping, persist the proposal and algorithm version as audit evidence, add concurrency-safe one-to-one posting constraints, and compare it against finance-reviewed ground truth in shadow mode.
 
 ### P1 — evaluation and operations
 
