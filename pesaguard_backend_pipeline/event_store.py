@@ -30,7 +30,11 @@ from normalization import normalize_amount
 from models import AuditEvent, Base, IdempotencyRecord, ProcessedTransaction, ReconciliationOutbox, Transaction, TransactionEvent, TransactionOutbox
 from transformation_store import record_transformation_stage
 from lineage import record_lineage
-from data_protection import protect_payload, tokenize_identifier
+from data_protection import protect_payload, tokenize_identifier, unprotect_payload
+try:
+    from .algorithmic_intelligence import transaction_payload_fingerprint
+except ImportError:  # pragma: no cover - top-level service execution
+    from algorithmic_intelligence import transaction_payload_fingerprint
 
 logger = logging.getLogger("pesaguard.event_store")
 
@@ -128,6 +132,7 @@ class ProcessResult(str, Enum):
 
     STORED = "stored"        # new transaction, successfully recorded
     DUPLICATE = "duplicate"  # already processed before â€” safe no-op
+    CONFLICT = "conflict"    # same provider identity with conflicting facts; quarantined
     ERROR = "error"          # genuine failure â€” caller should signal retry
 
 
@@ -228,6 +233,99 @@ class EventStore:
             )
             return True
 
+    @staticmethod
+    def _classify_existing_replay(
+        session: Session,
+        payload: Dict[str, Any],
+        *,
+        tenant_id: str,
+        provider: str,
+        account_id: str,
+        trans_id: str,
+    ) -> ProcessResult | None:
+        """Compare canonical facts for an existing scoped provider transaction."""
+        existing = session.query(Transaction).filter(
+            Transaction.tenant_id == tenant_id,
+            Transaction.provider == provider,
+            Transaction.provider_account_id == account_id,
+            Transaction.trans_id == trans_id,
+        ).with_for_update().one_or_none()
+        if existing is None:
+            return None
+
+        reason_codes: list[str] = []
+        incoming_fingerprint = None
+        stored_fingerprint = None
+        try:
+            incoming_fingerprint = transaction_payload_fingerprint(payload)
+            stored_payload = unprotect_payload(existing.raw_payload)
+            if not isinstance(stored_payload, dict):
+                raise ValueError("stored transaction payload is not an object")
+            stored_fingerprint = transaction_payload_fingerprint(stored_payload)
+            if incoming_fingerprint == stored_fingerprint:
+                return ProcessResult.DUPLICATE
+            reason_codes.append("same_external_id_different_payload")
+        except Exception:
+            logger.exception(
+                "Unable to compare replay payload for tenant_id=%s trans_id=%s",
+                tenant_id, trans_id,
+            )
+            reason_codes.append("replay_comparison_unavailable")
+
+        conflict_fingerprint = incoming_fingerprint or _payload_hash(payload)
+        event_key = f"conflicting-replay:{existing.id}:{conflict_fingerprint[:24]}"
+        event_exists = session.query(TransactionEvent).filter(
+            TransactionEvent.tenant_id == tenant_id,
+            TransactionEvent.event_key == event_key,
+        ).one_or_none()
+        details = {
+            "reason_codes": reason_codes,
+            "provider": provider,
+            "provider_account_id": account_id,
+            "existing_payload_fingerprint": stored_fingerprint,
+            "incoming_payload_fingerprint": incoming_fingerprint,
+            "algorithm_version": "canonical-replay-v1",
+        }
+        if event_exists is None:
+            session.add(TransactionEvent(
+                id=f"te_{hashlib.sha256(event_key.encode('utf-8')).hexdigest()[:24]}",
+                tenant_id=tenant_id,
+                transaction_id=existing.id,
+                trans_id=trans_id,
+                event_key=event_key,
+                event_type="transaction.conflicting_replay",
+                from_state=existing.status,
+                to_state="QUARANTINED",
+                actor="event_store",
+                reason="Provider transaction identity was replayed with conflicting or unverifiable facts",
+                payload_hash=_payload_hash(payload),
+                details=details,
+                created_at=datetime.now(timezone.utc),
+            ))
+        audit_exists = session.query(AuditEvent).filter(
+            AuditEvent.tenant_id == tenant_id,
+            AuditEvent.event_key == event_key,
+        ).one_or_none()
+        if audit_exists is None:
+            session.add(AuditEvent(
+                id=f"audit_{hashlib.sha256(event_key.encode('utf-8')).hexdigest()[:24]}",
+                tenant_id=tenant_id,
+                event_key=event_key,
+                event_type="transaction.conflicting_replay",
+                aggregate_type="transaction",
+                aggregate_id=existing.id,
+                actor="event_store",
+                payload_hash=_payload_hash(payload),
+                details=details,
+                created_at=datetime.now(timezone.utc),
+            ))
+        session.commit()
+        logger.error(
+            "Conflicting provider replay quarantined for tenant_id=%s trans_id=%s reason_codes=%s",
+            tenant_id, trans_id, reason_codes,
+        )
+        return ProcessResult.CONFLICT
+
     def mark_processed(
         self,
         payload: Dict[str, Any],
@@ -314,13 +412,24 @@ class EventStore:
 
         try:
             with self.Session() as session:
+                replay_result = self._classify_existing_replay(
+                    session, payload, tenant_id=tenant_id, provider=provider,
+                    account_id=account_id, trans_id=trans_id,
+                )
+                if replay_result is not None:
+                    return replay_result
+
                 existing_identity = session.query(IdempotencyRecord).filter(
                     IdempotencyRecord.tenant_id == tenant_id,
                     IdempotencyRecord.provider == provider,
                     IdempotencyRecord.idempotency_key == idempotency_key,
                 ).one_or_none()
                 if existing_identity is not None:
-                    return ProcessResult.DUPLICATE
+                    logger.error(
+                        "Idempotency record exists without matching transaction row for tenant_id=%s trans_id=%s",
+                        tenant_id, trans_id,
+                    )
+                    return ProcessResult.ERROR
                 pt_record = ProcessedTransaction(
                     id=f"pt_{uuid.uuid4().hex[:12]}",
                     daraja_trans_id=trans_id,
@@ -429,6 +538,20 @@ class EventStore:
                 return ProcessResult.STORED
 
         except IntegrityError:
+            # A concurrent writer may have committed this provider identity
+            # after the initial lookup; compare its canonical facts after rollback.
+            try:
+                self._ensure_ready()
+                with self.Session() as replay_session:
+                    replay_result = self._classify_existing_replay(
+                        replay_session, payload, tenant_id=tenant_id, provider=provider,
+                        account_id=account_id, trans_id=trans_id,
+                    )
+                    if replay_result is not None:
+                        return replay_result
+            except SQLAlchemyError:
+                logger.exception("Could not classify concurrent transaction replay for trans_id=%s", trans_id)
+                return ProcessResult.ERROR
             if self.already_processed(trans_id, tenant_id=tenant_id, provider_account=account_id):
                 logger.info(
                     "Duplicate webhook callback ignored for trans_id=%s idempotency_key=%s",
