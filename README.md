@@ -115,6 +115,10 @@ The current implementation inventory and remaining production-integration gates 
 
 The live reconciliation matcher has a fail-closed second-line guard for explicit tenant, provider, provider-account, and currency conflicts in candidate records. A conflict returns needs_review with a critical scope-conflict signal instead of auto-matching. This does not replace tenant-scoped database queries, database constraints, or authorization checks; missing scope metadata is not treated as proof of a conflict. Regression tests are in pesaguard_backend_pipeline/tests/test_reconciliation_scope_guard.py. This change is not a production-readiness certification: run the full suite and staging isolation tests before release.
 
+## Live reconciliation quality gate
+
+`ReconciliationEngine.reconcile` now applies the normalized transaction-quality algorithm before candidate selection. Missing/ambiguous timestamps and non-positive amounts fail closed as `EXCEPTION`, with structured quality findings in reconciliation evidence. This prevents these malformed records from being treated as ordinary matching candidates. The gate is covered by `pesaguard_backend_pipeline/tests/test_reconciliation_quality_gate.py`; alternate ingestion/legacy paths, persistence of findings, full CI, and staging behavior still require verification.
+
 ## Reversal lifecycle validation
 
 The additive transaction lifecycle algorithm checks reversal/original linkage, tenant/provider/account/currency conflicts, timestamp ordering, duplicate reversal IDs, and cumulative confirmed reversal amounts. It is advisory-only and always returns `can_auto_post=false`; it is not connected to the authoritative posting path. See docs/algorithms/TRANSACTION_LIFECYCLE_ALGORITHMS.md. Live integration still requires transaction-scoped database locking, provider-confirmed states, idempotency, audit persistence, and concurrency tests.
