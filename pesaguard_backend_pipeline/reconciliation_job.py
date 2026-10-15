@@ -47,6 +47,10 @@ from communications.events import discrepancy_notification_event
 from background_tasks import enqueue_notification_event
 from lifecycle import transition_reconciliation
 try:
+    from .algorithm_provenance import build_algorithm_provenance
+except ImportError:  # pragma: no cover - top-level service execution
+    from algorithm_provenance import build_algorithm_provenance
+try:
     from .reversal_lifecycle_integration import assess_persisted_reversal, is_reversal_event
 except ImportError:  # pragma: no cover - top-level service execution
     from reversal_lifecycle_integration import assess_persisted_reversal, is_reversal_event
@@ -219,11 +223,15 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
         shadow = evaluation.get("smart_analysis") or {}
         shadow_ranking = shadow.get("candidate_ranking") or {}
         shadow_risk = shadow.get("risk") or {}
+        algorithm_provenance = build_algorithm_provenance(result_payload)
+        # Persist the same provenance with the published result and audit record.
+        result_payload["algorithm_provenance"] = algorithm_provenance
         audit_details = {
             "trans_id": trans_id,
             "status": evaluation.get("status"),
             "match": evaluation.get("match"),
             "anomalies": evaluation.get("anomalies", []),
+            "algorithm_provenance": algorithm_provenance,
             **({
                 "smart_analysis": {
                     "mode": shadow.get("mode"),
