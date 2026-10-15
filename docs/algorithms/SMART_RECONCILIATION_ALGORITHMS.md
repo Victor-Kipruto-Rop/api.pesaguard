@@ -4,6 +4,19 @@
 
 `pesaguard_backend_pipeline/smart_reconciliation_algorithms.py` provides deterministic, pure-Python algorithm primitives. The current change is additive: it does **not** replace the existing reconciliation engine's decision path, authorize refunds, block payments, or claim fraud probabilities. The engine has an opt-in shadow hook controlled by tenant settings at `reconciliation.smart_algorithms_shadow_enabled`; the default is disabled. Shadow output is attached to the internal evaluation result and does not change the legacy status or match. It is not persisted as a separate analytics record by this change.
 
+## Scope-preservation hardening
+
+The shadow adapter now carries the resolved tenant ID into the candidate ranker and
+normalizes explicitly supplied provider, provider-account, and currency aliases from
+the event and candidate records. Explicitly conflicting metadata is excluded from
+ranking and yields a review signal. Missing metadata is not silently invented; the
+connector/database query must still enforce tenant and provider-account scoping.
+
+Regression coverage includes tenant, provider, account, and currency conflicts plus a
+valid same-scope candidate. These checks exercise shadow analysis only and do not
+change the established reconciliation result. They do not replace tenant-scoped SQL,
+database constraints, authorization, or concurrency tests.
+
 ## Included algorithms
 
 | Algorithm | Method | Output and safe use |
