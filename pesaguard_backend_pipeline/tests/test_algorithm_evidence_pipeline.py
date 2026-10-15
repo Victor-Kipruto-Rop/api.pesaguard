@@ -141,6 +141,9 @@ def test_reconciliation_shadow_hook_exposes_scope_aware_evidence_without_changin
         seen_trans_ids=set(),
         tenant_settings={
             "tenant_id": "tenant-a",
+            "provider": "mpesa",
+            "provider_account_id": "paybill-1",
+            "currency": "KES",
             "reconciliation": {"smart_algorithms_shadow_enabled": True},
         },
     )
