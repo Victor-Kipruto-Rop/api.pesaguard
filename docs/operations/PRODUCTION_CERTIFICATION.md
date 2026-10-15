@@ -1,5 +1,53 @@
 # Phase 11 — Production Certification
 
+> **Current release decision — 2026-10-16: NOT CERTIFIED — DO NOT SHIP.**
+>
+> The detailed checklist and failure counts below are a historical assessment
+> from 2026-09-17. The current evidence and remaining release gates are recorded
+> here; the historical rows have not been re-scored one by one.
+
+## Current evidence update — 2026-10-16
+
+Evidence collected for commit `78e51c3` on branch
+`hardening/production-readiness`:
+
+- Full local backend suite: **841 passed, 9 skipped**, using an isolated SQLite
+  test database with dotenv loading disabled. This does not exercise the
+  PostgreSQL, Redis, or live-service paths used in production.
+- Focused configuration and alert-routing regression after the final notifier
+  change: **17 passed**.
+- `compileall`, `git diff --check`, and duplicate-key YAML parsing passed.
+- `pip-audit` reported no known vulnerabilities. The Bandit medium/high gate
+  passed with no filtered findings.
+- PR [#85](https://github.com/Victor-Kipruto-Rop/api.pesaguard/pull/85) is open.
+  Its [CI run](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436414),
+  [dependency scan](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436482),
+  and [container scan](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38814436422)
+  failed before executing steps because GitHub reports an account billing lock.
+  The restore-drill job did not run.
+- The production public-status endpoint timed out from the audit environment;
+  live service health remains unverified.
+
+### Release gates still open
+
+1. Re-run the GitHub checks after the billing lock is cleared; require green CI,
+   dependency/security scans, image scan, and restore drill.
+2. Obtain finance/data-owner approval of reconciliation ground truth, then run
+   the certification tool and confirm precision and recall are both `1.0` with
+   zero false positives and false negatives.
+3. Run representative load, stress, spike, and soak profiles against an
+   approved production-shaped environment and preserve the results.
+4. Exercise the production backup, WAL/PITR, and recovery setup; record measured
+   RPO/RTO and the documented disaster-recovery drills.
+5. Configure the approved production secret store, rotate any credentials shared
+   outside the secret store, and record a named rotation owner and cadence.
+6. Complete staging smoke tests, verify live health and alert delivery, and fill
+   the engineering, security, and finance/data owner sign-off table below.
+
+These local checks are engineering evidence only. **Production certification
+remains `NOT CERTIFIED` until every release gate has passing evidence and the
+named owners approve it.**
+
 > **CERTIFICATION DECISION: NOT CERTIFIED — DO NOT SHIP.**
 >
 > This is the Phase 11 exit gate. It is an evidence record, not a status report.
