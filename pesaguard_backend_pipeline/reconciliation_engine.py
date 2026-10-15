@@ -456,12 +456,16 @@ def _smart_shadow_assessment(
     # Run the strict scope-aware evidence bundle only when the authenticated
     # request context supplies every required scope dimension. This remains shadow
     # analysis and cannot alter the legacy reconciliation/posting decision.
-    provider = str(event.get("provider") or event.get("provider_name") or "mpesa").strip()
+    # Scope comes from server-side tenant settings, never from untrusted callback
+    # fields. The provider is M-Pesa by default because this engine handles Daraja.
+    trusted_settings = tenant_settings or {}
+    provider = str(trusted_settings.get("provider") or "mpesa").strip()
     account_id = (
-        event.get("provider_account_id") or event.get("account_id")
-        or event.get("BusinessShortCode") or event.get("business_short_code")
+        trusted_settings.get("provider_account_id")
+        or trusted_settings.get("account_id")
+        or trusted_settings.get("business_short_code")
     )
-    currency = event.get("currency") or event.get("Currency")
+    currency = trusted_settings.get("currency")
     if account_id not in (None, "") and currency not in (None, ""):
         try:
             scope_aware_evidence = evaluate_algorithmic_evidence(
