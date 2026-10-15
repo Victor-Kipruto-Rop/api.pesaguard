@@ -59,11 +59,15 @@ def test_invalid_payload_produces_review_signal_without_auto_decline():
 
 def test_seasonal_baseline_uses_only_matching_explicit_scope():
     history = []
-    for index in range(8):
-        day = 20 + index * 7
+    timestamps = [
+        "2026-08-20T03:00:00+03:00", "2026-08-27T03:00:00+03:00",
+        "2026-09-03T03:00:00+03:00", "2026-09-10T03:00:00+03:00",
+        "2026-09-17T03:00:00+03:00", "2026-09-24T03:00:00+03:00",
+        "2026-10-01T03:00:00+03:00", "2026-10-08T03:00:00+03:00",
+    ]
+    for index, timestamp in enumerate(timestamps):
         history.append(scoped_record(
-            internal_ref=f"h-{index}", amount="100",
-            timestamp=f"2026-08-{day:02d}T03:00:00+03:00",
+            internal_ref=f"h-{index}", amount="100", timestamp=timestamp,
         ))
     history.append(scoped_record(tenant_id="tenant-b", amount="999999", internal_ref="other-tenant"))
     result = evaluate_algorithmic_evidence(
