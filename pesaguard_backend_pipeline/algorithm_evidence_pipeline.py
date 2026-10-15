@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 try:
     from .advanced_reconciliation_algorithms import seasonal_amount_assessment
@@ -55,6 +56,22 @@ def _canonical_scope(scope: Mapping[str, Any]) -> dict[str, str]:
             normalized.casefold() if key == "provider" else normalized
         )
     return result
+
+
+def _canonical_event_time(value: Any) -> Any:
+    """Normalize Daraja YYYYMMDDhhmmss timestamps as Africa/Nairobi time."""
+    if isinstance(value, datetime):
+        return value.isoformat() if value.tzinfo is not None else value
+    raw = str(value or "").strip()
+    if len(raw) == 14 and raw.isdigit():
+        try:
+            parsed = datetime.strptime(raw, "%Y%m%d%H%M%S").replace(
+                tzinfo=ZoneInfo("Africa/Nairobi")
+            )
+            return parsed.isoformat()
+        except ValueError:
+            return raw
+    return value
 
 
 def _scope_record(record: Mapping[str, Any], scope: Mapping[str, str]) -> tuple[bool, list[str]]:
@@ -117,7 +134,7 @@ def evaluate_algorithmic_evidence(
         "transaction_id": _first(canonical_transaction, ("transaction_id", "TransID", "trans_id")),
         "reference": _first(canonical_transaction, ("reference", "BillRefNumber")),
         "amount": _first(canonical_transaction, ("amount", "TransAmount")),
-        "timestamp": _first(canonical_transaction, ("timestamp", "TransTime")),
+        "timestamp": _canonical_event_time(_first(canonical_transaction, ("timestamp", "TransTime"))),
     }
     quality = validate_transaction_quality(quality_input)
 
@@ -175,7 +192,7 @@ def evaluate_algorithmic_evidence(
                 amount,
                 [{
                     "amount": row.get("amount", row.get("TransAmount")),
-                    "timestamp": _first(row, ("timestamp", "TransTime", "created_at")),
+                    "timestamp": _canonical_event_time(_first(row, ("timestamp", "TransTime", "created_at"))),
                     "currency": trusted_scope["currency"],
                 } for row in valid_amount_history],
                 event_time=event_time,
