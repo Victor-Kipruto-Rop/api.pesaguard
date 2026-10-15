@@ -214,7 +214,7 @@ def evaluate_algorithmic_evidence(
             if str(row.get("entity_key") or "") == str(entity_key)
         ]
         velocity = detect_velocity_breach(
-            [_first(row, ("timestamp", "TransTime", "created_at")) for row in valid_velocity_rows],
+            [_canonical_event_time(_first(row, ("timestamp", "TransTime", "created_at"))) for row in valid_velocity_rows],
             window_seconds=velocity_window_seconds,
             max_events=velocity_max_events,
             now=clock,
