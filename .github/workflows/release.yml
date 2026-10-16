@@ -129,6 +129,45 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
+      - name: Check staging deployment and migration secrets
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.STAGING_JWT_SECRET_KEY }}
+          PROVIDER_ENCRYPTION_KEY: ${{ secrets.PROVIDER_ENCRYPTION_KEY }}
+          PESAGUARD_PAYLOAD_ENCRYPTION_KEY: ${{ secrets.PESAGUARD_PAYLOAD_ENCRYPTION_KEY }}
+          DEPLOY_HOOK_URL: ${{ secrets.RENDER_STAGING_DEPLOY_HOOK }}
+          HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+        shell: bash
+        run: |
+          missing=0
+          for name in DATABASE_URL JWT_SECRET_KEY PROVIDER_ENCRYPTION_KEY \
+            PESAGUARD_PAYLOAD_ENCRYPTION_KEY DEPLOY_HOOK_URL HEALTH_URL; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error title=Missing staging configuration::$name is required in the staging GitHub environment"
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pesaguard_backend_pipeline/requirements.txt
+      - name: Install migration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r pesaguard_backend_pipeline/requirements.txt
+          pip install alembic
+      - name: Apply reviewed Alembic migrations to staging
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.STAGING_JWT_SECRET_KEY }}
+          PROVIDER_ENCRYPTION_KEY: ${{ secrets.PROVIDER_ENCRYPTION_KEY }}
+          PESAGUARD_PAYLOAD_ENCRYPTION_KEY: ${{ secrets.PESAGUARD_PAYLOAD_ENCRYPTION_KEY }}
+          PESAGUARD_ENVIRONMENT: staging
+          PYTHONPATH: .
+        run: alembic upgrade head
       - name: Deploy the scanned image digest to staging
         env:
           DEPLOY_HOOK_URL: ${{ secrets.RENDER_STAGING_DEPLOY_HOOK }}

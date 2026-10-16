@@ -83,7 +83,20 @@ At minimum, validate syntax and imports, focused unit behavior, cross-tenant iso
 
 Configure these secrets in the GitHub environments:
 
-- `staging`: `RENDER_STAGING_DEPLOY_HOOK`, `STAGING_HEALTH_URL`
+- `staging`: `STAGING_DATABASE_URL`, `STAGING_JWT_SECRET_KEY`,
+  `PROVIDER_ENCRYPTION_KEY`, `PESAGUARD_PAYLOAD_ENCRYPTION_KEY`,
+  `RENDER_STAGING_DEPLOY_HOOK`, `STAGING_HEALTH_URL`
 - `production`: `RENDER_PRODUCTION_DEPLOY_HOOK`, `PRODUCTION_HEALTH_URL`
+
+The staging release job checks that these secrets exist, applies the reviewed
+Alembic migrations to `STAGING_DATABASE_URL`, and only then deploys the scanned
+image digest. The encryption keys must match the keys configured on the staging
+application so data encrypted by a migration remains readable at runtime. Use a
+staging-only database identity with migration privileges and a verified,
+recoverable staging backup before applying migrations. Keep the database URL
+reachable from GitHub-hosted runners, or use a controlled runner with access to
+the staging database network. Configure required reviewers on the GitHub
+`staging` environment; reviewers should confirm the backup and target database
+before approving a release that may apply migrations.
 
 The deployment target must consume the digest sent as `imgURL`. A hook that ignores it is not an immutable promotion and must be corrected before production use. Configure required reviewers on the GitHub `production` environment; naming an environment alone does not enforce approval. A health failure blocks workflow completion but does not automatically roll back the platform deployment; follow [ROLLBACK.md](ROLLBACK.md). This workflow does not authorize deployment or enable live payments by itself.
