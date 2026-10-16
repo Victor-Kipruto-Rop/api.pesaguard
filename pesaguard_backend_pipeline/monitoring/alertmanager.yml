@@ -1,0 +1,64 @@
+global:
+  resolve_timeout: 5m
+
+# The webhook receivers below point at the PesaGuard gateway (/ops/alerts).
+# To require authentication, set PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET on the
+# gateway and add matching http_config headers to each webhook_configs entry:
+#   http_config:
+#     headers:
+#       X-Alertmanager-Secret: <secret>
+
+route:
+  receiver: pesaguard-default
+  group_by: ['alertname', 'service', 'tenant_id']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Critical alerts page on-call immediately via every configured channel.
+    - matchers:
+        - severity = "critical"
+      receiver: pesaguard-critical
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+    # Warning alerts batch into the operator queue.
+    - matchers:
+        - severity = "warning"
+      receiver: pesaguard-warning
+      repeat_interval: 4h
+    # Security alerts keep an audit trail even after paging.
+    - matchers:
+        - service = "security"
+      receiver: pesaguard-security
+      repeat_interval: 2h
+
+receivers:
+  - name: pesaguard-default
+    webhook_configs:
+      - url: http://webhook_receiver:5000/ops/alerts
+        send_resolved: true
+  - name: pesaguard-critical
+    webhook_configs:
+      - url: http://webhook_receiver:5000/ops/alerts
+        send_resolved: true
+  - name: pesaguard-warning
+    webhook_configs:
+      - url: http://webhook_receiver:5000/ops/alerts
+        send_resolved: true
+  - name: pesaguard-security
+    webhook_configs:
+      - url: http://webhook_receiver:5000/ops/alerts
+        send_resolved: true
+
+inhibit_rules:
+  # A dead cluster suppresses its dependent service alerts.
+  - source_matchers:
+      - alertname = PesaGuardDatabaseExhaustion
+    target_matchers:
+      - service = "reconciliation"
+    equal: ['service']
+  - source_matchers:
+      - alertname = PesaGuardKafkaConsumerLag
+    target_matchers:
+      - service = "event-processing"

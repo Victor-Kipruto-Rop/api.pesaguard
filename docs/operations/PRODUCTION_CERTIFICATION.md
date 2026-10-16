@@ -1,6 +1,114 @@
 # Phase 11 — Production Certification
 
-> **CERTIFICATION DECISION: NOT CERTIFIED — DO NOT SHIP.**
+> **Current release decision — 2026-10-17: NOT VERIFIED — DO NOT SHIP.**
+>
+> Current evidence and remaining gates are recorded below. The checklist under
+> “Archived assessment” is historical and is not a current blocker list.
+
+## Current evidence update — 2026-10-17
+
+Validation was collected on branch `hardening/production-readiness` after the
+current remediation changes:
+
+- Full backend suite: **889 passed, 7 skipped** in 357.92 seconds, using an
+  isolated SQLite test database with dotenv loading disabled. PostgreSQL,
+  Redis, Kafka, and live-provider behavior are not represented by this run.
+- Focused health/readiness/release regression tests: **34 passed**; final
+  Compose configuration tests after persistence/dependency changes: **12 passed**.
+- The focused load-harness, Kafka, and Daraja regression set passed **60 tests
+  with 2 integration skips**.
+- Python compilation, workflow YAML parsing, OpenAPI JSON parsing, and
+  `git diff --check` passed. Ruff's fatal-error and undefined-name gate
+  (`ruff check --select E9,F821 .`) passed. Broad Ruff rules still report
+  inherited style and modernization findings; those rules are not a blocking
+  CI gate yet.
+- Bandit exited successfully with **0 medium and 0 high** findings; its report
+  contains existing low-severity findings. `pip-audit` reported no known
+  vulnerabilities for runtime and development dependencies.
+- All five Compose variants rendered: base, full, staging, AWS overlay, and
+  tunnel overlay. Published service ports are loopback-bound in local Compose;
+  AWS removes direct application port publishing.
+- Alembic reports one migration head. Offline SQL generation stops at a
+  migration that inspects the connected database; an online PostgreSQL upgrade
+  was not run here.
+- Compose configuration checks passed. Docker Desktop was started during the
+  2026-10-17 follow-up and the engine reports version 29.8.0; local image build,
+  container startup, service integration, and restore drill remain unrun.
+- After the branch update, GitHub CI, integration, image, secret, dependency,
+  and communications checks failed within 1–3 seconds with zero steps run. The
+  jobs have no logs (`gh run view --log-failed` reports that the log is missing).
+  The check annotations confirm the GitHub account is locked due to a billing
+  issue; it is not evidence that repository tests failed. The checks must be
+  rerun after Actions is available.
+- GitHub currently has no `staging` environment (only `copilot` and
+  `github-pages` are configured), so the staging deploy hook, health URL,
+  database URL, and migration keys are not configured there. The local Docker
+  engine is now running, but no staging containers have been started. No remote
+  staging deployment or migration was attempted.
+
+### Remediation delivered
+
+- Replaced a committed database password in `.env.example` with a local-only
+  placeholder and added staging-only secret placeholders.
+- Added Redis persistence and health checks, persistent database/broker volumes,
+  loopback host bindings, and Redis configuration for application workers.
+- Added Compose validation and fatal-lint/undefined-name gates to CI and release
+  verification. Dependency auditing now includes development dependencies.
+- Restricted production promotion to a manual request on `main` after staging
+  reports the expected healthy revision; production uses the same scanned image
+  digest behind a protected GitHub environment.
+- Added a staging release preflight and migration step. It requires staging
+  database, JWT, provider-encryption, payload-encryption, deploy-hook, and health
+  secrets, runs Alembic against staging before deployment, then verifies the
+  deployed revision through the staging health endpoint. This has not run yet.
+- Added an endpoint load-test harness and sample payload, fixed the failed STK
+  callback error path, and repaired the Kafka lag tests' opt-in integration gate.
+
+### Current gate matrix
+
+| Gate | Status | Evidence or remaining requirement |
+|---|---|---|
+| Local automated suite and static/security checks | **PASS** | 889 passed / 7 skipped; Ruff fatal/undefined-name check, Bandit, and dependency audit passed. |
+| Broad Ruff checks on touched legacy modules | **FAIL** | The scoped broad check reported 169 non-blocking diagnostics across import, exception, typing, and modernization rules; CI blocks fatal errors and undefined names only. |
+| Compose configuration and local port exposure | **PASS** | Five Compose variants render; service ports bind to loopback or are removed by the AWS overlay. |
+| PostgreSQL migration and PostgreSQL/Redis/Kafka integration | **NOT VERIFIED** | Requires service-backed CI or staging execution; Docker is available locally but the services have not been started. |
+| Image build, startup, and vulnerability/secret scans on this head | **NOT VERIFIED** | Must pass on GitHub after the branch update. |
+| Staging smoke test, live health, and alert delivery | **NOT VERIFIED** | Create and protect the GitHub `staging` environment, configure its deployment/database secrets and Render endpoints, then run the release workflow. |
+| Reconciliation quality sign-off | **NOT VERIFIED** | Finance/data owners must approve representative ground truth and the scorecard. |
+| Production-shaped load and recovery evidence | **NOT VERIFIED** | Run the load/stress/soak harness and restore drills; record measured RPO/RTO. |
+| Secret store and credential rotation | **NOT VERIFIED** | Configure an approved store, assign owners, and rotate exposed credentials. |
+
+### Release gates still open
+
+1. Resolve the GitHub billing lock, then obtain green CI, secret/dependency/image
+   scans, PostgreSQL, Redis, Kafka, and restore-drill checks on the updated branch.
+2. Have finance/data owners approve representative ground truth, run the database
+   certification command, and confirm precision and recall are `1.0` with zero
+   false positives and false negatives.
+3. Configure and protect the staging GitHub environment, provide its secrets,
+   and verify a recoverable staging backup. Complete staging deployment and
+   smoke tests; verify live health, alert delivery, and the deployed image
+   revision.
+4. Run and preserve representative load, stress, spike, and soak results against
+   a production-shaped staging environment using owner-approved thresholds.
+5. Exercise production backup, WAL/PITR, and recovery; record measured RPO/RTO
+   and complete the documented disaster-recovery drills.
+6. Configure the approved production secret store, assign rotation owners, and
+   rotate credentials shared outside it.
+7. Obtain engineering, security, and finance/data-owner sign-off.
+
+These local checks are engineering evidence only. **Production status remains
+`NOT VERIFIED` until every release gate has passing evidence and named owners
+approve it.**
+
+## Archived assessment — 2026-09-17 (superseded)
+>
+> The following suite counts, blocker IDs, and source references describe the
+> 2026-09-17 repository state. They are retained for historical context only and
+> must not be used as current findings. The current release gates are listed
+> above.
+
+> **Historical certification decision: NOT CERTIFIED — DO NOT SHIP.**
 >
 > This is the Phase 11 exit gate. It is an evidence record, not a status report.
 > Nothing below is pre-ticked. Every line is graded from evidence actually

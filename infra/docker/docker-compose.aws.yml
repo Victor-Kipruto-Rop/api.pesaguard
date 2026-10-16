@@ -1,9 +1,9 @@
 services:
   webhook_receiver:
-    ports: []
+    ports: !reset []
 
   dashboard_api:
-    ports: []
+    ports: !reset []
 
   nginx:
     image: nginx:1.27-alpine

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Sequence, Set, Iterable
@@ -193,7 +193,12 @@ class ReconciliationEngine:
             score, candidate = ranked[0]
             return self._result("PARTIAL", candidate, ["amount_within_tolerance", "timestamp_within_window"], score, started, now)
 
-        amount_match = [record for record in records if self._amount_matches(transaction, record)]
+        amount_match = [
+            record for record in records
+            if transaction["timestamp"] is not None
+            and record["timestamp"] is not None
+            and self._amount_matches(transaction, record)
+        ]
         if amount_match:
             ranked = sorted(
                 ((self._score(transaction, record), record) for record in amount_match),
@@ -210,7 +215,7 @@ class ReconciliationEngine:
     def _normalize_transaction(self, value: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError("transaction must be an object")
-        amount = self._amount(value.get("TransAmount", value.get("amount")))
+        amount = self._quality_gate_amount(value.get("TransAmount", value.get("amount")))
         timestamp = _parse_event_time(value.get("TransTime", value.get("timestamp")))
         return {
             "transaction_id": str(value.get("TransID") or value.get("trans_id") or "").strip(),
@@ -263,18 +268,38 @@ class ReconciliationEngine:
         except NormalizationError as exc:
             raise ValueError(str(exc)) from exc
 
+    @staticmethod
+    def _quality_gate_amount(value: Any) -> Optional[Decimal]:
+        """Keep parseable non-positive amounts for an explicit quality finding."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            amount = Decimal(str(value).replace(",", "").strip())
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if not amount.is_finite():
+            return None
+        try:
+            normalized = amount.quantize(Decimal("0.01"))
+        except InvalidOperation as exc:
+            raise ValueError("amount exceeds the supported transaction precision") from exc
+        if amount != normalized:
+            raise ValueError("amount must not have fractions smaller than one minor unit")
+        if abs(normalized) >= Decimal("10000000000000000"):
+            raise ValueError("amount exceeds the supported transaction precision")
+        if normalized > 0:
+            try:
+                return Decimal(normalize_amount(value))
+            except NormalizationError as exc:
+                raise ValueError(str(exc)) from exc
+        return normalized
+
     def _tolerance(self, amount: Decimal) -> Decimal:
         return max(Decimal("0.01"), abs(amount) * self.tolerance_percent / Decimal("100"))
 
     def _time_matches(self, transaction: Dict[str, Any], record: Dict[str, Any]) -> bool:
-        if transaction["timestamp"] is None:
+        if transaction["timestamp"] is None or record["timestamp"] is None:
             return False
-        if record["timestamp"] is None:
-            # The internal ledger record has no timestamp yet (e.g. it has not
-            # finished syncing). That is missing data, not evidence the two
-            # events happened far apart, so it must not sink an otherwise
-            # exact reference+amount match to MISMATCH.
-            return True
         return abs((transaction["timestamp"] - record["timestamp"]).total_seconds()) <= self.window_seconds
 
     def _amount_matches(self, transaction: Dict[str, Any], record: Dict[str, Any]) -> bool:

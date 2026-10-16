@@ -36,7 +36,7 @@ def validate(database_url: str) -> dict[str, object]:
     transaction integrity, audit completeness, and amount checks.
     """
     tables = ["transactions", "processed_transactions", "transaction_outbox", "action_audit_entries", "fraud_risk_assessments"]
-    counts = {table: int(_query(database_url, f"SELECT count(*) FROM {table}")) for table in tables}
+    counts = {table: int(_query(database_url, f"SELECT count(*) FROM {table}")) for table in tables}  # nosec B608: tables is a fixed internal allowlist.
     constraints = int(_query(database_url, "SELECT count(*) FROM pg_constraint WHERE conrelid = 'transactions'::regclass"))
     indexes = int(_query(database_url, "SELECT count(*) FROM pg_indexes WHERE tablename IN ('transactions', 'processed_transactions', 'transaction_outbox')"))
     audit_rows = int(_query(database_url, "SELECT count(*) FROM action_audit_entries"))

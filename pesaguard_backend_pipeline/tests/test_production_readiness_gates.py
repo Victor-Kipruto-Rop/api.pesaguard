@@ -43,6 +43,19 @@ def test_production_requires_redis_and_kafka_for_readiness(monkeypatch):
     assert payload["checks"]["redis"]["status"] == "failed"
 
 
+def test_staging_requires_redis_and_kafka_for_readiness(monkeypatch):
+    health = _reload_health(
+        monkeypatch,
+        PESAGUARD_ENVIRONMENT="staging",
+        DATABASE_URL="sqlite:///:memory:",
+        DARAJA_CONSUMER_KEY="",
+        DARAJA_CONSUMER_SECRET="",
+    )
+
+    assert health.KAFKA_REQUIRED_FOR_OK is True
+    assert health.REDIS_REQUIRED_FOR_OK is True
+
+
 def test_production_reports_ok_when_required_dependencies_are_healthy(monkeypatch):
     health = _reload_health(
         monkeypatch,
@@ -112,3 +125,33 @@ def test_explicit_health_gate_overrides_environment_default(monkeypatch):
 
     assert health.KAFKA_REQUIRED_FOR_OK is True
     assert health.REDIS_REQUIRED_FOR_OK is True
+
+
+def test_release_revision_is_reported_and_survives_public_health_sanitization(monkeypatch):
+    revision = "a" * 40
+    health = _reload_health(
+        monkeypatch,
+        PESAGUARD_ENVIRONMENT="development",
+        PESAGUARD_BUILD_REVISION=revision,
+        DATABASE_URL="sqlite:///:memory:",
+    )
+    monkeypatch.setattr(health, "check_database_connection", lambda: {
+        "status": "ok",
+        "database": {"status": "ok", "url": "postgresql://user:secret@db"},
+    })
+    monkeypatch.setattr(health, "check_kafka_connectivity", lambda: {
+        "status": "ok", "kafka": {"status": "ok"},
+    })
+    monkeypatch.setattr(health, "check_redis_connectivity", lambda: {
+        "status": "ok", "redis": {"status": "ok"},
+    })
+    monkeypatch.setattr(health, "check_daraja_connectivity", lambda: {
+        "status": "ok", "daraja": {"status": "ok"},
+    })
+
+    payload = health.build_health_payload()
+    sanitized = health.sanitize_health_payload(payload)
+
+    assert payload["release"] == revision
+    assert sanitized["release"] == revision
+    assert "url" not in sanitized["checks"]["database"]

@@ -1,11 +1,11 @@
 # PesaGuard backend environment configuration
 
-The backend loads `c:\Users\kipru\pesaguard\.env` using the existing
-`python-dotenv` dependency. The default path is relative to the installed backend
-source, not the shell's current directory. Package startup loads it before the
-legacy compatibility imports; database consumers also import the shared loader.
-Docker services receive the file through Compose `env_file` rather than through
-an image layer.
+In development, the backend can load `.env` from the backend checkout root using
+the existing `python-dotenv` dependency. The default path is resolved from the
+installed backend source, not the shell's current directory. Package startup
+loads it before legacy compatibility imports; database consumers also import the
+shared loader. Docker services receive explicitly configured values through
+Compose `env_file`, never through an image layer.
 
 ## Precedence and required values
 
@@ -13,6 +13,10 @@ an image layer.
 - Set `PESAGUARD_ENV_FILE` to an absolute path to choose another deployment file.
   A missing explicitly selected file fails with a value-free error.
 - Set `PYTHON_DOTENV_DISABLED=1` for environment-only deployment or testing.
+- Production and staging do not load the implicit checkout `.env`; inject their
+  values from the approved deployment secret store. The API image defaults to
+  `PESAGUARD_ENVIRONMENT=production`, which makes Redis and Kafka readiness gates
+  required unless an explicit environment override is supplied.
 - An absent default file is permitted when configuration is injected externally.
 - Values are literal: `${NAME}` interpolation is disabled. Write complete URLs.
 - `DATABASE_URL` must be supplied; backend modules no longer embed database
@@ -63,7 +67,7 @@ rotation needs a recovery/migration plan; do not discard keys needed to decrypt
 existing financial records. This code change does not rotate credentials or
 remove them from existing logs or previously built images.
 
-## SMTP report and escalation email
+## Transactional and alert email
 
 `EmailService` uses Python's SMTP transport, not an email-provider HTTP API.
 Configure these keys in the ignored deployment file:
@@ -114,10 +118,16 @@ to connect. Local configuration validation passed; live SMTP authentication and
 delivery remain unverified. Check outbound network policy with your administrator;
 do not disable TLS or firewall protections to work around this blocker.
 
-This configures report and escalation email in the feature applications. The
-separate discrepancy alert notifier still uses `ALERT_SMTP_HOST`,
+The report, daily-summary, account-security, and public status subscription
+messages use an inline-styled, table-based PesaGuard email layout with a
+plain-text alternative. Discrepancy alert messages use the same brand palette
+and escape provider-supplied values before rendering HTML. The layout uses an
+in-message wordmark and requires no externally hosted images. Email-client
+rendering still needs a real inbox/client review before production sign-off.
+
+This configures transactional mail in the feature applications. The separate
+discrepancy alert notifier still uses `ALERT_SMTP_HOST`,
 `ALERT_SMTP_PORT`, `ALERT_SMTP_USER`, `ALERT_SMTP_PASS`, `ALERT_EMAIL_FROM`, and
 `ALERT_EMAIL_RECIPIENTS`. The communications gateway abstraction is separate and
 is not wired to this SMTP service by this change. Mock transport tests do not
 verify live delivery, provider configuration, or recipient inbox placement.
-

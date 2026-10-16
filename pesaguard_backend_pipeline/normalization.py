@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any, Dict, Mapping
 from zoneinfo import ZoneInfo
 
 

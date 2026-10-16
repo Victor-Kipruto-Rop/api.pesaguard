@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .core.enums import CommunicationChannel
 from .models import CommunicationAttempt, CommunicationCampaign, CommunicationNotification
 
 DEFAULT_CURRENCY = "KES"

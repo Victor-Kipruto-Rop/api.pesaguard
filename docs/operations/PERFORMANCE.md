@@ -70,3 +70,41 @@ At minimum, validate syntax and imports, focused unit behavior, cross-tenant iso
 - Replace this design baseline with implementation-specific diagrams, schemas, examples, and measured SLOs as the capability matures.
 - Link the final implementation, migration revision, tests, dashboards, and runbook from this document.
 - Review this document whenever the public contract, ownership boundary, or recovery behavior changes.
+
+## Load, stress, spike, and soak validation
+
+`pesaguard_backend_pipeline/operations/run_endpoint_load_test.py` drives bounded
+HTTP traffic from a JSON payload template and records a JSON report without
+including request bodies or header values. It supports `load`, `stress`, `spike`,
+and duration-based `soak` profiles. The runner requires explicit test-tenant
+confirmation, rejects remote HTTP targets, caps concurrency, request counts,
+timeouts, stress stages, and duration, and supports per-request HMAC signatures.
+Remote staging targets require HTTPS and the explicit `--allow-nonlocal-target`
+flag. Use only a dedicated non-production tenant and provider sandbox; never run
+against real customer or payment traffic.
+
+Example against a local test endpoint:
+
+```powershell
+python -m pesaguard_backend_pipeline.operations.run_endpoint_load_test `
+  --target-url http://127.0.0.1:5000/test/load `
+  --payload-template .\docs\operations\load-test-payload.example.json `
+  --profile stress --requests-per-stage 100 --concurrency 20 --stress-steps 4 `
+  --max-error-rate 0.01 --max-throttle-rate 0.05 --max-p95-ms 500 `
+  --min-requests-per-second 10 --confirm-test-tenant `
+  --json-path .\artifacts\load-test.json
+```
+
+Create the test endpoint only in an isolated environment. For HTTPS staging, add
+`--allow-nonlocal-target` only after the service owner approves the tenant and
+capacity. Supply sensitive headers through `PESAGUARD_LOAD_TEST_HEADERS_JSON`
+and a signature key through an environment variable named by
+`--hmac-secret-env`. Never pass secrets as command arguments or include personal
+data in the template.
+
+An acceptance report requires all four thresholds: maximum server/transport
+error rate, maximum throttle rate, maximum p95 latency, and minimum throughput.
+Set thresholds from approved service objectives before a run; the example values
+above are illustrative and are not product SLOs. Preserve the report, revision,
+test window, tenant, and staging resource profile with release evidence. A
+diagnostic run without all thresholds is not an acceptance result.

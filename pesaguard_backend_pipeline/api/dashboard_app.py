@@ -204,7 +204,7 @@ def _create_engine(database_url: str, **kwargs):
         from metrics import instrument_engine_query_timing
         instrument_engine_query_timing(engine)
     except Exception:
-        pass
+        logger.debug("Database query timing instrumentation skipped.", exc_info=True)
     return engine
 
 
@@ -494,7 +494,7 @@ app.register_blueprint(
     )
 )
 app.register_blueprint(
-    create_public_status_blueprint(SessionLocal, build_health_payload)
+    create_public_status_blueprint(SessionLocal, lambda: build_health_payload())
 )
 
 

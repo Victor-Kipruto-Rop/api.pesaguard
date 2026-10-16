@@ -8,7 +8,7 @@ This document describes the daily backup process, offsite storage, and restore p
   - Retention: keep daily base backups for 30 days, weekly archive snapshots for 6 months, and WAL archives for 30 days for point-in-time recovery.
   - Encryption: encrypt artifacts with an externally managed key before off-site upload. Base backups use pg_basebackup format; WAL archives are written to encrypted, off-site storage with archive_mode=on and archive_timeout bounded to the RPO.
 - Evidence: each artifact has a SHA-256 manifest and must pass full-stream integrity verification before being considered fresh.
-- Recovery targets: near-zero RPO for committed financial transactions; RTO < 15 minutes; verified by the quarterly isolated restore drill and the automated restore-drill CI job.
+- Recovery targets (not yet measured in production): near-zero RPO for committed financial transactions; RTO < 15 minutes. The automated restore-drill CI job checks restore behavior in its disposable topology; it does not prove production meets either target. Record measured RPO/RTO from representative recovery drills before certification.
   - Storage: copy backup files off the primary host to separate object storage or backup storage. Replication via streaming replica or managed standby provides live failover within the primary region.
   - Recovery target: restore from the most recent base backup within the retention window, replaying WAL archives to the target timestamp for point-in-time recovery.
 

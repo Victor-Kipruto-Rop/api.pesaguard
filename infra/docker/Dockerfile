@@ -11,11 +11,15 @@
 #                     it to your load balancer's address behind Render/nginx)
 FROM python:3.12-slim
 
+ARG PESAGUARD_BUILD_REVISION=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app:/app/pesaguard_backend_pipeline \
+    PESAGUARD_ENVIRONMENT=production \
+    PESAGUARD_BUILD_REVISION=${PESAGUARD_BUILD_REVISION} \
     PESAGUARD_SHARED_METRICS=1 \
     PROMETHEUS_MULTIPROC_DIR=/tmp/pesaguard-prometheus \
     PORT=5001 \

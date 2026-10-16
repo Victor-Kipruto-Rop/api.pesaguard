@@ -140,7 +140,7 @@ class PostgresConnector(BaseConnector):
                 conditions.append(f"{safe_columns['phone_number']} = :phone_number")
                 params["phone_number"] = phone_number
             query = text(
-                f"SELECT {safe_columns['internal_ref']}, {safe_columns['amount']}, {safe_columns['phone_number']}, "
+                f"SELECT {safe_columns['internal_ref']}, {safe_columns['amount']}, {safe_columns['phone_number']}, "  # nosec B608: all identifiers pass _validate_identifier; values are bound below.
                 f"{safe_columns['timestamp']}, {safe_columns['status']} FROM {safe_table} "
                 f"WHERE {' AND '.join(conditions)} ORDER BY {safe_columns['timestamp']} DESC LIMIT :limit"
             )
@@ -170,7 +170,7 @@ class PostgresConnector(BaseConnector):
             since_dt = datetime.fromtimestamp(since_time, tz=timezone.utc)
 
             query = text(
-                f"SELECT {safe_columns['internal_ref']}, {safe_columns['amount']}, {safe_columns['phone_number']}, "
+                f"SELECT {safe_columns['internal_ref']}, {safe_columns['amount']}, {safe_columns['phone_number']}, "  # nosec B608: all identifiers pass _validate_identifier; values are bound below.
                 f"{safe_columns['timestamp']}, {safe_columns['status']} "
                 f"FROM {safe_table} WHERE {safe_columns['timestamp']} >= :since"
             )
