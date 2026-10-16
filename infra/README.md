@@ -17,10 +17,10 @@ service `environment` entries override service `env_file` values.
 Validate without displaying resolved credentials or starting services:
 
 ```powershell
-python 'C:\Users\kipru\pesaguard\infra\configure.py' compose -- -f infra/docker/docker-compose.yml config --quiet
-python 'C:\Users\kipru\pesaguard\infra\configure.py' compose -- -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.aws.yml config --quiet
-python 'C:\Users\kipru\pesaguard\infra\configure.py' compose -- -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tunnel.yml config --quiet
-python 'C:\Users\kipru\pesaguard\infra\configure.py' --env-file 'C:\Users\kipru\pesaguard\.env.staging' compose -- -f infra/docker/docker-compose.staging.yml config --quiet
+python infra/configure.py --env-file .env compose -- -f infra/docker/docker-compose.yml config --quiet
+python infra/configure.py --env-file .env compose -- -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.aws.yml config --quiet
+python infra/configure.py --env-file .env compose -- -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tunnel.yml config --quiet
+python infra/configure.py --env-file .env.staging compose -- -f infra/docker/docker-compose.staging.yml config --quiet
 ```
 
 Use `up -d --build` instead of `config --quiet` only after reviewing deployment
@@ -33,8 +33,9 @@ Required settings by variant:
 - Base: `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, `DATABASE_URL_DOCKER`,
   `PESAGUARD_API_URL`, `JWT_SECRET_KEY`, `KAFKA_BOOTSTRAP_SERVERS_DOCKER`,
   `REDIS_URL_DOCKER`, `PESAGUARD_BIND_HOST_DOCKER`.
-- Full: database/API/JWT settings above plus `KAFKA_BOOTSTRAP_SERVERS_FULL` and
-  `KAFKA_ADVERTISED_LISTENERS_FULL`. This variant uses Kafka, not Redpanda.
+- Full: database/API/JWT settings above plus `KAFKA_BOOTSTRAP_SERVERS_FULL`,
+  `KAFKA_ADVERTISED_LISTENERS_FULL`, and `REDIS_URL_DOCKER`. This variant uses
+  Kafka, not Redpanda.
 - Staging: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `STAGING_POSTGRES_DB`,
   `STAGING_KAFKA_ADVERTISED_LISTENERS`.
 - AWS/tunnel overlays: `API_SERVER_NAME` (one hostname, not a URL).
@@ -48,12 +49,21 @@ Changing initialization variables does **not** rename existing databases or rota
 passwords in existing Postgres volumes. No migration or credential rotation is
 performed here. Use container-reachable Redis/Kafka URLs, not host localhost URLs.
 
-Non-secret protocol constants, container paths, service DNS topology, published
-ports, image versions, timer schedules and existing operational defaults remain
-in infrastructure files. This change does not certify their production suitability.
-In particular, the AWS overlay's existing `ports: []` does not necessarily remove
-base-file published ports during Compose merging; review actual exposure before
-deployment. No network/security controls are changed by this configuration work.
+Published ports in base, full, and staging Compose files bind to `127.0.0.1`.
+The AWS overlay resets direct API port publication so the proxy is the only
+published service in that variant. CI renders each variant to catch interpolation
+and merge errors. These Compose files do not replace production firewall, private
+network, TLS, access-control, monitoring, and recovery configuration.
+
+The full and staging variants persist PostgreSQL, Kafka, and Redis data in named
+Docker volumes. The base variant also persists its PostgreSQL, Redpanda, and
+Redis data. These volumes are not off-site backups; configure and test independent
+encrypted backups and recovery before production use.
+
+The backend and dashboard expose `/livez` for process liveness and `/health` for
+dependency readiness. Compose waits for healthy PostgreSQL, Redis, and Redpanda
+services before starting dependent API and worker processes. One-shot and RQ
+worker containers do not inherit the HTTP API health probe.
 
 ## Nginx
 

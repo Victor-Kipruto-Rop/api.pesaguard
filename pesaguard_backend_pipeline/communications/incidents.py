@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from sqlalchemy.orm import Session
+
 from .models import CommunicationIncident, CommunicationOutboxEntry
 
 SEVERITIES = frozenset({"low", "medium", "high", "critical"})

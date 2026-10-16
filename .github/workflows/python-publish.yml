@@ -33,7 +33,6 @@ jobs:
         env:
           PYTHONPATH: .
           DARAJA_SHARED_SECRET: release_test_secret
-          PESAGUARD_ALLOW_UNRESTRICTED_WEBHOOK_SOURCE: 1
         run: |
           pytest -v --tb=short
 

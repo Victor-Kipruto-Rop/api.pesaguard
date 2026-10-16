@@ -1,60 +1,90 @@
 # Phase 11 — Production Certification
 
-> **Current release decision — 2026-10-16: NOT CERTIFIED — DO NOT SHIP.**
+> **Current release decision — 2026-10-17: NOT VERIFIED — DO NOT SHIP.**
 >
-> The current evidence and open gates are recorded below. The detailed checklist
-> beginning at “Archived assessment” is from 2026-09-17 and is not a current
-> blocker list.
+> Current evidence and remaining gates are recorded below. The checklist under
+> “Archived assessment” is historical and is not a current blocker list.
 
-## Current evidence update — 2026-10-16
+## Current evidence update — 2026-10-17
 
-The full-suite baseline was collected at commit `0c9a8f9` on branch
-`hardening/production-readiness`, before the local changes described here:
+Validation was collected on branch `hardening/production-readiness` after the
+current remediation changes:
 
-- Full local backend suite: **842 passed, 9 skipped**, using an isolated SQLite
-  test database with dotenv loading disabled. This does not exercise the
-  PostgreSQL, Redis, or live-service paths used in production.
-- Focused post-change configuration, reconciliation-certification, and evaluator
-  tests: **45 passed**.
-- `compileall`, `git diff --check`, and YAML parsing passed. Bandit reported no
-  medium/high findings, and `pip-audit` reported no known vulnerabilities.
-- The production image now defaults to the production environment profile;
-  production and staging health checks require Redis and Kafka, and implicit
-  checkout `.env` loading is disabled for those environments.
-- The reconciliation certification command now emits precision, recall,
-  false-positive, and false-negative counts; it remains blocked until finance or
-  data owners approve representative cases and the observed scorecard passes.
-- CI and release workflows now call a shared PostgreSQL, Redis, and Kafka
-  integration workflow. It has not run on GitHub yet. Docker is unavailable in
-  this audit environment, so those service checks could not run locally.
-- Checks triggered for commit `3f52471` [failed before executing any steps](https://github.com/Victor-Kipruto-Rop/api.pesaguard/actions/runs/38823615450);
-  this includes the new integration job, and the restore drill was skipped. An
-  earlier run reported an account billing lock; the latest run has no step logs
-  that would independently identify its cause. The updated workflow still needs
-  a successful GitHub run.
-- Requests to the public status site and API health endpoint did not complete
-  from this audit environment; live service health and alert delivery remain
-  unverified.
+- Full backend suite: **889 passed, 7 skipped** in 357.92 seconds, using an
+  isolated SQLite test database with dotenv loading disabled. PostgreSQL,
+  Redis, Kafka, and live-provider behavior are not represented by this run.
+- Focused health/readiness/release regression tests: **34 passed**; final
+  Compose configuration tests after persistence/dependency changes: **12 passed**.
+- The focused load-harness, Kafka, and Daraja regression set passed **60 tests
+  with 2 integration skips**.
+- Python compilation, workflow YAML parsing, OpenAPI JSON parsing, and
+  `git diff --check` passed. Ruff's fatal-error and undefined-name gate
+  (`ruff check --select E9,F821 .`) passed. Broad Ruff rules still report
+  inherited style and modernization findings; those rules are not a blocking
+  CI gate yet.
+- Bandit exited successfully with **0 medium and 0 high** findings; its report
+  contains existing low-severity findings. `pip-audit` reported no known
+  vulnerabilities for runtime and development dependencies.
+- All five Compose variants rendered: base, full, staging, AWS overlay, and
+  tunnel overlay. Published service ports are loopback-bound in local Compose;
+  AWS removes direct application port publishing.
+- Alembic reports one migration head. Offline SQL generation stops at a
+  migration that inspects the connected database; an online PostgreSQL upgrade
+  was not run here.
+- Compose configuration checks passed, but the Docker daemon is unavailable.
+  Image build, container startup, service integration, and restore drill were
+  not run locally.
+- The updated branch head has not run on GitHub yet. Earlier PR checks were
+  blocked before jobs started because GitHub reported an account billing issue.
+
+### Remediation delivered
+
+- Replaced a committed database password in `.env.example` with a local-only
+  placeholder and added staging-only secret placeholders.
+- Added Redis persistence and health checks, persistent database/broker volumes,
+  loopback host bindings, and Redis configuration for application workers.
+- Added Compose validation and fatal-lint/undefined-name gates to CI and release
+  verification. Dependency auditing now includes development dependencies.
+- Restricted production promotion to a manual request on `main` after staging
+  reports the expected healthy revision; production uses the same scanned image
+  digest behind a protected GitHub environment.
+- Added an endpoint load-test harness and sample payload, fixed the failed STK
+  callback error path, and repaired the Kafka lag tests' opt-in integration gate.
+
+### Current gate matrix
+
+| Gate | Status | Evidence or remaining requirement |
+|---|---|---|
+| Local automated suite and static/security checks | **PASS** | 889 passed / 7 skipped; Ruff fatal/undefined-name check, Bandit, and dependency audit passed. |
+| Broad Ruff checks on touched legacy modules | **FAIL** | The scoped broad check reported 169 non-blocking diagnostics across import, exception, typing, and modernization rules; CI blocks fatal errors and undefined names only. |
+| Compose configuration and local port exposure | **PASS** | Five Compose variants render; service ports bind to loopback or are removed by the AWS overlay. |
+| PostgreSQL migration and PostgreSQL/Redis/Kafka integration | **NOT VERIFIED** | Requires service-backed CI or staging execution; local Docker daemon is unavailable. |
+| Image build, startup, and vulnerability/secret scans on this head | **NOT VERIFIED** | Must pass on GitHub after the branch update. |
+| Staging smoke test, live health, and alert delivery | **NOT VERIFIED** | Requires configured staging services and endpoints. |
+| Reconciliation quality sign-off | **NOT VERIFIED** | Finance/data owners must approve representative ground truth and the scorecard. |
+| Production-shaped load and recovery evidence | **NOT VERIFIED** | Run the load/stress/soak harness and restore drills; record measured RPO/RTO. |
+| Secret store and credential rotation | **NOT VERIFIED** | Configure an approved store, assign owners, and rotate exposed credentials. |
 
 ### Release gates still open
 
-1. Resolve the GitHub Actions run block and obtain green CI, security, image,
-   PostgreSQL, Redis, Kafka, and restore-drill checks on the updated branch.
+1. Obtain green CI, secret/dependency/image scans, PostgreSQL, Redis, Kafka, and
+   restore-drill checks on the updated branch.
 2. Have finance/data owners approve representative ground truth, run the database
    certification command, and confirm precision and recall are `1.0` with zero
    false positives and false negatives.
-3. Run and preserve representative load, stress, spike, and soak results against
+3. Complete staging deployment and smoke tests; verify live health, alert
+   delivery, and the deployed image revision.
+4. Run and preserve representative load, stress, spike, and soak results against
    a production-shaped staging environment using owner-approved thresholds.
-4. Exercise production backup, WAL/PITR, and recovery; record measured RPO/RTO
+5. Exercise production backup, WAL/PITR, and recovery; record measured RPO/RTO
    and complete the documented disaster-recovery drills.
-5. Configure the approved production secret store, rotate credentials shared
-   outside it, and record a named rotation owner and cadence.
-6. Complete staging smoke tests, verify live health and alert delivery, and get
-   engineering, security, and finance/data-owner sign-off.
+6. Configure the approved production secret store, assign rotation owners, and
+   rotate credentials shared outside it.
+7. Obtain engineering, security, and finance/data-owner sign-off.
 
-These local checks are engineering evidence only. **Production certification
-remains `NOT CERTIFIED` until every release gate has passing evidence and the
-named owners approve it.**
+These local checks are engineering evidence only. **Production status remains
+`NOT VERIFIED` until every release gate has passing evidence and named owners
+approve it.**
 
 ## Archived assessment — 2026-09-17 (superseded)
 >

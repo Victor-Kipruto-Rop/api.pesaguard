@@ -75,15 +75,15 @@ At minimum, validate syntax and imports, focused unit behavior, cross-tenant iso
 
 `.github/workflows/release.yml` is the release path for `staging` and `main`:
 
-1. Verify Python compilation, apply Alembic migrations to a disposable PostgreSQL service, and run the test suite.
+1. Verify Python compilation and fatal/undefined-name lint, apply Alembic migrations to a disposable PostgreSQL service, and run the test suite.
 2. Build and publish the backend image to GHCR with both the commit tag and immutable digest.
 3. Scan the published digest with Trivy.
-4. On `staging`, call the staging deployment hook and require `status: "ok"` from `STAGING_HEALTH_URL`.
-5. On `main`, pause at the protected GitHub `production` environment, then call the production hook and require `status: "ok"` from `PRODUCTION_HEALTH_URL`.
+4. Pushes to `staging` and `main` deploy the immutable image digest to staging. The Render deploy hook receives the digest in the URL-encoded `imgURL` parameter. The workflow requires `status: "ok"` and the source commit in the health response's `release` field.
+5. Production promotion runs only from a manual `workflow_dispatch` on `main` with `promote_production=true`, after staging succeeds. Configure required reviewers on the GitHub `production` environment. Production receives the same scanned digest and must report healthy status and the expected commit revision.
 
 Configure these secrets in the GitHub environments:
 
 - `staging`: `RENDER_STAGING_DEPLOY_HOOK`, `STAGING_HEALTH_URL`
 - `production`: `RENDER_PRODUCTION_DEPLOY_HOOK`, `PRODUCTION_HEALTH_URL`
 
-The deployment target must consume the image reference sent in the hook payload, including its digest. A hook that ignores the image reference is not an immutable promotion and must be corrected before production use. Production environment reviewers provide the approval gate; rollback follows [ROLLBACK.md](ROLLBACK.md).
+The deployment target must consume the digest sent as `imgURL`. A hook that ignores it is not an immutable promotion and must be corrected before production use. Configure required reviewers on the GitHub `production` environment; naming an environment alone does not enforce approval. A health failure blocks workflow completion but does not automatically roll back the platform deployment; follow [ROLLBACK.md](ROLLBACK.md). This workflow does not authorize deployment or enable live payments by itself.

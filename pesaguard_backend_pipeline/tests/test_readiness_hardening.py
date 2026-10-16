@@ -230,6 +230,21 @@ def test_webhook_health_returns_ok_when_services_available(webhook_client, monke
     assert "status" in response.json
 
 
+def test_webhook_liveness_does_not_check_dependencies(webhook_client, monkeypatch):
+    import app as webhook_app
+
+    monkeypatch.setattr(
+        webhook_app,
+        "build_health_payload",
+        lambda: pytest.fail("liveness must not call dependency checks"),
+    )
+
+    response = webhook_client.get("/livez")
+
+    assert response.status_code == 200
+    assert response.json == {"status": "alive"}
+
+
 def test_dashboard_health_returns_ok_when_services_available(dashboard_client, monkeypatch):
     client, _ = dashboard_client
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

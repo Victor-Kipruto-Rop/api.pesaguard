@@ -2,6 +2,8 @@
 
 ## Recovery objectives
 
+- These are service targets, not measured capabilities. Certification requires a
+  timed restore/failover exercise against the production topology.
 - **RPO:** near-zero for committed financial transactions. Every accepted webhook must be present in PostgreSQL and its transaction outbox before a successful response.
 - **RTO:** less than 15 minutes for restoration of the database and gateway processing path.
 

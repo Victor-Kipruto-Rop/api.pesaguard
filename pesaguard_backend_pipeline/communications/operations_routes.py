@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request
 
 from .cost import cost_by_channel, cost_summary, wallet_health
+from .core.state_machine import InvalidNotificationTransition
 from .flags import snapshot as flags_snapshot
 from .incidents import InvalidIncidentTransition, incident_payload, transition_incident
 from .models import (

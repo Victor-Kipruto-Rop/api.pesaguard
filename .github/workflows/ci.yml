@@ -58,13 +58,28 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q pesaguard_backend_pipeline
 
+      - name: Check fatal lint errors and undefined names
+        run: ruff check --select E9,F821 .
+
+      - name: Validate Docker Compose variants
+        shell: bash
+        run: |
+          export PESAGUARD_COMPOSE_ENV_FILE="$GITHUB_WORKSPACE/.env.example"
+          docker compose --env-file .env.example -f infra/docker/docker-compose.yml config --quiet
+          docker compose --env-file .env.example -f infra/docker/docker-compose.full.yml config --quiet
+          PESAGUARD_COMPOSE_ENV_FILE="$GITHUB_WORKSPACE/.env.staging.example" docker compose \
+            --env-file .env.staging.example -f infra/docker/docker-compose.staging.yml config --quiet
+          API_SERVER_NAME=api.example.invalid docker compose --env-file .env.example \
+            -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.aws.yml config --quiet
+          API_SERVER_NAME=api.example.invalid CLOUDFLARE_TUNNEL_TOKEN=ci-only docker compose --env-file .env.example \
+            -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tunnel.yml config --quiet
+
       - name: Run test suite
         env:
           PYTHONPATH: .
           DATABASE_URL: postgresql://pesaguard:pesaguard@localhost:5432/pesaguard_test
           REDIS_URL: redis://localhost:6379/0
           DARAJA_SHARED_SECRET: test_ci_secret_key_12345
-          PESAGUARD_ALLOW_UNRESTRICTED_WEBHOOK_SOURCE: 1
           # Application startup rejects JWT secrets shorter than 32 bytes.
           JWT_SECRET_KEY: test_ci_jwt_secret_key_12345_min32bytes
         run: |

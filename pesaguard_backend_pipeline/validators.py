@@ -150,7 +150,7 @@ def _validate_stk_push_callback(stk: Dict[str, Any]) -> Tuple[bool, str]:
         return False, "B2C callback ResultCode must be an integer"
 
     if numeric_result_code != 0:
-        return False, f"B2C payment failed with ResultCode={result_code}: {result.get('ResultDesc')}"
+        return False, f"STK Push payment failed with ResultCode={result_code}: {stk.get('ResultDesc')}"
 
     callback_metadata = stk.get("CallbackMetadata")
     meta_items = callback_metadata.get("Item") if isinstance(callback_metadata, dict) else None

@@ -91,7 +91,7 @@ jobs:
 
       - name: Verify broker-derived Kafka lag
         env:
-          PESAGUARD_LIVE_E2E: "1"
+          PESAGUARD_RUN_KAFKA_INTEGRATION: "1"
           PESAGUARD_LIVE_KAFKA_BOOTSTRAP: localhost:9092
           PYTHON_DOTENV_DISABLED: "1"
           PYTHONPATH: .

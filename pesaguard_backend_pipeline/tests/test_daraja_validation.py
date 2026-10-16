@@ -1,5 +1,4 @@
 import pytest
-
 from event_store import _money
 from validators import extract_canonical_event, validate_daraja_payload
 
@@ -32,6 +31,16 @@ def test_malformed_nested_callbacks_return_validation_errors_not_exceptions():
         is_valid, error = validate_daraja_payload(payload)
         assert not is_valid
         assert error
+
+
+def test_failed_stk_callback_uses_its_own_result_description():
+    is_valid, error = validate_daraja_payload(
+        {"Body": {"stkCallback": {"ResultCode": 1, "ResultDesc": "cancelled"}}}
+    )
+
+    assert not is_valid
+    assert "STK Push payment failed" in error
+    assert "cancelled" in error
 
 
 def test_flat_callback_rejects_nonfinite_and_subcent_amounts():

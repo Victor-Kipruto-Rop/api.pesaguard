@@ -4985,6 +4985,32 @@
         }
       }
     },
+    "/livez": {
+      "get": {
+        "operationId": "liveness",
+        "tags": [
+          "Service health"
+        ],
+        "summary": "Liveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process is alive; dependency status is not checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status"],
+                  "properties": {
+                    "status": {"type": "string", "enum": ["alive"]}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health",
@@ -4995,7 +5021,21 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "Dependencies and running release revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "service", "release", "checks"],
+                  "properties": {
+                    "status": {"type": "string", "enum": ["ok", "degraded", "failed"]},
+                    "service": {"type": "string", "example": "pesaguard"},
+                    "release": {"type": "string", "description": "Build commit revision, or unknown when not set"},
+                    "checks": {"type": "object", "additionalProperties": {"type": "object"}}
+                  }
+                }
+              }
+            }
           }
         }
       }

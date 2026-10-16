@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import StaticPool
 
 logger = logging.getLogger("pesaguard.health")
+BUILD_REVISION = os.getenv("PESAGUARD_BUILD_REVISION", "unknown")
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -194,6 +195,7 @@ def build_health_payload() -> Dict[str, Any]:
     return {
         "status": overall_status,
         "service": "pesaguard",
+        "release": BUILD_REVISION,
         "checks": {
             "database": db_result["database"],
             "kafka": kafka_result["kafka"],
@@ -211,6 +213,7 @@ def sanitize_health_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": payload.get("status", "unknown"),
         "service": "pesaguard",
+        "release": payload.get("release", "unknown"),
         "checks": {
             name: {"status": check.get("status", "unknown")}
             if isinstance(check, dict)

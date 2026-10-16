@@ -21,7 +21,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ../../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -31,7 +31,7 @@ services:
   alertmanager:
     image: prom/alertmanager:latest
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ../../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
@@ -41,7 +41,7 @@ services:
   grafana:
     image: grafana/grafana-oss:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 
@@ -49,10 +49,10 @@ services:
     image: otel/opentelemetry-collector:latest
     command: ["--config=/etc/otel-collector.yaml"]
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "8888:8888"
-      - "8889:8889"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:8889:8889"
     volumes:
       - ../../monitoring/otel-collector.yaml:/etc/otel-collector.yaml:ro
 
@@ -73,13 +73,19 @@ services:
       - --pandaproxy-addr=PLAINTEXT://0.0.0.0:8082
       - --advertise-pandaproxy-addr=PLAINTEXT://redpanda:8082
     ports:
-      - "19092:19092"
-      - "8082:8082"
-      - "9644:9644"
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:8082:8082"
+      - "127.0.0.1:9644:9644"
     environment:
       <<: *residency-env
     volumes:
       - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   postgres:
     image: postgres:16
@@ -97,15 +103,29 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - wal_archive:/var/lib/postgresql/wal_archive
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   webhook_receiver:
     build:
@@ -113,16 +133,18 @@ services:
       dockerfile: infra/docker/Dockerfile
     command: ["python", "pesaguard_backend_pipeline/app.py"]
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     env_file:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
       PESAGUARD_BIND_HOST: ${PESAGUARD_BIND_HOST_DOCKER:?PESAGUARD_BIND_HOST_DOCKER must be set}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      PORT: "5000"
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
@@ -130,18 +152,26 @@ services:
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
     depends_on:
-      - redpanda
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   reconciliation_job:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile
     command: ["python", "pesaguard_backend_pipeline/reconciliation_job.py"]
+    healthcheck:
+      disable: true
     env_file:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
@@ -150,8 +180,12 @@ services:
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
     depends_on:
-      - redpanda
-      - postgres
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   dashboard_api:
     build:
@@ -159,12 +193,13 @@ services:
       dockerfile: infra/docker/Dockerfile
     command: ["uvicorn", "pesaguard_backend_pipeline.fastapi_app:app", "--host", "0.0.0.0", "--port", "5001"]
     ports:
-      - "5001:5001"
+      - "127.0.0.1:5001:5001"
     env_file:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
@@ -173,13 +208,20 @@ services:
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
 
   rq_worker:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile
     command: ["/bin/sh", "pesaguard_backend_pipeline/worker_entrypoint.sh"]
+    healthcheck:
+      disable: true
     env_file:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
@@ -195,9 +237,12 @@ services:
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
     depends_on:
-      - redis
-      - postgres
-      - redpanda
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
 
   communications_worker:
     build:
@@ -209,6 +254,7 @@ services:
     environment:
       <<: [*residency-env, *observability-env]
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
       PESAGUARD_NOTIFICATION_TOPIC: ${PESAGUARD_NOTIFICATION_TOPIC:-pesaguard.notifications.requested}
       SENTRY_DSN: ${SENTRY_DSN:-}
@@ -218,10 +264,15 @@ services:
       SENTRY_PROFILES_SAMPLE_RATE: ${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-false}
     depends_on:
-      - redpanda
-      - postgres
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:
   wal_archive:
+  redisdata:
   redpanda_data:
