@@ -34,8 +34,12 @@ current remediation changes:
 - Compose configuration checks passed, but the Docker daemon is unavailable.
   Image build, container startup, service integration, and restore drill were
   not run locally.
-- The updated branch head has not run on GitHub yet. Earlier PR checks were
-  blocked before jobs started because GitHub reported an account billing issue.
+- After the branch update, GitHub CI, integration, image, secret, dependency,
+  and communications checks failed within 1–3 seconds with zero steps run. The
+  jobs have no logs (`gh run view --log-failed` reports that the log is missing).
+  This matches the previously reported account billing lock; it is not evidence
+  that repository tests failed. Restore Actions availability and rerun the
+  checks before merge.
 
 ### Remediation delivered
 
