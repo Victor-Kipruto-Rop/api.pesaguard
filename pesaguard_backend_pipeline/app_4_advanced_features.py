@@ -230,8 +230,7 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
         issuer_template = "https://login.microsoftonline.com/{tenant}/v2.0"
         if tenant_hint:
             policy["allowed_issuers"].append(issuer_template.format(tenant=tenant_hint))
-        else:
-            policy["allowed_issuers"].append("https://login.microsoftonline.com/")
+        # Without an explicit trusted tenant, do not add a broad Entra issuer.
         policy["allowed_jwks_hosts"].append("login.microsoftonline.com")
         policy["pin_jwks"] = True
     elif provider_family == "okta":
