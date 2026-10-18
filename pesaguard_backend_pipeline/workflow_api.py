@@ -124,7 +124,8 @@ def create_workflow_blueprint(session_factory):
 
     def _record_workflow_audit(session, *, tenant_id: str, user_id: str, action: str, domain: str, record_id: str, operation: str, version: int) -> None:
         """Persist an append-only audit event in the same transaction as a workflow mutation."""
-        request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Correlation-ID")
+        request_id = (request.headers.get("X-Request-ID") or "").strip()[:128] or None
+        correlation_id = (request.headers.get("X-Correlation-ID") or "").strip()[:128] or None
         audit = ActionAuditRecord(
             tenant_id=tenant_id,
             actor=user_id,
@@ -136,6 +137,7 @@ def create_workflow_blueprint(session_factory):
             resource_type=domain,
             resource_id=record_id,
             request_id=request_id,
+            correlation_id=correlation_id,
             idempotency_key=f"workflow:{record_id}:{operation}:{version}",
             details={"domain": domain, "operation": operation, "status_version": version},
         )
