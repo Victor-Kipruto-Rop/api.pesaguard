@@ -99,6 +99,24 @@ def _tenant_id_from_payload(raw: Dict[str, Any]) -> Optional[str]:
     return _pick(raw, "TenantID", "tenant_id", "tenantId", "Tenant-Id")
 
 
+def _require_tenant_id(
+    raw: Dict[str, Any], result_tenant_id: Optional[str] = None
+) -> str:
+    """Return an explicit tenant identity or fail closed.
+
+    Financial records must never be assigned to a shared unknown tenant:
+    doing so can weaken isolation and make provenance impossible to attribute.
+    Callers should route this error to the ingestion dead-letter/quarantine
+    boundary that has enough trusted context to handle an unscoped event.
+    """
+    tenant_id = (result_tenant_id or _tenant_id_from_payload(raw) or "").strip()
+    if not tenant_id or tenant_id.lower() == "unknown":
+        raise ProvenanceError(
+            "tenant_id is required to process transaction provenance"
+        )
+    return tenant_id
+
+
 def _transaction_id_from_payload(raw: Dict[str, Any]) -> Optional[str]:
     return _pick(raw, "TransID", "TransactionID", "transaction_id")
 
@@ -126,7 +144,7 @@ def _provenance_row_from_quality(
 ) -> Dict[str, Any]:
     provider_id = result.provider_id or _provider_from_payload(raw) or "unknown"
     tx_id = result.transaction_id or _transaction_id_from_payload(raw) or "unknown"
-    tenant_id = result.tenant_id or _tenant_id_from_payload(raw) or "unknown"
+    tenant_id = _require_tenant_id(raw, result.tenant_id)
     schema_version = schema_version or schema_version_from_payload(raw) or DEFAULT_SCHEMA_VERSION
     pipeline_version = pipeline_version or DEFAULT_PIPELINE_VERSION
     normalized_snapshot = _safe_json(_normalize_payload(raw))
@@ -265,10 +283,13 @@ class DataProvenance:
         self.now_fn = now_fn or _iso_now
 
     def evaluate(self, raw: Dict[str, Any]) -> DataQualityResult:
+        # Fail closed before data-quality evaluation: an unscoped event cannot
+        # safely enter a tenant-isolated financial pipeline.
+        tenant_id = _require_tenant_id(raw)
         lineage = self.lineage_builder(
             event_id=str(raw.get("event_id") or _transaction_id_from_payload(raw) or "unknown"),
             transaction_id=_transaction_id_from_payload(raw) or "unknown",
-            tenant_id=_tenant_id_from_payload(raw) or "unknown",
+            tenant_id=tenant_id,
             provider_id=_provider_from_payload(raw),
         )
         return run_data_quality(raw, lineage=lineage)
