@@ -759,25 +759,19 @@
                             "minimum": 0
                           },
                           "created_at": {
-                            "type": [
-                              "string",
-                              "null"
-                            ],
-                            "format": "date-time"
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
                           },
                           "started_at": {
-                            "type": [
-                              "string",
-                              "null"
-                            ],
-                            "format": "date-time"
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
                           },
                           "completed_at": {
-                            "type": [
-                              "string",
-                              "null"
-                            ],
-                            "format": "date-time"
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
                           }
                         }
                       }
