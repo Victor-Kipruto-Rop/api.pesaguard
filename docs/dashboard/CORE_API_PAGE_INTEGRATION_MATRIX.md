@@ -78,7 +78,7 @@ The persisted workflow APIs close the initial CRUD/API gap, but they do not by t
 
 - The scheduler now atomically dispatches due reconciliation schedules into deterministic, tenant-scoped queued run records. A separate reconciliation-run executor must still consume those queued records and invoke the established tenant-scoped matching pipeline before a run can be marked completed.
 - The workflow scheduler now advances enabled schedule timestamps atomically, uses row locks and deterministic run IDs to avoid duplicate occurrences, and generates persisted-data report summaries. Production deployment still must run the scheduler process and monitor its health.
-- Integration of matching-rule definitions with the authoritative reconciliation engine, versioned rule snapshots per run, and dry-run/rollback controls.
+- Matching-rule definitions are now applied by the reconciliation consumer when exactly one applicable tenant-scoped rule is active, with a versioned per-run snapshot. Ambiguous or unavailable rule configuration blocks automatic matching; dry-run/rollback controls and production evaluation remain.
 - Reconciliation quality-gate findings and aggregated batch-import row validation/persistence failures are persisted atomically as tenant-scoped data-quality review records with deterministic IDs and no raw callback/phone/row payloads. Dataset profiling, schema-drift, and freshness producers still need separate integration.
 - An approved, idempotent artifact pipeline for report exports and delivery; current report runs return bounded JSON summaries only.
 - A separate privileged, auditable execution workflow for approved privacy export/deletion requests.
