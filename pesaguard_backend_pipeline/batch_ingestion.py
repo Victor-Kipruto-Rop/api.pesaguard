@@ -166,7 +166,7 @@ def _persist_import_quality_findings(
             actor="batch_import_worker",
             actor_id="batch_import_worker",
             actor_type="system",
-            action="data_quality_finding.created" if is_new else "data_quality_finding.updated",
+            action="configuration.created" if is_new else "configuration.updated",
             category="operations",
             outcome="success",
             resource_type="data_quality_finding",
