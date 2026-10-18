@@ -1,5 +1,8 @@
 name: Dependency and Security Scan
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [ main, staging ]
@@ -50,10 +53,10 @@ jobs:
         run: |
           if [ -f pesaguard_backend_pipeline/requirements-dev.txt ]; then
             pip-audit -r pesaguard_backend_pipeline/requirements-dev.txt --desc
-          elif [ -f requirements.txt ]; then
-            pip-audit -r requirements.txt --desc
           elif [ -f pesaguard_backend_pipeline/requirements.txt ]; then
             pip-audit -r pesaguard_backend_pipeline/requirements.txt --desc
+          elif [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --desc
           else
             pip-audit --desc
           fi
