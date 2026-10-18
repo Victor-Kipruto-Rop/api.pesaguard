@@ -343,7 +343,7 @@ class DataProvenance:
                 "provider_id": quality.provider_id,
                 "quality": quality.to_dict(),
             }
-        schema_compat = assess_schema_compatibility(raw, self.schema_version)
+        schema_compat = assess_schema_compatibility(effective_raw, self.schema_version)
         if schema_compat == "incompatible":
             quarantine_record(
                 session,
@@ -388,6 +388,8 @@ def record_webhook_provenance(
 
     Returns the same decision dict as ``DataProvenance.process`` so callers can
     branch on ``decision`` without constructing a full orchestrator instance.
+    Pass ``trusted_tenant_id`` from authenticated server-side integration
+    configuration; never derive this argument from the untrusted callback body.
     """
     orchestrator = DataProvenance(
         schema_version=schema_version,
