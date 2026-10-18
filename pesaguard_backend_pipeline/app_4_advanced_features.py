@@ -307,24 +307,31 @@ def _validate_provider_trust_policy(tenant_id: Optional[str], policy: Optional[D
         return _validate_saml_provider_policy(provider_policy, metadata)
 
     issuer = str(metadata.get("issuer") or provider_policy.get("issuer") or "").strip()
-    allowed_issuers = {str(item).strip() for item in (provider_policy.get("allowed_issuers") or []) if str(item).strip()}
-    if allowed_issuers and issuer and issuer not in allowed_issuers:
+    allowed_issuers = {
+        str(item).strip() for item in (provider_policy.get("allowed_issuers") or [])
+        if str(item).strip()
+    }
+    # An empty allowlist must not mean "accept any issuer". Require an explicit,
+    # exact issuer binding before registering an external identity provider.
+    if not issuer or not allowed_issuers or issuer not in allowed_issuers:
         return False
 
     jwks_uri = str(metadata.get("jwks_uri") or provider_policy.get("jwks_uri") or "").strip()
-    if jwks_uri:
-        allowed_hosts = {
-            str(item).strip().lower() for item in (provider_policy.get("allowed_jwks_hosts") or []) if str(item).strip()
-        }
-        if allowed_hosts:
-            host = (jwks_uri.split("//", 1)[-1].split("/", 1)[0]).split(":", 1)[0].lower()
-            if host not in allowed_hosts:
-                return False
-
+    allowed_hosts = {
+        str(item).strip().lower() for item in (provider_policy.get("allowed_jwks_hosts") or [])
+        if str(item).strip()
+    }
     if provider_policy.get("pin_jwks"):
         expected_jwks = str(provider_policy.get("jwks_uri") or "").strip()
-        if expected_jwks and jwks_uri and jwks_uri.lower() != expected_jwks.lower():
+        if not expected_jwks or not jwks_uri or jwks_uri.lower() != expected_jwks.lower():
             return False
+    if not jwks_uri or not allowed_hosts:
+        return False
+    parsed_jwks = urlparse(jwks_uri)
+    if parsed_jwks.scheme != "https" or not parsed_jwks.hostname:
+        return False
+    if parsed_jwks.hostname.lower() not in allowed_hosts:
+        return False
 
     if provider_policy.get("require_verified_email") and metadata.get("email_verified") is False:
         return False
