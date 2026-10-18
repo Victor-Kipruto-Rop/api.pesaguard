@@ -4028,8 +4028,7 @@ def external_idp_policy_route():
         policy.update(mutable_policy)
         policy["review_required"] = bool(policy.get("review_required") or requested_review)
 
-    if bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip():
-        return _api_error("policy_denied", "The tenant external IdP policy requires admin approval before activation.", 403)
+    pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
     if policy.get("provider_type", "oidc").lower() == "saml":
         if not _validate_saml_provider_policy(policy):
@@ -4041,7 +4040,14 @@ def external_idp_policy_route():
         logger.exception("Failed to persist SSO policy for tenant %s", tenant_id)
         return _api_error("internal_server_error", "The SSO policy could not be saved.", 500)
 
-    return _api_success({"policy": policy, "tenant_id": tenant_id}, 200)
+    if pending_review:
+        return _api_success({
+            "policy": policy,
+            "tenant_id": tenant_id,
+            "activation_status": "pending_review",
+        }, 202)
+
+    return _api_success({"policy": policy, "tenant_id": tenant_id, "activation_status": "active"}, 200)
 
 
 @_idempotent_route("/auth/sso/policy/review", methods=["POST"])
