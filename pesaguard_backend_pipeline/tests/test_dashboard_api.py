@@ -542,3 +542,26 @@ def test_root_get_and_head_health_probes_bypass_api_rate_limiter(dashboard_app, 
     assert get_response.status_code not in {429, 503}
     assert head_response.status_code not in {429, 503}
     assert calls == []
+
+
+def test_dashboard_returns_503_not_429_when_distributed_limiter_is_unavailable(
+    dashboard_app, dashboard_auth_token, monkeypatch
+):
+    client, app_module = dashboard_app
+    monkeypatch.setattr(
+        app_module.api_rate_limiter,
+        "is_allowed",
+        lambda *_args, **_kwargs: (
+            False,
+            {"unavailable": True, "retry_after": 1, "limit": 60, "remaining": 0},
+        ),
+    )
+
+    response = client.get(
+        "/discrepancies",
+        headers={"Authorization": f"Bearer {dashboard_auth_token}"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "rate_limiter_unavailable"
+    assert response.headers["Retry-After"] == "1"
