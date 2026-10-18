@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from action_audit import Base as AuditBase
-from models import Base, Transaction
+from models import Base, ProcessedTransaction, Transaction
 from workflow_models import TenantWorkflowRecord
 from workflow_scheduler import process_queued_reconciliation_runs, run_due_workflows
 
@@ -166,4 +166,94 @@ def test_queued_reconciliation_run_executes_and_completes_when_no_transactions_a
         assert run.status == "completed"
         assert run.payload["execution_status"] == "completed"
         assert run.payload["progress"]["pending_remaining"] == 0
+    engine.dispose()
+
+
+def test_queued_run_processes_only_pending_transactions_for_its_tenant(tmp_path, monkeypatch):
+    import reconciliation_job
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'pending-run.db'}")
+    Base.metadata.create_all(engine)
+    AuditBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    now = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+    captured = {}
+
+    with factory() as session:
+        session.add(Transaction(
+            id="txn-run-a",
+            trans_id="MPESA-RUN-A",
+            tenant_id="tenant-a",
+            provider_account_id="account-a",
+            provider="mpesa",
+            idempotency_key="transid:MPESA-RUN-A",
+            provider_transaction_id="MPESA-RUN-A",
+            external_reference="LEDGER-RUN-A",
+            trans_amount="10.00",
+            currency="KES",
+            msisdn="254700000001",
+            business_short_code="123456",
+            trans_time="20261018120000",
+            raw_payload={"TransID": "MPESA-RUN-A"},
+            status="RECEIVED",
+            lifecycle_stage="STORED",
+            version=1,
+            created_at=now - timedelta(minutes=10),
+        ))
+        session.add(ProcessedTransaction(
+            id="pt-run-a",
+            daraja_trans_id="MPESA-RUN-A",
+            tenant_id="tenant-a",
+            provider_account_id="account-a",
+            status="stored",
+            reconciliation_status="pending",
+            received_at=now - timedelta(minutes=10),
+        ))
+        session.add(TenantWorkflowRecord(
+            id="run-pending-a",
+            tenant_id="tenant-a",
+            domain="reconciliation_run",
+            status="queued",
+            title="Pending transaction sweep",
+            description=None,
+            payload={"execution_status": "queued_for_reconciliation_worker", "max_transactions": 100},
+            created_by="workflow_scheduler",
+            updated_by="workflow_scheduler",
+            created_at=now - timedelta(minutes=1),
+            updated_at=now - timedelta(minutes=1),
+        ))
+        session.commit()
+
+    monkeypatch.setattr(reconciliation_job, "AuditSession", factory)
+
+    class FakeRegistry:
+        def get_connector(self, tenant_id):
+            assert tenant_id == "tenant-a"
+            return object()
+
+    def fake_process(event, consumer, producer, connector_registry, reconciliation_run_id=None):
+        captured["event"] = event
+        captured["run_id"] = reconciliation_run_id
+        with factory() as session:
+            record = session.query(ProcessedTransaction).filter_by(
+                tenant_id="tenant-a", daraja_trans_id="MPESA-RUN-A"
+            ).one()
+            record.reconciliation_status = "completed"
+            record.reconciliation_completed_at = now
+            session.commit()
+        return True
+
+    monkeypatch.setattr(reconciliation_job, "ConnectorRegistry", FakeRegistry)
+    monkeypatch.setattr(reconciliation_job, "_process_message_unbounded", fake_process)
+
+    stats = process_queued_reconciliation_runs(factory, now=now)
+    assert stats["claimed"] == 1
+    assert stats["completed"] == 1
+    assert stats["transactions_attempted"] == 1
+    assert captured["run_id"] == "run-pending-a"
+    assert captured["event"]["tenant_id"] == "tenant-a"
+    with factory() as session:
+        run = session.get(TenantWorkflowRecord, "run-pending-a")
+        assert run.status == "completed"
+        assert run.payload["progress"]["transactions_attempted"] == 1
     engine.dispose()
