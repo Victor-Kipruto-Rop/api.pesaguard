@@ -38,7 +38,7 @@ Every record contains server-assigned `id`, `tenant_id`, `domain`, `status`, `cr
 
 - Apply Alembic revision `20261018_tenant_workflows` (`pesaguard_backend_pipeline/alembic/versions/20261018_tenant_workflow_records.py`) through the approved migration runner before deploying this code. The SQL file under `sql/migrations/` is a reference equivalent. Do not use `Base.metadata.create_all()` as a production migration strategy.
 - Run the focused workflow tests and the full backend suite; validate tenant-isolation and permission behavior against PostgreSQL in staging.
-- The workflow scheduler is deployed in the production Compose stack; it dispatches due reconciliation requests and runs scheduled report summaries. A separate reconciliation-run executor and report-delivery/artifact pipeline are still required.
+- The workflow scheduler is deployed in the production Compose stack; it dispatches due schedules and executes queued reconciliation requests in bounded batches through the established tenant-scoped consumer. A report-delivery/artifact pipeline remains required.
 - Report-run execution currently produces persisted-data summary JSON, not a downloadable artifact.
 - Matching rules are consumed by the reconciliation pipeline when exactly one applicable tenant rule is active. Ambiguous or unavailable rule configuration blocks automatic matching; operator dry-run/rollback and full production evaluation remain release gates.
 - Settlement/refund/reversal endpoints are review-only and cannot move funds.
