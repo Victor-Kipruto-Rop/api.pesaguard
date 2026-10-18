@@ -494,7 +494,7 @@ def _process_message(event: Dict[str, Any], consumer: Any, producer: Any, connec
         return _process_message_unbounded(event, consumer, producer, connector_registry)
 
 
-def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: Any, connector_registry: Any) -> bool:
+def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: Any, connector_registry: Any, reconciliation_run_id: Optional[str] = None) -> bool:
     """Process a single reconciliation event for a transaction payload."""
     trans_id = str(event.get("TransID") or event.get("trans_id") or "unknown").strip()
     tenant_id = str(event.get("tenant_id") or event.get("TenantID") or DEFAULT_TENANT_ID)
@@ -581,6 +581,8 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
                 "mode": "blocked",
                 "reason": matching_policy.get("error"),
             }
+        if reconciliation_run_id:
+            phase3_evidence["reconciliation_run_id"] = str(reconciliation_run_id)[:64]
         phase3_result["evidence"] = phase3_evidence
 
         # Reversal lifecycle validation is a review-only gate. It reads only
