@@ -12,6 +12,8 @@ import redis
 from flask import Flask, Response, abort, jsonify, request, g
 from werkzeug.exceptions import HTTPException
 
+from environment import runtime_environment
+
 from observability import build_traceparent, init_opentelemetry, init_sentry, new_span_id, new_trace_id, trace_span
 from otel_tracing import extract_trace_context
 
