@@ -157,7 +157,6 @@ def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
         integrations = (
             (("opentelemetry.instrumentation.sqlalchemy", "SQLAlchemyInstrumentor"), engine),
             (("opentelemetry.instrumentation.redis", "RedisInstrumentor"), None),
-            (("opentelemetry.instrumentation.kafka", "KafkaInstrumentor"), None),
             (("opentelemetry.instrumentation.requests", "RequestsInstrumentor"), None),
             (("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor"), None),
         )
