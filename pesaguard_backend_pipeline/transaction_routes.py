@@ -224,6 +224,12 @@ def create_transaction_blueprint(
         if not separator or sort_field not in sort_columns or sort_direction not in {"asc", "desc"}:
             return jsonify({"error": "invalid_sort", "message": "sort must use an allowed field and asc or desc direction."}), 400
 
+        status_filter = request.args.get("status", "").strip()
+        allowed_statuses = {"RECEIVED", "VALIDATED", "PROCESSING", "RECONCILING", "RECONCILED", "FAILED", "REJECTED"}
+        requested_statuses = [item.strip().upper() for item in status_filter.split(",") if item.strip()]
+        if len(status_filter) > 200 or any(item not in allowed_statuses for item in requested_statuses):
+            return jsonify({"error": "invalid_status_filter", "message": "status must contain supported transaction lifecycle states."}), 400
+
         filter_text = request.args.get("filter", "").strip()
         if len(filter_text) > 200:
             return jsonify({"error": "invalid_filter", "message": "filter must not exceed 200 characters."}), 400
@@ -231,6 +237,8 @@ def create_transaction_blueprint(
         session = session_factory()
         try:
             query = session.query(Transaction).filter(Transaction.tenant_id == tenant_id)
+            if requested_statuses:
+                query = query.filter(Transaction.status.in_(requested_statuses))
             if filter_text:
                 escaped = filter_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                 pattern = f"%{escaped}%"
