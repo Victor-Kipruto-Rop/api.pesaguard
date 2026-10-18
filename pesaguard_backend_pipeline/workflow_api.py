@@ -46,6 +46,56 @@ VALID_STATUSES = {
 TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 4000
 
+ALLOWED_TRANSITIONS = {
+    "reconciliation_run": {
+        "draft": {"requested", "cancelled"}, "requested": {"queued", "running", "failed", "cancelled"},
+        "queued": {"running", "failed", "cancelled"}, "running": {"completed", "failed"},
+        "completed": set(), "failed": {"requested"}, "cancelled": set(),
+    },
+    "matching_rule": {"draft": {"open", "disabled"}, "open": {"disabled"}, "disabled": {"open"}},
+    "data_quality_finding": {
+        "open": {"triage", "in_progress", "resolved", "closed"},
+        "triage": {"in_progress", "resolved", "closed"},
+        "in_progress": {"triage", "needs_information", "resolved", "closed"},
+        "needs_information": {"in_progress", "closed"}, "resolved": {"closed"}, "closed": set(),
+    },
+    "scheduled_reconciliation": {
+        "draft": {"scheduled", "disabled", "cancelled"}, "scheduled": {"disabled", "cancelled"},
+        "disabled": {"scheduled", "cancelled"}, "cancelled": set(),
+    },
+    "settlement_review": {
+        "open": {"pending_review", "closed"}, "pending_review": {"approved", "rejected"},
+        "approved": {"resolved", "closed"}, "rejected": {"closed"}, "resolved": {"closed"}, "closed": set(),
+    },
+    "refund_reversal_request": {
+        "requested": {"pending_review", "closed"}, "pending_review": {"approved", "rejected"},
+        "approved": {"resolved", "closed"}, "rejected": {"closed"}, "resolved": {"closed"}, "closed": set(),
+    },
+    "report_definition": {
+        "draft": {"open", "scheduled", "disabled"}, "open": {"scheduled", "disabled"},
+        "scheduled": {"open", "disabled"}, "disabled": {"open"}, 
+    },
+    "report_run": {
+        "requested": {"queued", "running", "completed", "failed", "cancelled"},
+        "queued": {"running", "failed", "cancelled"}, "running": {"completed", "failed"},
+        "completed": set(), "failed": {"requested"}, "cancelled": set(),
+    },
+    "fraud_investigation": {
+        "open": {"triage", "in_progress", "closed"}, "triage": {"in_progress", "needs_information", "resolved", "closed"},
+        "in_progress": {"needs_information", "resolved", "closed"},
+        "needs_information": {"in_progress", "closed"}, "resolved": {"closed"}, "closed": set(),
+    },
+    "privacy_request": {
+        "requested": {"pending_review"}, "pending_review": {"approved", "rejected"},
+        "approved": set(), "rejected": set(), "completed": set(), "failed": set(),
+    },
+    "support_case": {
+        "open": {"triage", "in_progress", "closed"}, "triage": {"in_progress", "needs_information", "resolved", "closed"},
+        "in_progress": {"needs_information", "resolved", "closed"},
+        "needs_information": {"in_progress", "closed"}, "resolved": {"closed"}, "closed": set(),
+    },
+}
+
 
 def create_workflow_blueprint(session_factory):
     bp = Blueprint("tenant_workflow_api", __name__)
@@ -269,6 +319,9 @@ def create_workflow_blueprint(session_factory):
             if "payload" in body:
                 record.payload = valid["payload"]
             if valid["status"] is not None and valid["status"] != record.status:
+                allowed = ALLOWED_TRANSITIONS[domain].get(record.status, set())
+                if valid["status"] not in allowed:
+                    return jsonify({"error": "invalid_status_transition", "message": f"Cannot transition {domain} from {record.status} to {valid['status']}."}), 409
                 if domain in {"settlement_review", "refund_reversal_request", "privacy_request"}:
                     current_user = get_current_user()
                     roles = {str(role).lower() for role in (getattr(current_user, "roles", []) or [])}
