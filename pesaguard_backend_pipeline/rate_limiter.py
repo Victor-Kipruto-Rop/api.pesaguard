@@ -21,6 +21,24 @@ from security_helpers import get_client_ip
 logger = logging.getLogger("pesaguard.rate_limiter")
 
 _BUCKET_IDLE_TTL_SECONDS = 60
+# Bound unique identifiers retained per client/endpoint to prevent memory growth
+# from attacker-controlled high-cardinality login attempts.
+_MAX_DISTINCT_VALUES_PER_BUCKET = 1000
+
+_REDIS_DISTINCT_VALUES_LUA = """
+local key = KEYS[1]
+local value = ARGV[1]
+local ttl = tonumber(ARGV[2])
+local max_values = tonumber(ARGV[3])
+redis.call('SADD', key, value)
+local count = redis.call('SCARD', key)
+if count > max_values then
+    redis.call('SPOP', key, count - max_values)
+    count = redis.call('SCARD', key)
+end
+redis.call('EXPIRE', key, ttl)
+return count
+"""
 
 # Redis connection environment defaults
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -149,6 +167,10 @@ class TokenBucketRateLimiter:
             else:
                 values = current[0]
             values.add(value)
+            if len(values) > _MAX_DISTINCT_VALUES_PER_BUCKET:
+                # Set order is intentionally irrelevant: this is a bounded abuse
+                # signal, not a durable list of all identifiers.
+                values.pop()
             self.distinct_values[key] = (values, now, window_seconds)
             return len(values)
 
@@ -244,12 +266,18 @@ class RedisRateLimiter:
         key = f"pesaguard:ratelimit:distinct:{client_id}:{endpoint}"
         client = self._get_client()
         try:
-            pipe = client.pipeline(transaction=True)
-            pipe.sadd(key, value)
-            pipe.expire(key, window_seconds)
-            pipe.scard(key)
-            result = pipe.execute()
-            return int(result[2])
+            # Lua keeps add/cap/TTL atomic across workers and prevents unbounded
+            # set growth under high-cardinality attacker-controlled input.
+            return int(
+                client.eval(
+                    _REDIS_DISTINCT_VALUES_LUA,
+                    1,
+                    key,
+                    value,
+                    window_seconds,
+                    _MAX_DISTINCT_VALUES_PER_BUCKET,
+                )
+            )
         except Exception:
             self._invalidate_client(client)
             raise
