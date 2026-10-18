@@ -117,7 +117,10 @@ class WebhookManager:
             retry_attempts=min(retry_attempts, 5),
             timeout_seconds=min(timeout_seconds, 30),
             active=True,
-            signing_secret=signing_secret,
+            # Store ciphertext at rest; return the plaintext to the tenant only
+            # in this registration response. Legacy plaintext values remain
+            # readable until explicitly migrated/rotated.
+            signing_secret=encrypt_value(signing_secret),
         )
         self.session.add(webhook)
         self.session.commit()
@@ -253,7 +256,11 @@ class WebhookManager:
 
     def _generate_signature(self, webhook: WebhookConfig, payload: Dict[str, Any], timestamp: str) -> str:
         """Generate HMAC SHA-256 signature using the webhook signing secret."""
-        secret = getattr(webhook, "signing_secret", None) or webhook.id
+        stored_secret = getattr(webhook, "signing_secret", None) or webhook.id
+        secret_value = decrypt_value(stored_secret) if stored_secret.startswith("enc:v1:") else stored_secret
+        if not isinstance(secret_value, str) or not secret_value:
+            raise ValueError("Webhook signing secret is unavailable")
+        secret = secret_value
         raw_body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         signed_payload = f"{timestamp}.{raw_body}".encode("utf-8")
 
