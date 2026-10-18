@@ -181,3 +181,94 @@ def test_high_risk_match_is_persisted_and_published_as_a_discrepancy(tmp_path, m
     assert alerts[0][0]["severity"] == "critical"
     assert alerts[0][0]["anomalies"] == ["amount_threshold"]
     engine.dispose()
+
+
+def test_active_tenant_matching_rule_is_applied_and_version_snapshotted(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    import reconciliation_job
+    from workflow_models import TenantWorkflowRecord
+    from action_audit import Base as AuditBase
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'matching-rule.db'}")
+    Base.metadata.create_all(engine)
+    AuditBase.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(reconciliation_job, "AuditSession", Session)
+
+    with Session() as session:
+        session.add(TenantWorkflowRecord(
+            id="rule-tenant-a",
+            tenant_id="tenant-a",
+            domain="matching_rule",
+            status="open",
+            title="Strict M-Pesa reference",
+            description=None,
+            payload={
+                "currency": "KES",
+                "provider_account_id": "123456",
+                "amount_tolerance": 0.25,
+                "time_window_minutes": 10,
+            },
+            created_by="admin-a",
+            updated_by="admin-a",
+            version=3,
+        ))
+        session.add(TenantWorkflowRecord(
+            id="rule-tenant-b",
+            tenant_id="tenant-b",
+            domain="matching_rule",
+            status="open",
+            title="Other tenant rule",
+            description=None,
+            payload={"amount_tolerance": 5, "time_window_minutes": 60},
+            created_by="admin-b",
+            updated_by="admin-b",
+        ))
+        session.commit()
+
+    captured = {}
+    monkeypatch.setattr(reconciliation_job.settings_store, "get", lambda tenant_id: {})
+    monkeypatch.setattr(reconciliation_job, "check_for_anomalies", lambda event, seen, settings: [])
+    monkeypatch.setattr(reconciliation_job, "evaluate_smart_reconciliation_shadow", lambda *args, **kwargs: None)
+
+    class Connector:
+        def fetch_candidate_records(self, **kwargs):
+            captured["connector"] = kwargs
+            return []
+
+    class Registry:
+        def get_connector(self, tenant_id):
+            assert tenant_id == "tenant-a"
+            return Connector()
+
+    class FakeEngine:
+        def __init__(self, *, tolerance_percent, window_seconds):
+            captured["engine"] = {"tolerance_percent": tolerance_percent, "window_seconds": window_seconds}
+
+        def reconcile(self, event, records, *, seen_transaction_ids=None):
+            captured["records"] = records
+            return {
+                "status": "MATCHED",
+                "evidence": {"matching_rules": ["reference_exact"]},
+                "processing_latency_ms": 1,
+            }
+
+    monkeypatch.setattr(reconciliation_job, "ReconciliationEngine", FakeEngine)
+    monkeypatch.setattr(
+        reconciliation_job,
+        "_persist_atomically",
+        lambda event, evaluation, trans_id, tenant_id: captured.update(evaluation=evaluation) or ProcessResult.STORED,
+    )
+    monkeypatch.setattr(reconciliation_job, "_publish_downstream", lambda *args: None)
+
+    event = {**_event(), "tenant_id": "tenant-a", "Currency": "KES"}
+    assert reconciliation_job._process_message_unbounded(event, None, None, Registry()) is True
+    assert captured["engine"]["tolerance_percent"] == Decimal("0.25")
+    assert captured["engine"]["window_seconds"] == 600
+    assert captured["connector"]["since_minutes"] == 10
+    assert captured["connector"]["tolerance"] == Decimal("0.25")
+    snapshot = captured["evaluation"]["evidence"]["matching_rule_snapshot"]
+    assert snapshot["rule_id"] == "rule-tenant-a"
+    assert snapshot["version"] == 3
+    engine.dispose()
