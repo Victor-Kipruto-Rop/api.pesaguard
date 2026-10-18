@@ -195,8 +195,14 @@ def create_workflow_blueprint(session_factory):
             try:
                 if report_type == "transactions":
                     count = session.query(func.count(Transaction.id)).filter(Transaction.tenant_id == tenant_id).scalar() or 0
-                    volume = session.query(func.coalesce(func.sum(Transaction.trans_amount), 0)).filter(Transaction.tenant_id == tenant_id).scalar()
-                    result = {"report_type": report_type, "row_count": int(count), "recorded_volume": str(volume or 0), "currency": "KES"}
+                    amounts = session.query(Transaction.currency, func.sum(Transaction.trans_amount)).filter(
+                        Transaction.tenant_id == tenant_id
+                    ).group_by(Transaction.currency).all()
+                    result = {
+                        "report_type": report_type,
+                        "row_count": int(count),
+                        "recorded_amount_by_currency": {str(currency): str(amount or 0) for currency, amount in amounts},
+                    }
                 elif report_type == "discrepancies":
                     count = session.query(func.count(Discrepancy.id)).filter(Discrepancy.tenant_id == tenant_id).scalar() or 0
                     open_count = session.query(func.count(Discrepancy.id)).filter(Discrepancy.tenant_id == tenant_id, Discrepancy.resolved.is_(False)).scalar() or 0
