@@ -36,6 +36,8 @@ services:
       - "9093:9093"
     volumes:
       - ../../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    secrets:
+      - alertmanager_webhook_secret
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
     depends_on:
       - webhook_receiver
@@ -257,3 +259,5 @@ volumes:
 secrets:
   dashboard_metrics_token:
     file: ${PESAGUARD_PROMETHEUS_TOKEN_FILE:?PESAGUARD_PROMETHEUS_TOKEN_FILE must point to a protected token file}
+  alertmanager_webhook_secret:
+    environment: PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET
