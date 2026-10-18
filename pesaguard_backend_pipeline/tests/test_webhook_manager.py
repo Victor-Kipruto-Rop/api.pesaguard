@@ -29,7 +29,7 @@ def test_webhook_delivery_history_retains_owner_tenant(monkeypatch):
     result = manager.trigger_event(
         "tenant-a",
         "payment.reconciled",
-        {"transaction_id": "tx-1"},
+        {"transaction_id": "tx-1", "msisdn": "254700000000"},
     )
 
     assert result["deliveries"][0]["status"] == "success"
@@ -39,6 +39,7 @@ def test_webhook_delivery_history_retains_owner_tenant(monkeypatch):
     delivery = session.query(WebhookDelivery).one()
     assert delivery.tenant_id == "tenant-a"
     assert delivery.response_body == ""
+    assert delivery.payload["msisdn"].startswith("enc:v1:")
     assert len(manager.get_delivery_history(registration["id"], "tenant-a")) == 1
     assert manager.get_delivery_history(registration["id"], "tenant-b") == []
 
