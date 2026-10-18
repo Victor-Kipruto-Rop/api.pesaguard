@@ -69,8 +69,8 @@ def test_root_returns_service_information(control_plane):
     assert response.status_code == 200
     assert response.json() == {
         "service": "PesaGuard API",
-        "status": "ok",
-        "message": "PesaGuard API is running. Use the documented API endpoints for requests.",
+        "status": "running",
+        "message": "The API process is running. Dependency readiness is reported by /health.",
         "health": "/health",
         "liveness": "/livez",
     }

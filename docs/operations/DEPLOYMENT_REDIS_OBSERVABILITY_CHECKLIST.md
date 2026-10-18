@@ -26,7 +26,7 @@ Never paste the values of these variables into logs or support messages.
 - Use `/livez` for liveness; it should not fail solely because a dependency is down.
 - Use `/health` for readiness; it should return a failing status when the database readiness check fails.
 - The container listens on `0.0.0.0:$PORT`. A platform-injected port such as 8000 overrides the image's default. Ensure the service's configured health check and port agree with the actual listener.
-- A `GET /` 404 is not itself a health failure. Do not configure `/` as the health path unless a root route is intentionally provided.
+- `GET /` is informational only and reports `status: running`; it does not prove dependencies are ready. Use `/livez` for liveness and `/health` for dependency readiness. Never use the root response as the deployment readiness gate.
 
 ## Sentry and logs
 

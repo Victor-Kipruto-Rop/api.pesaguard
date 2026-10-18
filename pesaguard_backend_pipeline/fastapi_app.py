@@ -30,8 +30,8 @@ def root() -> Dict[str, str]:
     """Return service information at the public API base URL."""
     return {
         "service": "PesaGuard API",
-        "status": "ok",
-        "message": "PesaGuard API is running. Use the documented API endpoints for requests.",
+        "status": "running",
+        "message": "The API process is running. Dependency readiness is reported by /health.",
         "health": "/health",
         "liveness": "/livez",
     }
