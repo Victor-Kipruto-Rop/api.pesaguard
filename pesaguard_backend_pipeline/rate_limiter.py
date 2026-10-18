@@ -168,9 +168,11 @@ class RedisRateLimiter:
         self._script: Any = None
         self._lock = threading.Lock()
 
-    def _invalidate_client(self) -> None:
+    def _invalidate_client(self, expected_client: Any = None) -> None:
         """Discard a stale connection pool so the next request can reconnect."""
         with self._lock:
+            if expected_client is not None and self._client is not expected_client:
+                return
             client, self._client = self._client, None
             self._script = None
         if client is not None:
@@ -220,7 +222,7 @@ class RedisRateLimiter:
         except Exception:
             # Redis-py pools can retain broken sockets after network timeouts. Drop
             # the cached pool so a later request can recover after Redis returns.
-            self._invalidate_client()
+            self._invalidate_client(client)
             raise
 
         allowed = bool(res[0])
@@ -239,17 +241,26 @@ class RedisRateLimiter:
         """Track distinct values atomically in Redis for distributed detection."""
         key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
         client = self._get_client()
-        pipe = client.pipeline(transaction=True)
-        pipe.sadd(key, value)
-        pipe.expire(key, window_seconds)
-        pipe.scard(key)
-        result = pipe.execute()
-        return int(result[2])
+        try:
+            pipe = client.pipeline(transaction=True)
+            pipe.sadd(key, value)
+            pipe.expire(key, window_seconds)
+            pipe.scard(key)
+            result = pipe.execute()
+            return int(result[2])
+        except Exception:
+            self._invalidate_client(client)
+            raise
 
     def reset(self, client_id: str, endpoint: str) -> None:
         """Delete a distributed token bucket during an authorized account unlock."""
         key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
-        self._get_client().delete(key)
+        client = self._get_client()
+        try:
+            client.delete(key)
+        except Exception:
+            self._invalidate_client(client)
+            raise
 
 
 class RateLimiter:
