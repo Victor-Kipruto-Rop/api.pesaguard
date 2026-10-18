@@ -12,7 +12,7 @@ from environment import required_env
 
 import json
 import hashlib
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import logging
 import os
 import signal
