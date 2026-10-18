@@ -14,6 +14,11 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency install
 
 from .api.dashboard_app import create_app as create_dashboard_app
 from .health import build_health_payload, sanitize_health_payload
+try:
+    # Shared top-level module used by legacy Flask entry points in Docker.
+    from observability import init_opentelemetry
+except ImportError:  # pragma: no cover - package-only import environments
+    from .observability import init_opentelemetry
 
 
 app = FastAPI(
@@ -23,6 +28,10 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+# Instrument the production ASGI entry point, not only the legacy Flask webhook.
+# Export is enabled only when OTEL_EXPORTER_OTLP_ENDPOINT is configured.
+init_opentelemetry(app=app)
 
 
 @app.head("/")

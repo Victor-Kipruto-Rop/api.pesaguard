@@ -18,6 +18,7 @@ from observability import (  # noqa: F401
     instrument_sqlalchemy_engine,
     new_span_id,
     new_trace_id,
+    otel_status,
     parse_traceparent,
     trace_span,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "instrument_sqlalchemy_engine",
     "new_span_id",
     "new_trace_id",
+    "otel_status",
     "parse_traceparent",
     "trace_span",
 ]

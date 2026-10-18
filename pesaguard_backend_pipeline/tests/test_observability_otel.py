@@ -93,3 +93,31 @@ def test_flask_instrumentation_without_exporter_does_not_report_exporter_attache
     assert observability.init_opentelemetry(app=object()) is True
 
     assert observability.otel_exporter_reachable() is False
+
+
+def test_fastapi_instrumentation_is_selected_for_asgi_app(monkeypatch):
+    calls = []
+
+    class FakeFastAPIInstrumentor:
+        def instrument_app(self, app):
+            calls.append(app)
+
+    fake_module = SimpleNamespace(FastAPIInstrumentor=FakeFastAPIInstrumentor)
+    monkeypatch.setattr(
+        observability,
+        "_try_import_first",
+        lambda *names: fake_module if "opentelemetry.instrumentation.fastapi" in names else None,
+    )
+    app = object()
+    assert observability._instrument_application(app) is True
+    assert calls == [app]
+
+
+def test_otel_status_reports_configuration_without_exposing_endpoint(monkeypatch):
+    secret_endpoint = "https://collector.example.invalid/v1/traces?token=do-not-log"
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", secret_endpoint)
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "pesaguard-api")
+    status = observability.otel_status()
+    assert status["endpoint_configured"] is True
+    assert status["service_name"] == "pesaguard-api"
+    assert secret_endpoint not in repr(status)

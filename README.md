@@ -41,6 +41,8 @@ python infra/configure.py compose -- -f infra/docker/docker-compose.yml up -d --
 
 The API exposes liveness at /livez and dependency readiness at /health. In production, PostgreSQL, Redis, Kafka/Redpanda, and configured Daraja credentials are required for a ready instance.
 
+OpenTelemetry tracing setup, collector configuration, Jaeger UI, and production verification are documented in [docs/operations/OPENTELEMETRY.md](docs/operations/OPENTELEMETRY.md).
+
 ## Production release gates
 
 A release must satisfy all of the following:
