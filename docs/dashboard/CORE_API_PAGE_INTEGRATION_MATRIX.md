@@ -15,7 +15,7 @@ This matrix is the source of truth for wiring `app.pesaguard.co.ke` to `api.pesa
 
 | Dashboard capability | Candidate route | Notes |
 |---|---|---|
-| Transactions | `GET /api/v1/transactions/search` | Existing tenant-scoped read endpoint; currently wired in the dashboard. |
+| Transactions | `GET /api/v1/transactions/search` | Tenant-scoped pagination, text search, sorting and validated comma-separated lifecycle-state filtering; tests cover status filters and tenant isolation. |
 | Tenant dashboard overview | `GET /api/v1/dashboard/overview` | Newly implemented tenant-scoped persisted transaction/discrepancy KPIs; tests verify cross-tenant records are excluded. |
 | Transaction detail | `GET /transactions/{transaction_id}` | Tenant-scoped transaction route; validate mounted prefix and identifier semantics. |
 | Transaction status | `GET /transactions/{transaction_id}/status` | Tenant-scoped status route. |
