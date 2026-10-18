@@ -696,12 +696,22 @@ def _resolve_oidc_provider(tenant_id: Optional[str] = None, issuer: Optional[str
         session.close()
 
 
+def _response_tenant_id() -> str:
+    """Return authenticated or server-configured tenant context, never a raw header."""
+    tenant_id = str(getattr(g, "tenant_id", None) or "").strip()
+    if not tenant_id:
+        tenant_id = os.getenv("TENANT_ID", "").strip()
+    if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
+        return ""
+    return tenant_id
+
+
 def _api_success(payload: Any, status_code: int = 200, meta: Optional[Dict[str, Any]] = None):
     body = {
         "status": "success",
         "data": payload,
         "request_id": _request_id_value(),
-        "tenant_id": request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", "default"),
+        "tenant_id": _response_tenant_id(),
     }
     if isinstance(payload, dict):
         for key, value in payload.items():
@@ -717,7 +727,7 @@ def _api_error(code: str, message: str, status_code: int = 400, details: Optiona
         "status": "error",
         "error": {"code": code, "message": message},
         "request_id": _request_id_value(),
-        "tenant_id": request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", "default"),
+        "tenant_id": _response_tenant_id(),
         "ResultCode": 1,
         "ResultDesc": message,
     }
