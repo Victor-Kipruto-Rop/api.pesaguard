@@ -225,7 +225,8 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     }
 
     if provider_family == "microsoft_entra":
-        tenant_hint = str(tenant_id or os.getenv("TENANT_ID") or "").strip()
+        # Only an explicit trusted tenant scope may parameterize an Entra issuer.
+        tenant_hint = str(tenant_id or "").strip()
         issuer_template = "https://login.microsoftonline.com/{tenant}/v2.0"
         if tenant_hint:
             policy["allowed_issuers"].append(issuer_template.format(tenant=tenant_hint))
@@ -3500,9 +3501,12 @@ def revoke_user_access_route():
     """Revoke every active access path belonging to a user."""
     payload = request.json or {}
     user_id = payload.get("user_id")
-    tenant_id = payload.get("tenant_id") or get_current_user().tenant_id
+    current_user = get_current_user()
+    tenant_id = str(current_user.tenant_id)
     if not user_id:
         return _api_error("invalid_request", "user_id is required.", 400)
+    if str(tenant_id) != str(current_user.tenant_id) and "manage:all_tenants" not in current_user.permissions:
+        return _api_error("tenant_access_denied", "You cannot revoke access outside your tenant.", 403)
     AuthRBAC.revoke_user_access(str(user_id), str(tenant_id), reason=payload.get("reason") or "user revocation")
     return _api_success({"status": "user_revoked", "user_id": str(user_id), "tenant_id": str(tenant_id)}, 200)
 
@@ -3886,7 +3890,7 @@ def _provision_external_user_from_claims(tenant_id: str, email: Optional[str], u
 def oidc_provider_registry():
     """Register or list external OIDC providers for a tenant."""
     if request.method == "GET":
-        tenant_id = request.args.get("tenant_id") or get_current_user().tenant_id
+        tenant_id = str(get_current_user().tenant_id)
         session = SessionLocal()
         try:
             providers = session.query(OIDCProvider).filter(OIDCProvider.tenant_id == tenant_id).all()
@@ -3906,7 +3910,9 @@ def oidc_provider_registry():
             session.close()
 
     data = request.get_json(silent=True) or {}
-    tenant_id = data.get("tenant_id") or get_current_user().tenant_id
+    # Provider registrations are scoped to the authenticated principal. Do not
+    # permit a body field to select another tenant.
+    tenant_id = str(get_current_user().tenant_id)
     provider_name = data.get("provider_name") or data.get("name") or "default-oidc"
     issuer = data.get("issuer")
     if not issuer:
