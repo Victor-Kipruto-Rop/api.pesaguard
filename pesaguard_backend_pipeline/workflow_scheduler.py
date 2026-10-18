@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
 from action_audit import ActionAuditRecord, persist_audit_event
@@ -89,7 +89,7 @@ def _schedule_for(record: TenantWorkflowRecord) -> tuple[dict[str, Any], str] | 
 def _report_summary(session, tenant_id: str, report_type: str) -> dict[str, Any]:
     if report_type == "transactions":
         count = session.query(Transaction.id).filter(Transaction.tenant_id == tenant_id).count()
-        amounts = session.query(Transaction.currency, __import__("sqlalchemy").func.sum(Transaction.trans_amount)).filter(
+        amounts = session.query(Transaction.currency, func.sum(Transaction.trans_amount)).filter(
             Transaction.tenant_id == tenant_id
         ).group_by(Transaction.currency).all()
         return {
