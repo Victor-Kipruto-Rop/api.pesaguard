@@ -222,9 +222,12 @@ class RedisRateLimiter:
 class RateLimiter:
     """Backward-compatible wrapper exposing set_limits/is_allowed for app webhook usage."""
 
-    def __init__(self, default_max_per_minute: int = 30, *, fail_closed: bool = False):
+    def __init__(self, default_max_per_minute: int = 30, *, fail_closed: Optional[bool] = None):
         self.max_requests_per_minute = default_max_per_minute
-        self.fail_closed = fail_closed
+        # Authentication and webhook protection must never silently downgrade to
+        # per-process limits in production. Tests/development can explicitly opt in
+        # to the in-memory fallback with fail_closed=False.
+        self.fail_closed = runtime_environment() == "production" if fail_closed is None else fail_closed
         self._memory = TokenBucketRateLimiter(default_max_per_minute=default_max_per_minute)
         self._redis = RedisRateLimiter() if ENABLE_REDIS_RATE_LIMITING else None
 
@@ -233,6 +236,15 @@ class RateLimiter:
         self._memory.set_limits(max_requests_per_minute)
 
     def is_allowed(self, client_id: str, endpoint: str, tokens_required: int = 1) -> Tuple[bool, Dict[str, Any]]:
+        if self.fail_closed and (not ENABLE_REDIS_RATE_LIMITING or self._redis is None):
+            _record_auth_limiter_unavailable()
+            return False, {
+                "remaining": 0,
+                "limit": self.max_requests_per_minute,
+                "reset_in": 1,
+                "retry_after": 1,
+                "unavailable": True,
+            }
         if ENABLE_REDIS_RATE_LIMITING and self._redis:
             try:
                 return self._redis.is_allowed(
@@ -242,8 +254,8 @@ class RateLimiter:
                     tokens_required=tokens_required,
                 )
             except Exception as exc:
-                logger.warning("Redis limiter failed, falling back to memory: %s", exc)
                 if self.fail_closed:
+                    logger.error("Redis rate limiter unavailable; failing closed: %s", exc)
                     _record_auth_limiter_unavailable()
                     return False, {
                         "remaining": 0,
@@ -252,6 +264,7 @@ class RateLimiter:
                         "retry_after": 1,
                         "unavailable": True,
                     }
+                logger.warning("Redis limiter unavailable; using explicitly permitted in-memory fallback: %s", exc)
         return self._memory.is_allowed(client_id, endpoint, tokens_required=tokens_required)
 
     def record_distinct(
