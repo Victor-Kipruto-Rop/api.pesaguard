@@ -219,17 +219,20 @@ def _session_is_active(session_id: Optional[str], user_id: str, tenant_id: str) 
         return True
     except Exception as exc:
         session.rollback()
-        # Keep older test/bootstrap schemas readable while production migrations
-        # add the lifecycle columns used by the primary path above.
-        try:
-            legacy_row = session.execute(
-                text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
-                {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
-            ).first()
-            return bool(legacy_row and legacy_row[0])
-        except Exception:
-            session.rollback()
-            raise AuthenticationUnavailable("Session state is unavailable") from exc
+        # Legacy bootstrap schemas are tolerated only for local development/tests.
+        # Production and staging must fail closed if lifecycle columns or session
+        # state cannot be read; otherwise a migration error could bypass expiry
+        # and idle-timeout enforcement.
+        if runtime_environment() not in {"production", "staging"}:
+            try:
+                legacy_row = session.execute(
+                    text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
+                    {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
+                ).first()
+                return bool(legacy_row and legacy_row[0])
+            except Exception:
+                session.rollback()
+        raise AuthenticationUnavailable("Session state is unavailable") from exc
     finally:
         session.close()
 
