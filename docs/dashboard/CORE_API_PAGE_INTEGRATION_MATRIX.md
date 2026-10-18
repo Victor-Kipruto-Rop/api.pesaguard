@@ -16,6 +16,7 @@ This matrix is the source of truth for wiring `app.pesaguard.co.ke` to `api.pesa
 | Dashboard capability | Candidate route | Notes |
 |---|---|---|
 | Transactions | `GET /api/v1/transactions/search` | Existing tenant-scoped read endpoint; currently wired in the dashboard. |
+| Tenant dashboard overview | `GET /api/v1/dashboard/overview` | Newly implemented tenant-scoped persisted transaction/discrepancy KPIs; tests verify cross-tenant records are excluded. |
 | Transaction detail | `GET /transactions/{transaction_id}` | Tenant-scoped transaction route; validate mounted prefix and identifier semantics. |
 | Transaction status | `GET /transactions/{transaction_id}/status` | Tenant-scoped status route. |
 | Reconciliation history/results | `GET /reconciliation/{transaction_id}` | Existing published route; transaction-level result, not a run collection. |
@@ -59,3 +60,10 @@ The current route audit does not prove the existence of complete CRUD/read APIs 
 - CI typecheck/build/API tests pass.
 - Staging smoke tests verify loading, empty, permission-denied, timeout, and server-error states.
 - No authenticated page uses preview fixtures as a fallback.
+
+
+## Dashboard overview contract
+
+`GET /api/v1/dashboard/overview` requires `read:analytics` and a verified authenticated tenant context. The endpoint aggregates persisted `transactions` and `discrepancies` using the current tenant ID, reports lifecycle counts, recorded transaction amount, open/resolved discrepancy counts, recent 30-day activity, and a generation timestamp. It deliberately does not infer match rates, fraud probabilities, revenue, settlement state, or other metrics not directly supported by persisted source records.
+
+The route test `test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only` seeds records for two tenants and asserts that only the active tenant's data contributes to the response.
