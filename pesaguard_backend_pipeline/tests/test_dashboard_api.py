@@ -520,3 +520,25 @@ def test_locale_lookup_rejects_unknown_or_cross_user_ids(dashboard_app, dashboar
     )
     assert whitespace.status_code == 200
     assert whitespace.get_json()["user_locale"] is None
+
+
+def test_root_get_and_head_health_probes_bypass_api_rate_limiter(dashboard_app, monkeypatch):
+    client, app_module = dashboard_app
+    calls = []
+
+    def unexpected_rate_limit(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("root health probes must not consume API rate-limit buckets")
+
+    monkeypatch.setattr(app_module, "api_rate_limiter", type(
+        "ProbeLimiter",
+        (),
+        {"is_allowed": staticmethod(unexpected_rate_limit)},
+    )())
+
+    get_response = client.get("/")
+    head_response = client.head("/")
+
+    assert get_response.status_code not in {429, 503}
+    assert head_response.status_code not in {429, 503}
+    assert calls == []
