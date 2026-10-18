@@ -7,24 +7,32 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
   batch:
     timeout: 5s
     send_batch_size: 512
 
 exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
   prometheus:
     endpoint: 0.0.0.0:8889
     namespace: pesaguard
-  logging:
-    loglevel: info
+  debug:
+    verbosity: basic
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
-      exporters: [logging]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger, debug]
     metrics:
       receivers: [otlp]
-      processors: [batch]
-      exporters: [prometheus, logging]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus, debug]
