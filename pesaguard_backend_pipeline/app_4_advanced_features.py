@@ -3930,7 +3930,9 @@ def oidc_provider_registry():
         if not metadata and not any(data.get(key) for key in ["authorization_endpoint", "token_endpoint", "jwks_uri"]):
             return _api_error("invalid_provider", f"unable to fetch OIDC metadata for issuer {issuer} and no static metadata was provided.", 400)
 
-    trust_policy = data.get("trust_policy") or _provider_trust_policy_for_tenant(tenant_id)
+    # Trust rules are persisted tenant policy; registration requests may not
+    # supply an ad-hoc policy that bypasses the reviewed configuration.
+    trust_policy = _provider_trust_policy_for_tenant(tenant_id)
     if provider_type == "saml":
         if not _validate_saml_provider_policy(trust_policy, metadata):
             return _api_error("policy_denied", "The SAML trust policy does not allow the supplied provider configuration.", 403)
