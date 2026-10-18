@@ -79,7 +79,7 @@ The persisted workflow APIs close the initial CRUD/API gap, but they do not by t
 - A durable reconciliation worker that consumes run requests and writes reconciliation outcomes using the established tenant-scoped matching pipeline.
 - A scheduler/worker that triggers enabled reconciliation schedules and recurring report definitions with lease/duplicate-run protection.
 - Integration of matching-rule definitions with the authoritative reconciliation engine, versioned rule snapshots per run, and dry-run/rollback controls.
-- Producers that create persisted data-quality findings from import validation, profiling, schema drift, and freshness checks.
+- Reconciliation quality-gate findings are now persisted atomically as tenant-scoped data-quality review records, with deterministic IDs and no raw callback/phone data. Import-validation, profiling, schema-drift, and freshness producers still need separate integration.
 - An approved, idempotent artifact pipeline for report exports and delivery; current report runs return bounded JSON summaries only.
 - A separate privileged, auditable execution workflow for approved privacy export/deletion requests.
 - Support notification/delivery integration and service-level monitoring.
