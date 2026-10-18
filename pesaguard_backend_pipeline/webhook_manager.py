@@ -215,7 +215,9 @@ class WebhookManager:
                     allow_redirects=False,
                 )
                 delivery.response_status = response.status_code
-                delivery.response_body = response.text[:500] if response.text else ""
+                # Receiver responses are untrusted and may echo request payloads
+                # or secrets. Persist the status code, not response content.
+                delivery.response_body = ""
 
                 if 200 <= response.status_code < 300:
                     delivery.status = "success"
@@ -237,7 +239,13 @@ class WebhookManager:
             except requests.Timeout:
                 logger.warning("Webhook delivery_id=%s timed out on attempt %d", delivery_id, attempt + 1)
             except Exception as exc:
-                logger.error("Webhook delivery_id=%s failed on attempt %d: %s", delivery_id, attempt + 1, exc)
+                # Exception strings may contain destination URLs/query credentials.
+                logger.error(
+                    "Webhook delivery_id=%s failed on attempt %d (error_type=%s)",
+                    delivery_id,
+                    attempt + 1,
+                    type(exc).__name__,
+                )
 
             if attempt < max_attempts - 1:
                 wait_seconds = 2 ** attempt
