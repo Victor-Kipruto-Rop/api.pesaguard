@@ -4055,9 +4055,10 @@ def external_idp_policy_review_route():
     decision = str(data.get("decision") or "approve").strip().lower()
     # Reviewer identity must be attributable to the authenticated principal, not caller input.
     reviewer = str(current_user.username or current_user.user_id)
+    # Review only the already-persisted tenant policy. Do not accept policy
+    # mutations in the review request, or a caller could approve a policy they
+    # supplied in the same request rather than reviewing stored configuration.
     policy = _provider_trust_policy_for_tenant(tenant_id)
-    if isinstance(data.get("trust_policy"), dict):
-        policy.update(data.get("trust_policy"))
 
     if decision not in {"approve", "reject"}:
         return _api_error("invalid_request", "decision must be either approve or reject.", 400)
