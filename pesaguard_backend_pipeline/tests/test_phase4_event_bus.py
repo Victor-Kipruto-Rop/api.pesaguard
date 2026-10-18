@@ -241,6 +241,11 @@ def test_legacy_publish_rejects_missing_or_placeholder_tenant_scope():
         with pytest.raises(ValueError, match="tenant_id is required"):
             producer._validate_payload_schema(payload)
 
+    with pytest.raises(ValueError, match="Conflicting tenant identifiers"):
+        producer._validate_payload_schema(
+            {"TransID": "conflicting-tenant", "tenant_id": "tenant-a", "TenantID": "tenant-b"}
+        )
+
 def test_broker_unavailable_raises_without_acknowledging_event(monkeypatch):
     import producer
 
