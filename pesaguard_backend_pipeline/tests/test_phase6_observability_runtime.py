@@ -211,3 +211,35 @@ def test_import_creates_missing_prometheus_multiprocess_directory(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert multiprocess_dir.is_dir()
+
+
+
+def test_shared_metrics_retries_redis_after_transient_startup_failure(monkeypatch):
+    import sys
+
+    class _FlakyRedis:
+        def __init__(self, should_fail):
+            self.should_fail = should_fail
+
+        def ping(self):
+            if self.should_fail:
+                raise TimeoutError("simulated Redis startup timeout")
+            return True
+
+    clients = iter([_FlakyRedis(True), _FlakyRedis(False)])
+    fake_redis_module = SimpleNamespace(from_url=lambda *args, **kwargs: next(clients))
+    monkeypatch.setitem(sys.modules, "redis", fake_redis_module)
+    monkeypatch.setenv("PESAGUARD_SHARED_METRICS", "1")
+    monkeypatch.setattr(metrics, "_shared_redis_client", None)
+    monkeypatch.setattr(metrics, "_shared_redis_degraded", False)
+    monkeypatch.setattr(metrics, "_shared_redis_retry_after", 0.0)
+
+    assert metrics._get_shared_redis() is None
+    assert metrics._shared_redis_degraded is True
+
+    # Simulate the retry window elapsing without sleeping in the test.
+    monkeypatch.setattr(metrics, "_shared_redis_retry_after", 0.0)
+    client = metrics._get_shared_redis()
+
+    assert client is not None
+    assert metrics._shared_redis_degraded is False
