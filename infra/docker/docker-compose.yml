@@ -41,6 +41,8 @@ services:
       - "127.0.0.1:9093:9093"
     volumes:
       - ../../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    secrets:
+      - alertmanager_webhook_secret
     command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
     depends_on:
       - webhook_receiver
@@ -322,3 +324,9 @@ volumes:
   wal_archive:
   redisdata:
   redpanda_data:
+
+# Compose creates this secret from the host environment and mounts it only into
+# Alertmanager; do not put the value in the YAML file or repository.
+secrets:
+  alertmanager_webhook_secret:
+    environment: PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET
