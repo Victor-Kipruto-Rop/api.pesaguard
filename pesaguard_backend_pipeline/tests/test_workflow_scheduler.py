@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from action_audit import Base as AuditBase
 from models import Base, Transaction
 from workflow_models import TenantWorkflowRecord
-from workflow_scheduler import run_due_workflows
+from workflow_scheduler import process_queued_reconciliation_runs, run_due_workflows
 
 
 def test_due_reconciliation_schedule_queues_request_without_claiming_completion(tmp_path):
@@ -133,4 +133,37 @@ def test_due_report_schedule_persists_tenant_scoped_summary(tmp_path):
         assert runs[0].payload["execution_mode"] == "scheduled_persisted_summary"
         assert runs[0].payload["result"]["report_type"] == "reconciliation_summary"
         assert runs[0].payload["result"]["transaction_count"] == 1
+    engine.dispose()
+
+
+def test_queued_reconciliation_run_executes_and_completes_when_no_transactions_are_pending(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'empty-run.db'}")
+    Base.metadata.create_all(engine)
+    AuditBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    now = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+    with factory() as session:
+        session.add(TenantWorkflowRecord(
+            id="run-empty-a",
+            tenant_id="tenant-a",
+            domain="reconciliation_run",
+            status="queued",
+            title="Scheduled sweep",
+            description=None,
+            payload={"execution_status": "queued_for_reconciliation_worker"},
+            created_by="workflow_scheduler",
+            updated_by="workflow_scheduler",
+            created_at=now - timedelta(minutes=1),
+            updated_at=now - timedelta(minutes=1),
+        ))
+        session.commit()
+
+    stats = process_queued_reconciliation_runs(factory, now=now)
+    assert stats["claimed"] == 1
+    assert stats["completed"] == 1
+    with factory() as session:
+        run = session.get(TenantWorkflowRecord, "run-empty-a")
+        assert run.status == "completed"
+        assert run.payload["execution_status"] == "completed"
+        assert run.payload["progress"]["pending_remaining"] == 0
     engine.dispose()
