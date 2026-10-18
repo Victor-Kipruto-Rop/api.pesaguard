@@ -46,6 +46,9 @@ from logging_utils import (
 from metrics import build_metrics_payload, record_security_event
 from prometheus_auth import prometheus_token_matches
 from models import Base, DeadLetter, Discrepancy, DiscrepancyFilterPreset, ImportJob, LineageRecord, MerchantMetric, Transaction, UserAccount
+# Register durable workflow models on the shared SQLAlchemy metadata before migration/test setup.
+import workflow_models  # noqa: F401
+from workflow_api import create_workflow_blueprint
 from provider_management_service import ProviderManagementService
 from rate_limiter import ENABLE_REDIS_RATE_LIMITING, RateLimiter
 from runtime_config import RuntimeConfig
@@ -219,6 +222,10 @@ else:
     )
 
 engine = primary_engine
+
+# All workflow reads and writes use the primary database and authenticated tenant scope.
+workflow_session_factory = sessionmaker(bind=primary_engine, expire_on_commit=False)
+app.register_blueprint(create_workflow_blueprint(workflow_session_factory))
 
 if READ_REPLICA_DATABASE_URL and READ_REPLICA_DATABASE_URL.startswith("sqlite"):
     replica_engine = _create_engine(READ_REPLICA_DATABASE_URL)
