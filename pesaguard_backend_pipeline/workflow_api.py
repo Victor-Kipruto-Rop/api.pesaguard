@@ -1,0 +1,305 @@
+"""Tenant-scoped APIs for operational workflows surfaced in app.pesaguard.
+
+These endpoints persist workflow state and validate transitions. Settlement and
+refund/reversal routes create review requests only; they never move funds.
+Scheduled jobs are registered but require a production scheduler/worker to run
+at the configured time. Report runs execute a bounded persisted-data summary.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from flask import Blueprint, jsonify, request
+from sqlalchemy import func
+
+from auth_rbac import get_current_user, require_auth
+from models import Discrepancy, Transaction
+from workflow_models import TenantWorkflowRecord
+
+DOMAIN_PATHS = {
+    "reconciliation-runs": "reconciliation_run",
+    "matching-rules": "matching_rule",
+    "data-quality-findings": "data_quality_finding",
+    "reconciliation-schedules": "scheduled_reconciliation",
+    "settlement-reviews": "settlement_review",
+    "refund-reversal-requests": "refund_reversal_request",
+    "report-definitions": "report_definition",
+    "report-runs": "report_run",
+    "fraud-investigations": "fraud_investigation",
+    "privacy-requests": "privacy_request",
+    "support-cases": "support_case",
+}
+VALID_STATUSES = {
+    "reconciliation_run": {"draft", "requested", "queued", "running", "completed", "failed", "cancelled"},
+    "matching_rule": {"draft", "open", "disabled"},
+    "data_quality_finding": {"open", "triage", "in_progress", "resolved", "closed"},
+    "scheduled_reconciliation": {"draft", "scheduled", "disabled", "cancelled"},
+    "settlement_review": {"open", "pending_review", "approved", "rejected", "resolved", "closed"},
+    "refund_reversal_request": {"requested", "pending_review", "approved", "rejected", "resolved", "closed"},
+    "report_definition": {"draft", "open", "scheduled", "disabled"},
+    "report_run": {"requested", "queued", "running", "completed", "failed", "cancelled"},
+    "fraud_investigation": {"open", "triage", "in_progress", "needs_information", "resolved", "closed"},
+    "privacy_request": {"requested", "pending_review", "approved", "rejected", "completed", "failed"},
+    "support_case": {"open", "triage", "in_progress", "needs_information", "resolved", "closed"},
+}
+TITLE_LIMIT = 200
+DESCRIPTION_LIMIT = 4000
+
+
+def create_workflow_blueprint(session_factory):
+    bp = Blueprint("tenant_workflow_api", __name__)
+
+    def _tenant_user():
+        user = get_current_user()
+        tenant_id = str(getattr(user, "tenant_id", "") or "").strip()
+        user_id = str(getattr(user, "user_id", "") or getattr(user, "id", "") or "").strip()
+        if not tenant_id or not user_id:
+            return None, None
+        return tenant_id, user_id
+
+    def _serialize(record: TenantWorkflowRecord) -> dict[str, Any]:
+        return {
+            "id": record.id,
+            "tenant_id": record.tenant_id,
+            "domain": record.domain,
+            "status": record.status,
+            "title": record.title,
+            "description": record.description,
+            "payload": record.payload or {},
+            "version": record.version,
+            "created_by": record.created_by,
+            "updated_by": record.updated_by,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+        }
+
+    def _json_object():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return None, (jsonify({"error": "invalid_json", "message": "A JSON object is required."}), 400)
+        return body, None
+
+    def _validate(domain, body, creating=False):
+        title = body.get("title")
+        if creating and (not isinstance(title, str) or not title.strip()):
+            return None, "title is required"
+        if title is not None and (not isinstance(title, str) or not title.strip() or len(title.strip()) > TITLE_LIMIT):
+            return None, "title must be a non-empty string of at most 200 characters"
+        description = body.get("description")
+        if description is not None and (not isinstance(description, str) or len(description) > DESCRIPTION_LIMIT):
+            return None, "description must be at most 4000 characters"
+        payload = body.get("payload", {})
+        if not isinstance(payload, dict):
+            return None, "payload must be a JSON object"
+        status = body.get("status")
+        if status is not None and status not in VALID_STATUSES[domain]:
+            return None, "unsupported status for this workflow"
+        if domain == "matching_rule":
+            for key in ("amount_tolerance", "time_window_minutes"):
+                if key in payload and (not isinstance(payload[key], (int, float)) or isinstance(payload[key], bool) or payload[key] < 0):
+                    return None, f"{key} must be a non-negative number"
+            if payload.get("currency") and (not isinstance(payload["currency"], str) or len(payload["currency"]) != 3):
+                return None, "currency must be a three-character ISO currency code"
+        elif domain == "scheduled_reconciliation":
+            cadence = payload.get("cadence")
+            if cadence not in {"hourly", "daily", "weekly", "monthly"}:
+                return None, "cadence must be hourly, daily, weekly or monthly"
+            timezone_name = payload.get("timezone", "Africa/Nairobi")
+            if not isinstance(timezone_name, str) or len(timezone_name) > 64:
+                return None, "timezone must be a valid timezone name"
+            if not isinstance(payload.get("enabled", True), bool):
+                return None, "enabled must be boolean"
+        elif domain in {"settlement_review", "refund_reversal_request"}:
+            amount = payload.get("amount")
+            if amount is not None and (not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0):
+                return None, "amount must be a positive number"
+            currency = payload.get("currency", "KES")
+            if not isinstance(currency, str) or len(currency) != 3 or currency.upper() != currency:
+                return None, "currency must be an uppercase three-character ISO code"
+            # Explicitly reject fields that could imply external financial execution.
+            forbidden = {"execute", "execute_payment", "provider_command", "destination_account", "settlement_instruction"}
+            if forbidden.intersection(payload):
+                return None, "financial execution fields are not accepted; this API only records review requests"
+        elif domain == "report_definition":
+            if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
+                return None, "report_type must be transactions, discrepancies or reconciliation_summary"
+            if "schedule" in payload and not isinstance(payload["schedule"], dict):
+                return None, "schedule must be an object"
+        elif domain == "report_run":
+            if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
+                return None, "report_type must be transactions, discrepancies or reconciliation_summary"
+        elif domain == "privacy_request":
+            if payload.get("request_type") not in {"access", "export", "correction", "deletion"}:
+                return None, "request_type must be access, export, correction or deletion"
+            if payload.get("request_type") == "deletion" and payload.get("execute_immediately"):
+                return None, "deletion requires a reviewed, separately authorized execution workflow"
+        elif domain == "fraud_investigation":
+            evidence = payload.get("evidence", [])
+            if not isinstance(evidence, list) or len(evidence) > 100:
+                return None, "evidence must be a list with at most 100 items"
+            if any(not isinstance(item, dict) for item in evidence):
+                return None, "each evidence item must be an object"
+        return {"title": title.strip() if isinstance(title, str) else None,
+                "description": description,
+                "payload": payload,
+                "status": status}, None
+
+    def _list_domain(domain):
+        tenant_id, _ = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        try:
+            page = max(1, min(1000000, int(request.args.get("page", "1"))))
+            per_page = max(1, min(100, int(request.args.get("per_page", "25"))))
+        except ValueError:
+            return jsonify({"error": "invalid_pagination", "message": "page and per_page must be integers."}), 400
+        query = session_factory().query(TenantWorkflowRecord).filter(
+            TenantWorkflowRecord.tenant_id == tenant_id,
+            TenantWorkflowRecord.domain == domain,
+        )
+        status = request.args.get("status", "").strip()
+        if status:
+            statuses = [item.strip() for item in status.split(",") if item.strip()]
+            if not statuses or any(item not in VALID_STATUSES[domain] for item in statuses):
+                return jsonify({"error": "invalid_status", "message": "Unsupported status filter."}), 400
+            query = query.filter(TenantWorkflowRecord.status.in_(statuses))
+        search = request.args.get("q", "").strip()[:200]
+        if search:
+            query = query.filter(TenantWorkflowRecord.title.ilike(f"%{search}%"))
+        total = query.count()
+        records = query.order_by(TenantWorkflowRecord.created_at.desc(), TenantWorkflowRecord.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        return jsonify({"items": [_serialize(item) for item in records], "page": page, "per_page": per_page, "total": total})
+
+    def _create_domain(domain):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        body, error = _json_object()
+        if error:
+            return error
+        valid, message = _validate(domain, body, creating=True)
+        if message:
+            return jsonify({"error": "validation_error", "message": message}), 400
+        status = valid["status"] or ("requested" if domain in {"reconciliation_run", "report_run", "refund_reversal_request", "privacy_request"} else "open")
+        if domain == "scheduled_reconciliation":
+            status = valid["status"] or ("scheduled" if valid["payload"].get("enabled", True) else "disabled")
+        if domain == "report_run":
+            # A bounded execution reads only persisted rows belonging to the authenticated tenant.
+            report_type = valid["payload"]["report_type"]
+            session = session_factory()
+            try:
+                if report_type == "transactions":
+                    count = session.query(func.count(Transaction.id)).filter(Transaction.tenant_id == tenant_id).scalar() or 0
+                    volume = session.query(func.coalesce(func.sum(Transaction.trans_amount), 0)).filter(Transaction.tenant_id == tenant_id).scalar()
+                    result = {"report_type": report_type, "row_count": int(count), "recorded_volume": str(volume or 0), "currency": "KES"}
+                elif report_type == "discrepancies":
+                    count = session.query(func.count(Discrepancy.id)).filter(Discrepancy.tenant_id == tenant_id).scalar() or 0
+                    open_count = session.query(func.count(Discrepancy.id)).filter(Discrepancy.tenant_id == tenant_id, Discrepancy.resolved.is_(False)).scalar() or 0
+                    result = {"report_type": report_type, "row_count": int(count), "open_count": int(open_count)}
+                else:
+                    tx_count = session.query(func.count(Transaction.id)).filter(Transaction.tenant_id == tenant_id).scalar() or 0
+                    discrepancy_count = session.query(func.count(Discrepancy.id)).filter(Discrepancy.tenant_id == tenant_id).scalar() or 0
+                    result = {"report_type": report_type, "transaction_count": int(tx_count), "discrepancy_count": int(discrepancy_count)}
+                valid["payload"] = {**valid["payload"], "result": result, "executed_at": datetime.now(timezone.utc).isoformat(), "execution_mode": "synchronous_summary"}
+                status = "completed"
+            except Exception:
+                session.rollback()
+                return jsonify({"error": "report_execution_failed", "message": "Report summary could not be generated."}), 500
+            finally:
+                session.close()
+        session = session_factory()
+        try:
+            record = TenantWorkflowRecord(
+                tenant_id=tenant_id, domain=domain, status=status,
+                title=valid["title"], description=valid["description"],
+                payload=valid["payload"], created_by=user_id, updated_by=user_id,
+            )
+            session.add(record)
+            session.commit()
+            return jsonify({"item": _serialize(record)}), 201
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "workflow_persistence_failed", "message": "Workflow record could not be saved."}), 500
+        finally:
+            session.close()
+
+    def _get_domain_record(domain, record_id):
+        tenant_id, _ = _tenant_user()
+        if not tenant_id:
+            return None, (jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403)
+        session = session_factory()
+        record = session.query(TenantWorkflowRecord).filter_by(id=record_id, tenant_id=tenant_id, domain=domain).first()
+        if record is None:
+            session.close()
+            return None, (jsonify({"error": "not_found", "message": "Workflow record was not found."}), 404)
+        return (session, record), None
+
+    def _update_domain(domain, record_id):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        body, error = _json_object()
+        if error:
+            return error
+        session, record = _get_domain_record(domain, record_id)[0] if False else (None, None)
+        result, error = _get_domain_record(domain, record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            if body.get("version") is not None and body["version"] != record.version:
+                return jsonify({"error": "version_conflict", "message": "The record changed; reload it before retrying.", "current_version": record.version}), 409
+            valid, message = _validate(domain, body, creating=False)
+            if message:
+                return jsonify({"error": "validation_error", "message": message}), 400
+            if valid["title"] is not None:
+                record.title = valid["title"]
+            if valid["description"] is not None:
+                record.description = valid["description"]
+            if "payload" in body:
+                record.payload = valid["payload"]
+            if valid["status"] is not None:
+                record.status = valid["status"]
+            if domain in {"settlement_review", "refund_reversal_request"} and record.status in {"approved", "rejected"}:
+                # Approval is a review decision only; no provider call or money movement is triggered.
+                record.payload = {**(record.payload or {}), "review_decision_at": datetime.now(timezone.utc).isoformat()}
+            record.updated_by = user_id
+            record.version += 1
+            record.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return jsonify({"item": _serialize(record)})
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "workflow_update_failed", "message": "Workflow record could not be updated."}), 500
+        finally:
+            session.close()
+
+    for slug, domain in DOMAIN_PATHS.items():
+        endpoint = slug.replace("-", "_")
+        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"list_{endpoint}", view_func=require_auth("read:discrepancies")(_make_list(domain, _list_domain)), methods=["GET"])
+        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth("write:discrepancies")(_make_create(domain, _create_domain)), methods=["POST"])
+        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth("write:discrepancies")(_make_update(domain, _update_domain)), methods=["PATCH"])
+
+    return bp
+
+
+def _make_list(domain, handler):
+    def view():
+        return handler(domain)
+    view.__name__ = f"list_{domain}"
+    return view
+
+
+def _make_create(domain, handler):
+    def view():
+        return handler(domain)
+    view.__name__ = f"create_{domain}"
+    return view
+
+
+def _make_update(domain, handler):
+    def view(record_id):
+        return handler(domain, record_id)
+    view.__name__ = f"update_{domain}"
+    return view
