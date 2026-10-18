@@ -10,6 +10,10 @@ Use the workspace virtual environment or install dependencies from the project r
 
 ## Container model
 
+The production Compose stack includes a dedicated `workflow_scheduler` process. It requires the same migrated PostgreSQL database as the dashboard API and can be tuned with `PESAGUARD_WORKFLOW_SCHEDULER_INTERVAL_SECONDS` (minimum 5 seconds) and `PESAGUARD_WORKFLOW_SCHEDULER_BATCH` (maximum 500 records per cycle). Deploy it only after the tenant-workflow migration is applied, and monitor its container logs and scheduled-run backlog.
+
+The scheduler atomically dispatches due reconciliation schedules into queued run records and creates scheduled persisted-data report summaries. A queued reconciliation run is **not** a completed reconciliation: the separate run executor must process it before the status can become completed. Report summaries are JSON workflow records, not downloadable CSV/PDF artifacts. The scheduler does not execute settlements, refunds, reversals, or privacy deletion requests.
+
 The repository ships:
 
 - `docker/Dockerfile`
