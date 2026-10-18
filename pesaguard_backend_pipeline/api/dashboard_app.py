@@ -2433,7 +2433,11 @@ def discrepancies():
     session = _open_session()
     try:
         rows = session.query(Discrepancy)
-        if status:
+        if status == "assigned":
+            # Assignment is represented by the assignee column, not by the
+            # persisted discrepancy status value.
+            rows = rows.filter(Discrepancy.assignee.isnot(None), Discrepancy.assignee != "")
+        elif status:
             rows = rows.filter((Discrepancy.anomaly_type == status) | (Discrepancy.status == status))
         if severity:
             rows = rows.filter(Discrepancy.severity == severity)
