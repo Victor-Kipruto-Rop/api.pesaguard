@@ -107,15 +107,17 @@ def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
             ratio = 0.10
         sampler = None
         sampler_name = os.getenv("OTEL_TRACES_SAMPLER", "parentbased_traceidratio").lower()
+        sampling_api = _try_import_first("opentelemetry.sdk.trace.sampling")
         try:
-            if sampler_name in {"always_on", "alwayson"}:
-                sampler = sdk_trace.ALWAYS_ON
-            elif sampler_name in {"always_off", "alwaysoff"}:
-                sampler = sdk_trace.ALWAYS_OFF
-            elif sampler_name in {"traceidratio", "trace_id_ratio"}:
-                sampler = sdk_trace.TraceIdRatioBased(ratio)
-            else:
-                sampler = sdk_trace.ParentBased(root=sdk_trace.TraceIdRatioBased(ratio))
+            if sampling_api is not None:
+                if sampler_name in {"always_on", "alwayson"}:
+                    sampler = sampling_api.ALWAYS_ON
+                elif sampler_name in {"always_off", "alwaysoff"}:
+                    sampler = sampling_api.ALWAYS_OFF
+                elif sampler_name in {"traceidratio", "trace_id_ratio"}:
+                    sampler = sampling_api.TraceIdRatioBased(ratio)
+                else:
+                    sampler = sampling_api.ParentBased(root=sampling_api.TraceIdRatioBased(ratio))
         except (AttributeError, TypeError):
             sampler = None
 
