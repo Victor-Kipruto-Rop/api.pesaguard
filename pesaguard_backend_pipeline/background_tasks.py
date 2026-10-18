@@ -136,7 +136,8 @@ def enqueue_transaction_event(topic: str, payload: dict) -> Dict[str, Any]:
         Retry = getattr(rq, "Retry", None)
         if Retry is not None:
             enqueue_kwargs["retry"] = Retry(max=3, interval=[10, 30, 60])
-            enqueue_kwargs["on_failure"] = handle_job_failure
+            Callback = getattr(rq, "Callback", None)
+            enqueue_kwargs["on_failure"] = Callback(handle_job_failure) if Callback is not None else handle_job_failure
 
         job = queue.enqueue(
             _publish_transaction_event,
@@ -189,7 +190,8 @@ def enqueue_reconciliation_request(
         retry = getattr(rq, "Retry", None)
         if retry is not None:
             enqueue_kwargs["retry"] = retry(max=3, interval=[10, 30, 60])
-            enqueue_kwargs["on_failure"] = handle_job_failure
+            callback = getattr(rq, "Callback", None)
+            enqueue_kwargs["on_failure"] = callback(handle_job_failure) if callback is not None else handle_job_failure
         queue.enqueue(
             "api_core_jobs.process_reconciliation_request",
             tenant_id,

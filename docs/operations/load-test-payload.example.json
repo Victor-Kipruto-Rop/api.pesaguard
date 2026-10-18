@@ -1,0 +1,11 @@
+{
+  "event_id": "{{request_id}}",
+  "tenant_id": "load-test",
+  "amount": 100,
+  "currency": "KES",
+  "metadata": {
+    "profile": "{{profile}}",
+    "stage": "{{stage}}",
+    "sequence": "{{sequence}}"
+  }
+}

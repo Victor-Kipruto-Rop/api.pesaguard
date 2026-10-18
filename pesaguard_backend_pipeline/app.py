@@ -324,6 +324,12 @@ def _verify_daraja_signature(request_body: bytes, signature: str) -> None:
         raise ValueError("Signature mismatch")
 
 
+@app.route("/livez", methods=["GET"])
+def livez():
+    """Process liveness only; dependency readiness is reported separately by /health."""
+    return jsonify({"status": "alive"}), 200
+
+
 @app.route("/health", methods=["GET"])
 def health():
     payload = build_health_payload()
@@ -418,7 +424,7 @@ def mpesa_confirmation():
         redis_conn.set(cache_key, "1", ex=86400)
         redis_conn.set(legacy_cache_key, "1", ex=86400)
     except Exception:
-        pass
+        logger.debug("Redis warm-cache update skipped for transaction %s.", trans_id, exc_info=True)
 
     queued = enqueue_transaction_outbox_drain()
     logger.info(

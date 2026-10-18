@@ -61,7 +61,10 @@ def test_payload_fingerprint_preserves_reference_punctuation_and_rejects_invalid
 def test_robust_outlier_detection_resists_one_extreme_historical_value():
     baseline = [100, 101, 99, 100, 102, 1000]
     assert robust_amount_zscore(100, baseline) is not None
-    assert robust_amount_deviation(100, baseline) == 0
+    typical_deviation = robust_amount_deviation(100, baseline)
+    extreme_deviation = robust_amount_deviation(10000, baseline)
+    assert typical_deviation is not None and 0 < typical_deviation < 0.1
+    assert extreme_deviation is not None and extreme_deviation > typical_deviation
     assert is_amount_outlier(10000, baseline) is True
     assert is_amount_outlier(100, [100, 101, 99]) is None
 

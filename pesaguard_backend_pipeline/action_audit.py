@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, DDL, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, event, func, text
 from sqlalchemy import inspect
-from sqlalchemy.orm import validates
+from sqlalchemy.orm import declarative_base, validates
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 

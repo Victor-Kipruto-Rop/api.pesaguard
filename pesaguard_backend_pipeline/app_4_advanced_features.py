@@ -918,6 +918,7 @@ def _rotate_password_credential(session, account: UserAccount, password: str, re
         user_id=account.id,
         tenant_id=account.tenant_id,
         password_hash=encoded,
+        # nosec B106: this is the Argon2id algorithm identifier, not a secret.
         algorithm="argon2id",
         parameters=_ARGON2_PARAMETERS,
         version=1,
@@ -954,7 +955,7 @@ def _password_policy_error(password: Any) -> Optional[str]:
     if password.casefold() in _COMMON_PASSWORDS:
         return "Password is too common."
     if os.getenv("PESAGUARD_HIBP_ENABLED", "0").strip().lower() in {"1", "true", "yes"}:
-        digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+        digest = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
         try:
             response = requests.get(
                 f"https://api.pwnedpasswords.com/range/{digest[:5]}",
@@ -1143,7 +1144,9 @@ def _deliver_verification_email(tenant_id: str, user_id: str, email: Optional[st
         status = "failed"
         error = "verification email delivery is not configured"
     else:
-        delivered, error = email_service._send_email(email, subject, body, body)
+        delivered, error = email_service._send_email(
+            email, subject, email_service.build_notice_html(subject, body), body
+        )
         status = "sent" if delivered else "failed"
 
     session = SessionLocal()
@@ -1187,7 +1190,9 @@ def _deliver_password_reset_email(tenant_id: str, user_id: str, email: Optional[
         status = "failed"
         error = "password reset email delivery is not configured"
     else:
-        delivered, error = email_service._send_email(email, subject, body, body)
+        delivered, error = email_service._send_email(
+            email, subject, email_service.build_notice_html(subject, body), body
+        )
         status = "sent" if delivered else "failed"
     session = SessionLocal()
     try:
@@ -1318,6 +1323,7 @@ def _register_local_user(data: Dict[str, Any]) -> Dict[str, Any]:
             username=username,
             email=email,
             password_hash=None,
+            # nosec B106: this is a placeholder algorithm label for non-password identity data, not a credential secret.
             password_salt="argon2id",
             roles=["operator"],
             permissions=AuthRBAC._get_permissions_for_roles(["operator"]),
@@ -1758,7 +1764,10 @@ def _notify_password_expiration(user_record: UserAccount, expires_at: datetime) 
         error = None
         if email_service.smtp_server:
             body = f"Your PesaGuard password expires on {expires_at.isoformat()}. Change it before expiration."
-            delivered, error = email_service._send_email(user_record.email, "PesaGuard password expiration notice", body, body)
+            subject = "PesaGuard password expiration notice"
+            delivered, error = email_service._send_email(
+                user_record.email, subject, email_service.build_notice_html(subject, body), body
+            )
         else:
             error = "email delivery is not configured"
         session.add(EmailNotification(
@@ -3829,6 +3838,7 @@ def _provision_external_user_from_claims(tenant_id: str, email: Optional[str], u
                 username=username,
                 email=email,
                 password_hash="external-idp",
+                # nosec B106: this is an external IdP placeholder tag, not a user password or secret.
                 password_salt="external-idp",
                 roles=roles,
                 permissions=AuthRBAC._get_permissions_for_roles(roles),
@@ -6331,7 +6341,10 @@ def request_mfa_email_verification_route():
             delivered, delivery_error = email_service._send_email(
                 account.email,
                 "PesaGuard MFA verification code",
-                f"Your PesaGuard verification code is {code}. It expires in 10 minutes.",
+                email_service.build_notice_html(
+                    "PesaGuard MFA verification code",
+                    f"Your PesaGuard verification code is {code}. It expires in 10 minutes.",
+                ),
                 f"Your PesaGuard verification code is {code}. It expires in 10 minutes.",
             )
             if not delivered:
@@ -6402,7 +6415,11 @@ def request_mfa_reset_route():
         if _is_production_environment():
             if not email_service.smtp_server:
                 return _api_error("email_unavailable", "Email delivery is not configured.", 503)
-            delivered, delivery_error = email_service._send_email(account.email, "PesaGuard MFA reset verification", f"Your MFA reset code is {code}.", f"Your MFA reset code is {code}.")
+            subject = "PesaGuard MFA reset verification"
+            body = f"Your MFA reset code is {code}."
+            delivered, delivery_error = email_service._send_email(
+                account.email, subject, email_service.build_notice_html(subject, body), body
+            )
             if not delivered:
                 session.query(MFAChallenge).filter_by(id=challenge_id).update({MFAChallenge.status: "delivery_failed"})
                 session.commit()

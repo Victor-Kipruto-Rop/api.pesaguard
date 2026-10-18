@@ -1,7 +1,7 @@
 import sys
 import os
 import importlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Ensure repo root is on sys.path so we can import sibling modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -33,7 +33,7 @@ def test_exact_match_by_reference_and_amount():
 
 
 def test_time_window_match_by_ref_and_time():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     tx = {"TransID": "R1", "TransTime": now.strftime("%Y%m%d%H%M%S"), "TransAmount": "10"}
     settlements = [
         {"TransID": "R1", "TransTime": (now + timedelta(seconds=10)).strftime("%Y%m%d%H%M%S"), "TransAmount": 10},

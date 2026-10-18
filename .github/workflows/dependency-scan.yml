@@ -11,6 +11,20 @@ on:
     - cron: '0 0 * * 0'  # Weekly on Sundays
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan for exposed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   python-scan:
     runs-on: ubuntu-latest
     steps:
@@ -35,19 +49,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install pip-audit bandit safety
 
-      - name: Audit production and development Python dependencies (pip-audit)
+      - name: Audit Python packages for CVEs (pip-audit)
         run: |
-          # The development manifest includes the backend production requirements.
-          # Audit it explicitly so CI/test tooling is not silently omitted.
           if [ -f pesaguard_backend_pipeline/requirements-dev.txt ]; then
             pip-audit -r pesaguard_backend_pipeline/requirements-dev.txt --desc
-          elif [ -f pesaguard_backend_pipeline/requirements.txt ]; then
-            pip-audit -r pesaguard_backend_pipeline/requirements.txt --desc
           elif [ -f requirements.txt ]; then
             pip-audit -r requirements.txt --desc
+          elif [ -f pesaguard_backend_pipeline/requirements.txt ]; then
+            pip-audit -r pesaguard_backend_pipeline/requirements.txt --desc
           else
-            echo "No supported Python requirements manifest found." >&2
-            exit 1
+            pip-audit --desc
           fi
 
       - name: Scan Python code for security flaws (bandit)

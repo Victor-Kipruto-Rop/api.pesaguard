@@ -15,6 +15,8 @@ COMPOSE = ROOT / "infra/docker"
 
 @pytest.fixture
 def deployment(tmp_path):
+    token_file = tmp_path / "prometheus-token"
+    token_file.write_text("isolated-config-test-token\n", encoding="utf-8")
     values = {
         "POSTGRES_USER": "config_test",
         "POSTGRES_DB": "config_test",
@@ -25,12 +27,13 @@ def deployment(tmp_path):
         "PESAGUARD_API_URL": "https://api.example.invalid",
         "KAFKA_BOOTSTRAP_SERVERS_DOCKER": "redpanda:9092",
         "REDIS_URL_DOCKER": "redis://redis:6379/0",
-        "PESAGUARD_BIND_HOST_DOCKER": "0.0.0.0",
+        "PESAGUARD_BIND_HOST_DOCKER": "0.0.0.0",  # nosec B104: container test fixture
         "KAFKA_BOOTSTRAP_SERVERS_FULL": "kafka:29092",
         "KAFKA_ADVERTISED_LISTENERS_FULL": "PLAINTEXT://kafka:29092",
         "STAGING_KAFKA_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092",
         "API_SERVER_NAME": "api.example.invalid",
         "CLOUDFLARE_TUNNEL_TOKEN": "isolated-config-test-only",
+        "PESAGUARD_PROMETHEUS_TOKEN_FILE": token_file.as_posix(),
         "CONFIG_TEST_MARKER": "alternate-file-was-loaded",
     }
     path = tmp_path / ".env"

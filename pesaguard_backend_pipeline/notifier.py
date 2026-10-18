@@ -14,6 +14,7 @@ import smtplib
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from email.message import EmailMessage
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,7 @@ except ImportError:
     HAS_AFRICAS_TALKING = False
 
 from alert_template_loader import load_alert_fields, render_message_template
+from email_branding import escape_email_value, render_branded_email
 from localization_utils import format_ke_currency, format_ke_datetime, normalise_locale
 
 logger = logging.getLogger("pesaguard.alerting")
@@ -60,6 +62,23 @@ def send_slack_alert(discrepancy: Dict[str, Any], locale: str = "en", max_retrie
     if not SLACK_WEBHOOK_URL:
         logger.warning("SLACK_WEBHOOK_URL is not set; skipping Slack alert dispatch for trans_id=%s", discrepancy.get("trans_id"))
         return False
+    try:
+        webhook_url = urlsplit(SLACK_WEBHOOK_URL)
+        webhook_port = webhook_url.port
+    except ValueError:
+        logger.error("Slack webhook URL is malformed.")
+        return False
+    if (
+        webhook_url.scheme != "https"
+        or webhook_url.hostname != "hooks.slack.com"
+        or webhook_port not in (None, 443)
+        or webhook_url.username
+        or webhook_url.password
+        or webhook_url.query
+        or webhook_url.fragment
+    ):
+        logger.error("Slack webhook URL must target hooks.slack.com over HTTPS without credentials.")
+        return False
 
     trans_id = discrepancy.get("trans_id", "unknown")
     tenant_id = discrepancy.get("tenant_id", "default")
@@ -74,7 +93,7 @@ def send_slack_alert(discrepancy: Dict[str, Any], locale: str = "en", max_retrie
                 data=body,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:  # nosec B310: HTTPS Slack hostname and port are allowlisted above.
                 if resp.status == 200:
                     logger.info("Slack alert sent successfully trans_id=%s tenant_id=%s", trans_id, tenant_id)
                     return True
@@ -168,6 +187,7 @@ def send_email_alert(discrepancy: Dict[str, Any], locale: str = "en", max_retrie
     msg["From"] = EMAIL_FROM
     msg["To"] = recipients
     msg.set_content(message_text)
+    msg.add_alternative(_format_alert_html(discrepancy, locale=locale), subtype="html")
 
     for attempt in range(max_retries + 1):
         try:
@@ -198,10 +218,15 @@ def send_email_alert(discrepancy: Dict[str, Any], locale: str = "en", max_retrie
 
 def _template_context(discrepancy: Dict[str, Any]) -> Dict[str, Any]:
     anomalies = discrepancy.get("anomalies", [])
+    anomaly_type = (
+        ", ".join(anomalies)
+        if isinstance(anomalies, list) and anomalies
+        else discrepancy.get("anomaly_type") or "discrepancy"
+    )
     amount = discrepancy.get("amount") or discrepancy.get("amount_value")
     return {
         "tenant_name": discrepancy.get("tenant_name") or discrepancy.get("tenant_id") or "default",
-        "anomaly_type": ", ".join(anomalies) if isinstance(anomalies, list) else discrepancy.get("anomaly_type") or "discrepancy",
+        "anomaly_type": anomaly_type,
         "amount": format_ke_currency(amount) if amount is not None else "N/A",
         "summary": ", ".join(anomalies) if isinstance(anomalies, list) else discrepancy.get("status") or "needs_review",
         "trans_id": discrepancy.get("trans_id", discrepancy.get("TransID", "unknown")),
@@ -253,4 +278,67 @@ def _format_alert_text(discrepancy: Dict[str, Any], locale: str = "en") -> str:
         f"{template.get('issues', 'Issues')}: {issues}\n"
         f"{template.get('detected_at', 'Detected At')}: {detected_at_display}"
         f"{amount_line}"
+    )
+
+
+def _format_alert_html(discrepancy: Dict[str, Any], locale: str = "en") -> str:
+    """Render discrepancy alerts with the shared premium PesaGuard email styling."""
+    locale_code = normalise_locale(locale)
+    fields = load_alert_fields(locale_code)
+    context = _template_context(discrepancy)
+    detected_at = (
+        discrepancy.get("checked_at")
+        or discrepancy.get("detected_at")
+        or discrepancy.get("timestamp")
+        or discrepancy.get("created_at")
+        or "unknown"
+    )
+    detected_at_display = format_ke_datetime(detected_at) or str(detected_at)
+    severity_key = str(context["severity"]).strip().lower()
+    severity_color, severity_background = {
+        "critical": ("#a72d2d", "#fff0ef"),
+        "high": ("#a72d2d", "#fff0ef"),
+        "medium": ("#80561c", "#fff7e9"),
+        "low": ("#23623f", "#eff7f1"),
+    }.get(severity_key, ("#526158", "#f2f5f3"))
+    details = [
+        (fields.get("transaction", "Transaction"), context["trans_id"]),
+        (fields.get("status", "Status"), context["status"]),
+        (fields.get("issues", "Issues"), context["anomaly_type"]),
+        (fields.get("detected_at", "Detected at"), detected_at_display),
+    ]
+    amount = discrepancy.get("amount")
+    if amount is None:
+        amount = discrepancy.get("amount_value")
+    if amount is not None:
+        details.append((fields.get("amount", "Amount"), format_ke_currency(amount)))
+
+    rows = "".join(
+        f"""<tr>
+            <td style="padding:13px 0;color:#65736a;font-size:13px;border-bottom:1px solid #e8ede9;">{escape_email_value(label)}</td>
+            <td align="right" style="padding:13px 0;color:#26352c;font-size:13px;font-weight:700;border-bottom:1px solid #e8ede9;">{escape_email_value(value)}</td>
+        </tr>"""
+        for label, value in details
+    )
+    title = fields.get("title", "PesaGuard discrepancy detected")
+    subtitle = (
+        "Tukio hili linahitaji ukaguzi wako."
+        if locale_code == "sw"
+        else "This item needs your review."
+    )
+    content = f"""
+        <p style="margin:0 0 18px;color:#58675e;font-size:15px;line-height:1.65;">{escape_email_value(subtitle)}</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;padding:18px 20px;background-color:#fbfcfb;border:1px solid #e4ebe6;border-radius:12px;">
+            <tr>
+                <td style="padding:0 0 13px;color:#65736a;font-size:13px;">{escape_email_value(fields.get("severity", "Severity"))}</td>
+                <td align="right" style="padding:0 0 13px;"><span style="display:inline-block;padding:6px 10px;background-color:{severity_background};border-radius:20px;color:{severity_color};font-size:11px;font-weight:700;letter-spacing:.6px;">{escape_email_value(str(context["severity"]).upper())}</span></td>
+            </tr>
+            {rows}
+        </table>"""
+    return render_branded_email(
+        str(title),
+        subtitle,
+        content,
+        locale_code,
+        eyebrow="PESAGUARD ALERT",
     )

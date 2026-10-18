@@ -114,7 +114,7 @@ def test_common_maximum_and_breached_passwords_are_rejected(client, monkeypatch)
     monkeypatch.setattr("app_4_advanced_features.requests.get", lambda *args, **kwargs: BreachResponse())
     breached_password = "Breach candidate passphrase 2026"
     import hashlib
-    digest = hashlib.sha1(breached_password.encode()).hexdigest().upper()
+    digest = hashlib.sha1(breached_password.encode(), usedforsecurity=False).hexdigest().upper()
     BreachResponse.text = f"{digest[5:]}:42\n"
     breached = client.post(
         "/auth/register",

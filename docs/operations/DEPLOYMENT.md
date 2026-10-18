@@ -39,7 +39,20 @@ Every staging or production release must follow this order:
 6. Monitor error rate, latency, database pool usage, consumer lag, retry rate, and dead-letter rate for the release window.
 7. Promote only after the health and smoke checks pass.
 
-The staging workflow requires the `STAGING_HEALTH_URL` secret when a deploy hook is configured. A deploy webhook response alone is not evidence that the revision is healthy.
+The staging workflow requires `RENDER_STAGING_DEPLOY_HOOK` and
+`STAGING_HEALTH_URL`. A deploy webhook response alone is not evidence that the
+revision is healthy.
+
+The staging release job applies Alembic migrations before deploying the image.
+Configure the `staging` GitHub environment with `STAGING_DATABASE_URL`,
+`STAGING_JWT_SECRET_KEY`, `PROVIDER_ENCRYPTION_KEY`,
+`PESAGUARD_PAYLOAD_ENCRYPTION_KEY`, `RENDER_STAGING_DEPLOY_HOOK`, and
+`STAGING_HEALTH_URL`. The database URL must be reachable from the workflow
+runner. The encryption keys must be the same values configured for the staging
+application, and a verified recoverable staging backup must exist before
+migrations are applied. Configure required reviewers on the GitHub `staging`
+environment so each deployment can be held while the target and backup are
+reviewed.
 
 The unified release workflow also publishes `ghcr.io/<owner>/<repository>@<digest>`. Staging deploys from the `staging` branch after verification. Production deploys from `main` behind the protected GitHub `production` environment, or through an explicitly approved manual dispatch. Configure deployment hooks to consume the digest supplied in the request payload rather than a mutable branch tag.
 

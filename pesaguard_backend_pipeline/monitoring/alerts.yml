@@ -1,0 +1,142 @@
+groups:
+  - name: pesaguard-data-pipeline
+    rules:
+      - alert: PesaGuardTransactionOutboxBacklog
+        expr: pesaguard_transaction_outbox_pending > 1000
+        for: 10m
+        labels:
+          severity: critical
+          service: ingestion
+        annotations:
+          summary: Transaction outbox backlog is growing
+          description: More than 1000 transaction publication intents are pending or retrying.
+
+      - alert: PesaGuardReconciliationOutboxBacklog
+        expr: pesaguard_reconciliation_outbox_pending > 1000
+        for: 10m
+        labels:
+          severity: critical
+          service: reconciliation
+        annotations:
+          summary: Reconciliation result outbox backlog is growing
+          description: More than 1000 reconciliation results await publication or retry.
+
+      - alert: PesaGuardReconciliationProcessingStuck
+        expr: pesaguard_reconciliation_processing > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: reconciliation
+        annotations:
+          summary: Reconciliation records remain in processing state
+          description: Reconciliation processing state has not drained for 30 minutes; inspect worker health and database locks.
+
+      - alert: PesaGuardDeadLetterGrowth
+        expr: pesaguard_dead_letters_total > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: ingestion
+        annotations:
+          summary: Dead-letter volume is elevated
+          description: More than 100 dead-letter records currently require operator attention.
+
+      - alert: PesaGuardBackupStale
+        expr: pesaguard_backup_age_seconds > 93600
+        for: 30m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: PesaGuard database backup is stale
+          description: The newest verified backup is older than 26 hours; inspect backup job and off-site delivery.
+
+      - alert: PesaGuardBackupFailed
+        expr: pesaguard_backup_last_success == 0
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: PesaGuard backup is not healthy
+          description: The backup status marker does not report a successful backup; inspect encryption, upload, retention, and database connectivity.
+
+      - alert: PesaGuardErrorRateHigh
+        expr: pesaguard_error_rate > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: PesaGuard application error rate is elevated
+          description: More than 5 percent of observed requests are failing.
+
+      - alert: PesaGuardRequestLatencyHigh
+        expr: pesaguard_request_p99_ms > 2000
+        for: 10m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: PesaGuard request latency is elevated
+          description: Request p99 latency has exceeded two seconds.
+
+      - alert: PesaGuardDatabasePoolSaturation
+        expr: pesaguard_db_pool_usage > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: Database connection pool is near saturation
+          description: More than 80 percent of the configured database pool is in use.
+
+      - alert: PesaGuardKafkaConsumerLagHigh
+        expr: pesaguard_kafka_consumer_lag_max > 10000
+        for: 10m
+        labels:
+          severity: critical
+          service: redpanda
+        annotations:
+          summary: Redpanda consumer lag is elevated
+          description: At least one consumer partition is more than 10000 events behind.
+
+      - alert: PesaGuardEventRetriesGrowing
+        expr: increase(pesaguard_event_retries_total[10m]) > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: redpanda
+        annotations:
+          summary: Event retries are increasing
+          description: More than 100 event deliveries were retried during the last ten minutes.
+
+      - alert: PesaGuardFraudWorkerFailures
+        expr: increase(pesaguard_business_fraud_engine_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: fraud
+        annotations:
+          summary: Fraud worker failures detected
+          description: Fraud analysis events are failing and may require replay or operator action.
+
+      - alert: PesaGuardReconciliationWorkerFailures
+        expr: increase(pesaguard_business_reconciliation_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: reconciliation
+        annotations:
+          summary: Reconciliation worker failures detected
+          description: Reconciliation events are failing and may require replay or operator action.
+
+      - alert: PesaGuardSecurityEventsHigh
+        expr: increase(pesaguard_business_security_events_total[10m]) > 25
+        for: 10m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: Security event volume is elevated
+          description: More than 25 security events were recorded during the last ten minutes.

@@ -1,5 +1,3 @@
-version: '3.9'
-
 # Data residency (Addendum III): keep DEPLOYMENT_REGION, BACKUP_REGION, and LOG_REGION
 # consistent with docs/product/DATA_RESIDENCY.md. Pilot default is ke-1 (Kenya / East Africa).
 
@@ -17,7 +15,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
   kafka-staging:
     image: bitnami/kafka:3.7
     environment:
@@ -30,10 +36,25 @@ services:
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka-staging:9093
       ALLOW_PLAINTEXT_LISTENER: "yes"
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - staging_kafka_data:/bitnami/kafka
   redis-staging:
     image: redis:7
     environment:
       <<: *residency-env
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - staging_redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  staging_pgdata:
+  staging_kafka_data:
+  staging_redis_data:

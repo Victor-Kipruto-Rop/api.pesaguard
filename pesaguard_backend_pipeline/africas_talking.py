@@ -3,7 +3,7 @@
 import os
 import logging
 import json
-import random
+import secrets
 import time
 import re
 from contextlib import suppress
@@ -175,7 +175,8 @@ class AfricasTalkingClient:
             self.retry_policy.base_backoff_seconds * (2 ** max(attempt - 1, 0)),
             self.retry_policy.max_backoff_seconds,
         )
-        return min(self.retry_policy.max_backoff_seconds, base + random.uniform(0, base * self.retry_policy.jitter_ratio))
+        jitter = secrets.SystemRandom().uniform(0, base * self.retry_policy.jitter_ratio)
+        return min(self.retry_policy.max_backoff_seconds, base + jitter)
 
     @staticmethod
     def _retry_after(response: requests.Response) -> Optional[float]:

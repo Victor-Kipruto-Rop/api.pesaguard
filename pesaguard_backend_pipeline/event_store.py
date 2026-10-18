@@ -448,6 +448,21 @@ class EventStore:
                     IdempotencyRecord.idempotency_key == idempotency_key,
                 ).one_or_none()
                 if existing_identity is not None:
+                    # SQLite may let a session observe two successive SELECTs
+                    # against different committed snapshots. Recheck the
+                    # transaction after ending that read transaction before
+                    # treating the idempotency ledger as corrupt.
+                    session.rollback()
+                    replay_result = self._classify_existing_replay(
+                        session,
+                        payload,
+                        tenant_id=tenant_id,
+                        provider=provider,
+                        account_id=account_id,
+                        trans_id=trans_id,
+                    )
+                    if replay_result is not None:
+                        return replay_result
                     logger.error(
                         "Idempotency record exists without matching transaction row for tenant_id=%s trans_id=%s",
                         tenant_id, trans_id,

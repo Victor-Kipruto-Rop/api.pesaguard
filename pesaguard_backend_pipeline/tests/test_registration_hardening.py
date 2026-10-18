@@ -23,6 +23,7 @@ def _clean(email: str, tenant_id: str = "registration-tenant"):
         user_ids = [account.id for account in accounts if account.email == email]
         if user_ids:
             session.query(PasswordlessChallenge).filter(PasswordlessChallenge.user_id.in_(user_ids)).delete(synchronize_session=False)
+        session.query(EmailNotification).filter_by(recipient_email=email).delete(synchronize_session=False)
         session.query(UserIdentity).filter_by(email=email, tenant_id=tenant_id).delete(synchronize_session=False)
         session.query(UserAccount).filter_by(email=email, tenant_id=tenant_id).delete(synchronize_session=False)
         session.commit()
