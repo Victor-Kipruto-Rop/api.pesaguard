@@ -8,6 +8,7 @@ at the configured time. Report runs execute a bounded persisted-data summary.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -191,8 +192,12 @@ def create_workflow_blueprint(session_factory):
             if cadence not in {"hourly", "daily", "weekly", "monthly"}:
                 return None, "cadence must be hourly, daily, weekly or monthly"
             timezone_name = payload.get("timezone", "Africa/Nairobi")
-            if not isinstance(timezone_name, str) or len(timezone_name) > 64:
+            if not isinstance(timezone_name, str) or not timezone_name or len(timezone_name) > 64:
                 return None, "timezone must be a valid timezone name"
+            try:
+                ZoneInfo(timezone_name)
+            except (ZoneInfoNotFoundError, ValueError):
+                return None, "timezone must be a valid IANA timezone"
             if not isinstance(payload.get("enabled", True), bool):
                 return None, "enabled must be boolean"
         elif domain in {"settlement_review", "refund_reversal_request"}:
@@ -209,8 +214,21 @@ def create_workflow_blueprint(session_factory):
         elif domain == "report_definition":
             if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
                 return None, "report_type must be transactions, discrepancies or reconciliation_summary"
-            if "schedule" in payload and not isinstance(payload["schedule"], dict):
-                return None, "schedule must be an object"
+            if "schedule" in payload:
+                schedule = payload["schedule"]
+                if not isinstance(schedule, dict):
+                    return None, "schedule must be an object"
+                if schedule.get("cadence") not in {"hourly", "daily", "weekly", "monthly"}:
+                    return None, "schedule cadence must be hourly, daily, weekly or monthly"
+                timezone_name = schedule.get("timezone", "Africa/Nairobi")
+                if not isinstance(timezone_name, str) or not timezone_name or len(timezone_name) > 64:
+                    return None, "schedule timezone must be a valid timezone name"
+                try:
+                    ZoneInfo(timezone_name)
+                except (ZoneInfoNotFoundError, ValueError):
+                    return None, "schedule timezone must be a valid IANA timezone"
+                if not isinstance(schedule.get("enabled", True), bool):
+                    return None, "schedule enabled must be boolean"
         elif domain == "report_run":
             if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
                 return None, "report_type must be transactions, discrepancies or reconciliation_summary"
