@@ -37,3 +37,30 @@ def test_auth_responses_are_not_cacheable(monkeypatch):
 
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Pragma"] == "no-cache"
+
+
+def test_alertmanager_receiver_fails_closed_without_secret_in_production(monkeypatch):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "production")
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET", raising=False)
+
+    response = webhook_app.app.test_client().post("/ops/alerts", json={"alerts": []})
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "alertmanager_auth_not_configured"
+
+
+def test_alertmanager_receiver_rejects_wrong_secret(monkeypatch):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "production")
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET", "test-secret-value-that-is-long-enough")
+
+    response = webhook_app.app.test_client().post(
+        "/ops/alerts",
+        json={"alerts": []},
+        headers={"X-Alertmanager-Secret": "wrong"},
+    )
+
+    assert response.status_code == 401
