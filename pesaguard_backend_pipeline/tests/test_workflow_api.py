@@ -160,3 +160,33 @@ def test_matching_rule_delete_is_auditable_soft_disable(workflow_client):
     assert deleted.status_code == 200
     assert deleted.get_json()["item"]["status"] == "disabled"
     assert deleted.get_json()["disabled"] is True
+
+
+
+def test_investigation_evidence_is_append_only_and_rejects_sensitive_fields(workflow_client):
+    client, _, headers = workflow_client
+    created = client.post(
+        "/api/v1/fraud-investigations",
+        headers=headers,
+        json={"title": "Investigate suspicious duplicate", "payload": {"evidence": []}},
+    )
+    assert created.status_code == 201
+    case_id = created.get_json()["item"]["id"]
+
+    blocked = client.post(
+        f"/api/v1/fraud-investigations/{case_id}/evidence",
+        headers=headers,
+        json={"evidence": {"type": "transaction_reference", "raw_payload": {"secret": "do-not-store"}}},
+    )
+    assert blocked.status_code == 400
+
+    added = client.post(
+        f"/api/v1/fraud-investigations/{case_id}/evidence",
+        headers=headers,
+        json={"evidence": {"type": "transaction_reference", "reference": "internal-ref-123", "note": "Compare with ledger"}},
+    )
+    assert added.status_code == 201
+    evidence = added.get_json()["item"]["payload"]["evidence"]
+    assert len(evidence) == 1
+    assert evidence[0]["reference"] == "internal-ref-123"
+    assert evidence[0]["added_by"] == "workflow-admin"
