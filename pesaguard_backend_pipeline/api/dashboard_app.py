@@ -1266,6 +1266,22 @@ def enforce_api_security():
         client_identity = user.user_id
 
     allowed, status = api_rate_limiter.is_allowed(client_identity, request.path)
+    if status.get("unavailable"):
+        # Do not mislabel an infrastructure/security-control outage as a client
+        # rate-limit violation. Production must remain fail-closed, but callers
+        # need a retryable 503 and operators need an actionable signal.
+        record_security_event()
+        logger.error(
+            "Distributed rate limiter unavailable; rejecting request safely for path: %s",
+            request.path,
+        )
+        response = jsonify({
+            "error": "rate_limiter_unavailable",
+            "message": "Request protection is temporarily unavailable. Please retry shortly.",
+        })
+        response.status_code = 503
+        response.headers["Retry-After"] = str(max(1, int(status.get("retry_after", 1))))
+        return response
     if not allowed:
         record_security_event()
         logger.warning("API rate limit exceeded for identity: %s on path: %s", client_identity, request.path)
