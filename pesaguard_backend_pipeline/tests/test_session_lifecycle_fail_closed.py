@@ -41,6 +41,7 @@ def test_session_lifecycle_read_error_fails_closed_without_legacy_fallback(
     assert session.rollback_calls >= 1
     assert session.closed is True
 
+
 @pytest.mark.parametrize("environment", ["production", "staging"])
 def test_missing_session_id_is_rejected_in_production_like_environments(
     monkeypatch, environment
@@ -58,6 +59,7 @@ def test_missing_session_id_remains_tolerated_in_development(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     assert auth_rbac._session_is_active(None, "user-1", "tenant-1") is True
+
 
 @pytest.mark.parametrize("environment", ["production", "staging"])
 def test_user_access_token_cannot_be_issued_without_session_id(
