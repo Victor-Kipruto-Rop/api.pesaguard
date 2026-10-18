@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import socket
+from types import SimpleNamespace
 from typing import Any, Dict
 from urllib.parse import urlsplit
 
@@ -97,11 +98,10 @@ def post_json_pinned(
             preload_content=True,
         )
         # Keep a requests-compatible minimal shape for the existing caller.
-        class _Response:
-            status_code = response.status
-            is_redirect = 300 <= response.status < 400
-            text = ""
-
-        return _Response()
+        return SimpleNamespace(
+            status_code=response.status,
+            is_redirect=300 <= response.status < 400,
+            text="",
+        )
     finally:
         pool.close()
