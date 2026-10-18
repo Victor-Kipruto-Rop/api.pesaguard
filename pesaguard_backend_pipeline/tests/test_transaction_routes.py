@@ -257,7 +257,7 @@ def test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only(da
     assert payload["tenant_id"] == "tenant-a"
     assert payload["data_source"] == "persisted_tenant_records"
     assert payload["transactions"]["total"] == 1
-    assert payload["transactions"]["total_amount"] == "25.00"
+    assert payload["transactions"]["amount_by_currency"] == {"KES": "25.00"}
     assert payload["discrepancies"]["total"] == 1
     assert payload["discrepancies"]["open"] == 1
     assert payload["discrepancies"]["by_severity"] == {"warning": 1}
