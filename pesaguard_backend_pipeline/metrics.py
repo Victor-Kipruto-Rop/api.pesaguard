@@ -152,7 +152,18 @@ def _shared_totals() -> Dict[str, Any]:
             "alert_deliveries": alert_deliveries,
         }
     except Exception:
-        logger.warning("Shared metrics read failed; using process-local telemetry.", exc_info=True)
+        # A previously healthy Redis pool can become stale after an idle timeout,
+        # failover, or network interruption. Invalidate it and schedule a bounded
+        # retry so recovery does not require restarting every API worker.
+        global _shared_redis_client, _shared_redis_degraded, _shared_redis_retry_after
+        _shared_redis_client = None
+        _shared_redis_degraded = True
+        _shared_redis_retry_after = time.monotonic() + _SHARED_METRICS_RETRY_SECONDS
+        try:
+            client.close()
+        except Exception:
+            logger.debug("Unable to close stale shared metrics Redis client", exc_info=True)
+        logger.warning("Shared metrics read failed; using process-local telemetry and retrying Redis connection.", exc_info=True)
         return {
             "requests": 0,
             "errors": 0,

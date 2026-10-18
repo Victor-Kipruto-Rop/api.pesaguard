@@ -168,17 +168,46 @@ class RedisRateLimiter:
         self._script: Any = None
         self._lock = threading.Lock()
 
+    def _invalidate_client(self, expected_client: Any = None) -> None:
+        """Discard a stale connection pool so the next request can reconnect."""
+        with self._lock:
+            if expected_client is not None and self._client is not expected_client:
+                return
+            client, self._client = self._client, None
+            self._script = None
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("Unable to close stale Redis rate-limit client", exc_info=True)
+
     def _get_client(self) -> Any:
-        if self._client is not None:
+        if self._client is not None and self._script is not None:
             return self._client
         with self._lock:
-            if self._client is not None:
+            if self._client is not None and self._script is not None:
                 return self._client
             import redis
-            client = redis.from_url(self.redis_url, socket_connect_timeout=2, socket_timeout=2)
-            self._script = client.register_script(_REDIS_TOKEN_BUCKET_LUA)
+            client = redis.from_url(
+                self.redis_url,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                health_check_interval=30,
+                socket_keepalive=True,
+            )
+            try:
+                # Fail during initialization rather than caching an unverified pool.
+                client.ping()
+                script = client.register_script(_REDIS_TOKEN_BUCKET_LUA)
+            except Exception:
+                try:
+                    client.close()
+                except Exception:
+                    logger.debug("Unable to close failed Redis rate-limit client", exc_info=True)
+                raise
             self._client = client
-            return self._client
+            self._script = script
+            return client
 
     def is_allowed(self, client_id: str, endpoint: str, max_per_minute: int, tokens_required: int = 1) -> Tuple[bool, Dict[str, Any]]:
         """Execute atomic Lua script on Redis store."""
@@ -188,7 +217,13 @@ class RedisRateLimiter:
         ttl = _BUCKET_IDLE_TTL_SECONDS
 
         client = self._get_client()
-        res = self._script(keys=[key], args=[max_per_minute, refill_rate, tokens_required, now, ttl], client=client)
+        try:
+            res = self._script(keys=[key], args=[max_per_minute, refill_rate, tokens_required, now, ttl], client=client)
+        except Exception:
+            # Redis-py pools can retain broken sockets after network timeouts. Drop
+            # the cached pool so a later request can recover after Redis returns.
+            self._invalidate_client(client)
+            raise
 
         allowed = bool(res[0])
         remaining = int(res[1])
@@ -206,17 +241,26 @@ class RedisRateLimiter:
         """Track distinct values atomically in Redis for distributed detection."""
         key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
         client = self._get_client()
-        pipe = client.pipeline(transaction=True)
-        pipe.sadd(key, value)
-        pipe.expire(key, window_seconds)
-        pipe.scard(key)
-        result = pipe.execute()
-        return int(result[2])
+        try:
+            pipe = client.pipeline(transaction=True)
+            pipe.sadd(key, value)
+            pipe.expire(key, window_seconds)
+            pipe.scard(key)
+            result = pipe.execute()
+            return int(result[2])
+        except Exception:
+            self._invalidate_client(client)
+            raise
 
     def reset(self, client_id: str, endpoint: str) -> None:
         """Delete a distributed token bucket during an authorized account unlock."""
         key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
-        self._get_client().delete(key)
+        client = self._get_client()
+        try:
+            client.delete(key)
+        except Exception:
+            self._invalidate_client(client)
+            raise
 
 
 class RateLimiter:

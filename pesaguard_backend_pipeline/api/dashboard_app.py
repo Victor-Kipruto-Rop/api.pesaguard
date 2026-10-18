@@ -1133,11 +1133,10 @@ def enforce_api_security():
         return None
 
     # Root requests are served by the FastAPI control plane in production, but
-    # some hosting probes may still reach this legacy Flask mount. Keep a root
-    # probe from consuming the API's distributed rate-limit bucket or returning
-    # 429/503 merely because Redis is unavailable. This exemption applies only
-    # to an unauthenticated GET of the exact root path; API routes stay protected.
-    if request.method == "GET" and request.path == "/":
+    # some hosting probes may still reach this legacy Flask mount. Keep GET/HEAD
+    # root probes from consuming the distributed rate-limit bucket or returning
+    # 429/503 merely because Redis is unavailable. API routes stay protected.
+    if request.method in {"GET", "HEAD"} and request.path == "/":
         return None
 
     if request.path.startswith("/health"):
@@ -1266,6 +1265,22 @@ def enforce_api_security():
         client_identity = user.user_id
 
     allowed, status = api_rate_limiter.is_allowed(client_identity, request.path)
+    if status.get("unavailable"):
+        # Do not mislabel an infrastructure/security-control outage as a client
+        # rate-limit violation. Production must remain fail-closed, but callers
+        # need a retryable 503 and operators need an actionable signal.
+        record_security_event()
+        logger.error(
+            "Distributed rate limiter unavailable; rejecting request safely for path: %s",
+            request.path,
+        )
+        response = jsonify({
+            "error": "rate_limiter_unavailable",
+            "message": "Request protection is temporarily unavailable. Please retry shortly.",
+        })
+        response.status_code = 503
+        response.headers["Retry-After"] = str(max(1, int(status.get("retry_after", 1))))
+        return response
     if not allowed:
         record_security_event()
         logger.warning("API rate limit exceeded for identity: %s on path: %s", client_identity, request.path)
