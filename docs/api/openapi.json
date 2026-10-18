@@ -211,6 +211,17 @@
           },
           {
             "$ref": "#/components/parameters/Filter"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated transaction lifecycle states. Supported values: RECEIVED, VALIDATED, PROCESSING, RECONCILING, RECONCILED, FAILED, REJECTED. This filters processing lifecycle state, not reconciliation match outcome.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "example": "FAILED,REJECTED"
+            }
           }
         ],
         "responses": {
