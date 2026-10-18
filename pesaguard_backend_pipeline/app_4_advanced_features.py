@@ -269,6 +269,25 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     return policy
 
 
+
+def _apply_external_idp_policy_update(
+    current_policy: Dict[str, Any], requested_policy: Dict[str, Any]
+) -> Tuple[Dict[str, Any], bool]:
+    """Apply configuration fields while invalidating approval after trust changes."""
+    policy = dict(current_policy)
+    mutable_policy = {
+        key: value for key, value in requested_policy.items()
+        if key not in {"approved_by", "approved_at", "review_required"}
+    }
+    changed = any(policy.get(key) != value for key, value in mutable_policy.items())
+    policy.update(mutable_policy)
+    if changed:
+        policy["approved_by"] = None
+        policy["approved_at"] = None
+        policy["review_required"] = True
+    return policy, changed
+
+
 def _validate_provider_trust_policy(tenant_id: Optional[str], policy: Optional[Dict[str, Any]], metadata: Optional[Dict[str, Any]]) -> bool:
     """Enforce tenant-specific provider trust rules for OIDC or SAML providers."""
     provider_policy = (policy or _provider_trust_policy_for_tenant(tenant_id)) or {}
@@ -4021,18 +4040,7 @@ def external_idp_policy_route():
     if isinstance(trust_policy, dict):
         # Approval metadata is server-controlled and may only be changed by the
         # dedicated review endpoint, never by the policy configuration payload.
-        mutable_policy = {
-            key: value for key, value in trust_policy.items()
-            if key not in {"approved_by", "approved_at", "review_required"}
-        }
-        policy_changed = any(policy.get(key) != value for key, value in mutable_policy.items())
-        policy.update(mutable_policy)
-        if policy_changed:
-            # Any trust-policy change invalidates prior approval. A separate
-            # authenticated review must approve the newly persisted configuration.
-            policy["approved_by"] = None
-            policy["approved_at"] = None
-            policy["review_required"] = True
+        policy, policy_changed = _apply_external_idp_policy_update(policy, trust_policy)
 
     pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
