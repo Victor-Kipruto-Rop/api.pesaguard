@@ -282,17 +282,37 @@ class DataProvenance:
         self.lineage_builder = lineage_builder or build_lineage
         self.now_fn = now_fn or _iso_now
 
-    def evaluate(self, raw: Dict[str, Any]) -> DataQualityResult:
-        # Fail closed before data-quality evaluation: an unscoped event cannot
-        # safely enter a tenant-isolated financial pipeline.
-        tenant_id = _require_tenant_id(raw)
+    def evaluate(
+        self,
+        raw: Dict[str, Any],
+        *,
+        trusted_tenant_id: Optional[str] = None,
+    ) -> DataQualityResult:
+        # Prefer tenant identity resolved by authenticated integration
+        # configuration. Payload-supplied tenant IDs are untrusted input.
+        declared_tenant_id = _tenant_id_from_payload(raw)
+        if trusted_tenant_id is not None:
+            trusted_tenant_id = trusted_tenant_id.strip()
+            if not trusted_tenant_id or trusted_tenant_id.lower() == "unknown":
+                raise ProvenanceError("trusted tenant_id must be a concrete tenant identifier")
+            if declared_tenant_id and declared_tenant_id != trusted_tenant_id:
+                raise ProvenanceError("payload tenant_id does not match authenticated tenant")
+            tenant_id = trusted_tenant_id
+        else:
+            # Compatibility mode for internal/legacy callers. Production
+            # webhook/API callers should pass a tenant resolved from credentials,
+            # integration configuration, or another authenticated server context.
+            tenant_id = _require_tenant_id(raw)
+
+        effective_raw = dict(raw)
+        effective_raw["tenant_id"] = tenant_id
         lineage = self.lineage_builder(
             event_id=str(raw.get("event_id") or _transaction_id_from_payload(raw) or "unknown"),
             transaction_id=_transaction_id_from_payload(raw) or "unknown",
             tenant_id=tenant_id,
             provider_id=_provider_from_payload(raw),
         )
-        return run_data_quality(raw, lineage=lineage)
+        return run_data_quality(effective_raw, lineage=lineage)
 
     def process(
         self,
@@ -300,8 +320,11 @@ class DataProvenance:
         session,
         *,
         quarantine_on_failure: bool = True,
+        trusted_tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        quality = self.evaluate(raw)
+        quality = self.evaluate(raw, trusted_tenant_id=trusted_tenant_id)
+        effective_raw = dict(raw)
+        effective_raw["tenant_id"] = quality.tenant_id
         from metrics import record_data_quality
         record_data_quality(quality)
         if quality.status == DataQualityStatus.FAIL:
@@ -309,7 +332,7 @@ class DataProvenance:
                 quarantine_record(
                     session,
                     quality,
-                    raw,
+                    effective_raw,
                     schema_version=self.schema_version,
                     pipeline_version=self.pipeline_version,
                 )
@@ -325,7 +348,7 @@ class DataProvenance:
             quarantine_record(
                 session,
                 quality,
-                raw,
+                effective_raw,
                 schema_version=self.schema_version,
                 pipeline_version=self.pipeline_version,
                 quarantine_reason="schema_incompatible",
@@ -340,7 +363,7 @@ class DataProvenance:
         persist_provenance(
             session,
             quality,
-            raw,
+            effective_raw,
             schema_version=self.schema_version,
             pipeline_version=self.pipeline_version,
         )
@@ -359,6 +382,7 @@ def record_webhook_provenance(
     *,
     schema_version: Optional[str] = None,
     pipeline_version: Optional[str] = None,
+    trusted_tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convenience wrapper used by the webhook ingestion path.
 
@@ -369,4 +393,6 @@ def record_webhook_provenance(
         schema_version=schema_version,
         pipeline_version=pipeline_version,
     )
-    return orchestrator.process(raw, session, quarantine_on_failure=True)
+    return orchestrator.process(
+        raw, session, quarantine_on_failure=True, trusted_tenant_id=trusted_tenant_id
+    )
