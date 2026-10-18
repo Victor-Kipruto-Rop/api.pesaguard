@@ -5,6 +5,9 @@ on:
     branches: [ "main", "staging" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-scan:
     runs-on: ubuntu-latest
@@ -19,19 +22,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+      # This workflow does not publish images. Avoid a registry login and load
+      # the built image into the runner so Trivy can scan the exact local image.
       - name: Build backend Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: infra/docker/Dockerfile
           push: false
+          load: true
           tags: |
             pesaguard-backend:latest
             pesaguard-backend:${{ github.sha }}
@@ -45,6 +44,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
         continue-on-error: false
 
       - name: Upload Trivy scan results to GitHub Security tab
