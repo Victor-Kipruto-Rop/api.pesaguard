@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import time
@@ -66,7 +67,7 @@ def _require_admin() -> None:
     """Enforce admin token authentication on sensitive configuration endpoints."""
     token = request.headers.get("X-Admin-Token")
     admin_api_token = os.getenv("PESAGUARD_ADMIN_API_TOKEN")
-    if not admin_api_token or token != admin_api_token:
+    if not admin_api_token or not token or not hmac.compare_digest(token, admin_api_token):
         record_security_event()
         logger.warning(
             "Admin API token authentication failed",
@@ -231,15 +232,32 @@ def setup_request_context():
 
 @app.after_request
 def add_correlation_id_header(response):
-    """Add correlation ID to response headers for client tracing."""
+    """Add correlation and baseline browser security headers to every API response."""
     correlation_id = get_correlation_id()
     response.headers["X-Correlation-ID"] = correlation_id
     context = get_observability_context()
     for header, key in (("X-Request-ID", "request_id"), ("X-Trace-ID", "trace_id")):
         if context.get(key):
             response.headers[header] = context[key]
+
+    # These headers are safe defaults for JSON APIs and reduce MIME sniffing,
+    # framing, referrer leakage, and unnecessary browser capabilities.
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=()",
+    )
+    if request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
+
+    if request.path.startswith(("/auth/", "/admin/")):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+
     record_http_request(
-        (__import__("time").perf_counter() - getattr(g, "request_started", __import__("time").perf_counter())) * 1000,
+        (time.perf_counter() - getattr(g, "request_started", time.perf_counter())) * 1000,
         status_code=response.status_code,
         timeout=response.status_code == 504,
     )
