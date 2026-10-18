@@ -41,6 +41,7 @@ from event_store import EventStore, ProcessResult, provider_account_id
 from fraud_risk_engine import assess_transaction, persist_assessment
 from logging_utils import configure_logging
 from models import Base, Discrepancy, ProcessedTransaction, ReconciliationMatch, ReconciliationOutbox, Transaction
+from workflow_models import TenantWorkflowRecord
 from reconciliation_engine import ReconciliationEngine, evaluate_smart_reconciliation_shadow
 from tenant_settings import TenantSettingsStore
 from communications.events import discrepancy_notification_event
@@ -124,6 +125,56 @@ def dispatch_discrepancy_alert(evaluation: Dict[str, Any], tenant_id: Optional[s
     return enqueue_notification_event(discrepancy_notification_event(evaluation, str(tid)))
 
 
+def _persist_transaction_quality_findings(session, evaluation: Dict[str, Any], tenant_id: str, trans_id: str, provider_id: str) -> int:
+    """Persist deterministic, tenant-scoped quality review findings in the reconciliation transaction.
+
+    Only finding codes and bounded classification metadata are stored here; raw callback
+    payloads, phone numbers, and arbitrary validator messages are deliberately excluded.
+    A deterministic ID makes retries idempotent for a tenant/transaction/finding code.
+    """
+    evidence = evaluation.get("evidence") if isinstance(evaluation.get("evidence"), dict) else {}
+    findings = evidence.get("transaction_quality_findings") or evaluation.get("transaction_quality_findings") or []
+    if not isinstance(findings, list):
+        return 0
+
+    created = 0
+    seen_ids = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        code_value = finding.get("code") or finding.get("finding_code") or finding.get("reason_code")
+        code = str(code_value or "").strip()[:100]
+        if not code:
+            continue
+        digest = hashlib.sha256(f"{tenant_id}:{provider_id}:{trans_id}:{code}".encode("utf-8")).hexdigest()[:32]
+        finding_id = f"dq_{digest}"
+        if finding_id in seen_ids or session.get(TenantWorkflowRecord, finding_id) is not None:
+            continue
+        seen_ids.add(finding_id)
+        severity_value = str(finding.get("severity") or "warning").strip().lower()
+        severity = severity_value if severity_value in {"low", "medium", "high", "critical"} else "warning"
+        session.add(TenantWorkflowRecord(
+            id=finding_id,
+            tenant_id=tenant_id,
+            domain="data_quality_finding",
+            status="open",
+            title=("Transaction quality: " + code.replace("_", " ").replace("-", " "))[:200],
+            description="Persisted automatically by the reconciliation quality gate; review the finding before taking corrective action.",
+            payload={
+                "source": "reconciliation_engine",
+                "finding_code": code,
+                "transaction_id": str(trans_id)[:255],
+                "provider_account_id": str(provider_id)[:128],
+                "severity": severity,
+                "engine_version": str(evidence.get("engine_version") or "unknown")[:64],
+            },
+            created_by="reconciliation_job",
+            updated_by="reconciliation_job",
+        ))
+        created += 1
+    return created
+
+
 def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans_id: str, tenant_id: str) -> ProcessResult:
     """
     Atomically commit the idempotency ledger entry and audit log record
@@ -158,6 +209,7 @@ def _persist_atomically(event: Dict[str, Any], evaluation: Dict[str, Any], trans
         processed.reconciliation_started_at = datetime.now(timezone.utc)
         processed.reconciliation_error = None
         result_payload = json.loads(json.dumps(evaluation, ensure_ascii=False, default=str))
+        _persist_transaction_quality_findings(session, evaluation, tenant_id, trans_id, provider_id)
 
         recent_transactions = session.query(Transaction).filter(
             Transaction.tenant_id == tenant_id,
