@@ -40,3 +40,17 @@ def test_load_dotenv_file_populates_sentry_settings(monkeypatch, tmp_path):
     assert os.getenv("SENTRY_DSN") == "https://examplePublicKey@o0.ingest.sentry.io/0"
     assert os.getenv("SENTRY_ENVIRONMENT") == "development"
     assert os.getenv("SENTRY_RELEASE") == "pesaguard@local"
+
+
+
+def test_init_sentry_skips_blank_or_malformed_dsn(monkeypatch):
+    obs = importlib.import_module("pesaguard_backend_pipeline.observability")
+    for dsn in ("", "   ", "not-a-valid-dsn", "ftp://example.com/project"):
+        monkeypatch.setenv("SENTRY_DSN", dsn)
+        if obs.sentry_sdk is not None:
+            monkeypatch.setattr(
+                obs.sentry_sdk,
+                "init",
+                lambda **kwargs: (_ for _ in ()).throw(AssertionError("Sentry must not initialize with an invalid DSN")),
+            )
+        assert obs.init_sentry() is False

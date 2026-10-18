@@ -14,6 +14,8 @@ gunicorn==23.0.0
 # fastapi >= 0.140 pulls a patched starlette (the 0.41.x line has open advisories).
 fastapi==0.141.1
 uvicorn[standard]==0.34.0
+# Supported WSGI-to-ASGI adapter; avoids deprecated Starlette WSGIMiddleware.
+a2wsgi==1.10.10
 
 # Streaming & Event Ingestion
 # NOTE: kafka-python-ng is the actively maintained, drop-in replacement

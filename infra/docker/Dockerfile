@@ -33,7 +33,7 @@ COPY pesaguard_backend_pipeline/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
 RUN groupadd --system --gid 10001 pesaguard \
-    && useradd --system --uid 10001 --gid pesaguard --home-dir /app --no-create-home --shell /usr/sbin/nologin pesaguard \
+    && useradd --uid 10001 --gid pesaguard --home-dir /app --no-create-home --shell /usr/sbin/nologin pesaguard \
     && mkdir -p /tmp/pesaguard-prometheus \
     && chown pesaguard:pesaguard /tmp/pesaguard-prometheus
 
