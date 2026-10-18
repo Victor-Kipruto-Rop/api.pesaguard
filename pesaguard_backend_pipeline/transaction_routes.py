@@ -408,6 +408,67 @@ def create_transaction_blueprint(
         finally:
             session.close()
 
+    @blueprint.get("/reconciliation/results")
+    @require_auth(required_permission="read:transactions")
+    def search_reconciliation_results():
+        tenant_id, error = _tenant_context()
+        if error is not None:
+            return error
+
+        try:
+            page = int(request.args.get("page", "1"))
+            per_page = int(request.args.get("per_page", "25"))
+        except ValueError:
+            return jsonify({"error": "invalid_pagination", "message": "page and per_page must be integers."}), 400
+        if page < 1 or per_page < 1 or per_page > 100:
+            return jsonify({"error": "invalid_pagination", "message": "page must be positive and per_page must be between 1 and 100."}), 400
+
+        status_filter = request.args.get("status", "").strip().upper()
+        allowed_statuses = {"MATCHED", "UNMATCHED", "PARTIAL", "MISMATCH", "DUPLICATE", "PENDING", "EXCEPTION"}
+        statuses = [value.strip() for value in status_filter.split(",") if value.strip()]
+        if len(status_filter) > 200 or any(value not in allowed_statuses for value in statuses):
+            return jsonify({"error": "invalid_status_filter", "message": "status contains an unsupported reconciliation outcome."}), 400
+
+        transaction_filter = request.args.get("transaction_id", "").strip()
+        if len(transaction_filter) > 200:
+            return jsonify({"error": "invalid_filter", "message": "transaction_id must not exceed 200 characters."}), 400
+
+        session = session_factory()
+        try:
+            query = session.query(ReconciliationMatch).filter(ReconciliationMatch.tenant_id == tenant_id)
+            if statuses:
+                query = query.filter(ReconciliationMatch.status.in_(statuses))
+            if transaction_filter:
+                query = query.filter(ReconciliationMatch.transaction_id == transaction_filter)
+            total = query.count()
+            rows = (
+                query.order_by(ReconciliationMatch.created_at.desc(), ReconciliationMatch.id.asc())
+                .offset((page - 1) * per_page)
+                .limit(per_page)
+                .all()
+            )
+            items = [{
+                "id": item.id,
+                "transaction_id": item.transaction_id,
+                "status": item.status,
+                "match_score": float(item.match_score),
+                "has_matched_record": item.matched_record is not None,
+                "matching_rules": item.matching_rules or [],
+                "match_timestamp": item.match_timestamp.isoformat() if item.match_timestamp else None,
+                "engine_version": item.engine_version,
+                "processing_latency_ms": float(item.processing_latency_ms),
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+            } for item in rows]
+            return jsonify({
+                "items": items,
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": (total + per_page - 1) // per_page,
+            }), 200
+        finally:
+            session.close()
+
     @blueprint.get("/reconciliation/<transaction_id>")
     @require_auth(required_permission="read:transactions")
     def get_reconciliation(transaction_id: str):
@@ -517,6 +578,41 @@ def create_transaction_blueprint(
         except SQLAlchemyError:
             session.rollback()
             return jsonify({"error": "risk_analysis_unavailable", "message": "Risk analysis could not be completed."}), 503
+        finally:
+            session.close()
+
+    @blueprint.get("/fraud/assessments")
+    @require_auth(required_permission="read:transactions")
+    def search_fraud_assessments():
+        tenant_id, error = _tenant_context()
+        if error is not None:
+            return error
+        try:
+            page = int(request.args.get("page", "1"))
+            per_page = int(request.args.get("per_page", "25"))
+        except ValueError:
+            return jsonify({"error": "invalid_pagination", "message": "page and per_page must be integers."}), 400
+        if page < 1 or per_page < 1 or per_page > 100:
+            return jsonify({"error": "invalid_pagination", "message": "page must be positive and per_page must be between 1 and 100."}), 400
+        level_filter = request.args.get("status", "").strip().upper()
+        allowed_levels = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        levels = [value.strip() for value in level_filter.split(",") if value.strip()]
+        if len(level_filter) > 100 or any(value not in allowed_levels for value in levels):
+            return jsonify({"error": "invalid_status_filter", "message": "status contains an unsupported risk level."}), 400
+        transaction_filter = request.args.get("transaction_id", "").strip()
+        if len(transaction_filter) > 200:
+            return jsonify({"error": "invalid_filter", "message": "transaction_id must not exceed 200 characters."}), 400
+        session = session_factory()
+        try:
+            query = session.query(FraudRiskAssessment).filter(FraudRiskAssessment.tenant_id == tenant_id)
+            if levels:
+                query = query.filter(FraudRiskAssessment.risk_level.in_(levels))
+            if transaction_filter:
+                query = query.filter(FraudRiskAssessment.transaction_id == transaction_filter)
+            total = query.count()
+            rows = query.order_by(FraudRiskAssessment.created_at.desc(), FraudRiskAssessment.id.asc()).offset((page - 1) * per_page).limit(per_page).all()
+            items = [{"id": item.id, "transaction_id": item.transaction_id, "risk_score": float(item.risk_score), "risk_level": item.risk_level, "action": item.action, "reason_codes": item.reason_codes or [], "model_version": item.model_version, "created_at": item.created_at.isoformat() if item.created_at else None} for item in rows]
+            return jsonify({"items": items, "page": page, "per_page": per_page, "total": total, "total_pages": (total + per_page - 1) // per_page}), 200
         finally:
             session.close()
 

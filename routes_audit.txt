@@ -206,3 +206,5 @@ PUT /api/v1/iam/password-policy -> manage:settings
 PUT /auth/mfa/policy -> manage:mfa
 PUT /escalation-rules/<rule_id> -> write:escalation_rules
 PUT /webhooks/<webhook_id> -> manage:webhooks
+GET /api/v1/reconciliation/results -> read:transactions
+GET /api/v1/fraud/assessments -> read:transactions

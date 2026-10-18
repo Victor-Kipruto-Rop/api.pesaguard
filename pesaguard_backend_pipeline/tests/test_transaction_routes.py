@@ -337,3 +337,78 @@ def test_import_history_is_paginated_and_tenant_scoped(dashboard_api, monkeypatc
     failed = client.get("/api/v1/imports?status=failed")
     assert failed.status_code == 200
     assert failed.get_json()["total"] == 1
+
+def test_reconciliation_results_collection_is_paginated_filtered_and_tenant_scoped(dashboard_api):
+    from datetime import datetime, timezone
+    from models import ReconciliationMatch
+
+    session = dashboard_api.transaction_event_store.Session()
+    try:
+        session.add_all([
+            ReconciliationMatch(
+                id="match-a", tenant_id="tenant-a", transaction_id="txn-a",
+                matched_record={"phone_number": "254700000000"}, matching_rules=["amount_exact"],
+                match_score=0.98, match_timestamp=datetime.now(timezone.utc),
+                engine_version="test", status="MATCHED", processing_latency_ms=12.5,
+            ),
+            ReconciliationMatch(
+                id="match-b", tenant_id="tenant-b", transaction_id="txn-b",
+                matched_record=None, matching_rules=[], match_score=0.0,
+                match_timestamp=datetime.now(timezone.utc), engine_version="test",
+                status="UNMATCHED", processing_latency_ms=15.0,
+            ),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    client = dashboard_api.app.test_client()
+    response = client.get("/api/v1/reconciliation/results?status=MATCHED&page=1&per_page=1", headers={"X-Tenant-ID": "tenant-a"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["page"] == 1
+    assert payload["per_page"] == 1
+    assert payload["items"][0]["transaction_id"] == "txn-a"
+    assert payload["items"][0]["status"] == "MATCHED"
+    assert payload["items"][0]["has_matched_record"] is True
+    assert "matched_record" not in payload["items"][0]
+
+    hidden = client.get("/api/v1/reconciliation/results", headers={"X-Tenant-ID": "tenant-b"})
+    assert hidden.status_code == 200
+    assert hidden.get_json()["total"] == 1
+    assert hidden.get_json()["items"][0]["transaction_id"] == "txn-b"
+
+    invalid = client.get("/api/v1/reconciliation/results?status=SETTLED", headers={"X-Tenant-ID": "tenant-a"})
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_status_filter"
+
+def test_fraud_assessment_collection_is_tenant_scoped_and_filters_risk_level(dashboard_api):
+    from datetime import datetime, timezone
+    from models import FraudRiskAssessment
+
+    session = dashboard_api.transaction_event_store.Session()
+    try:
+        session.add_all([
+            FraudRiskAssessment(id="risk-a", tenant_id="tenant-a", transaction_id="txn-a", risk_score=0.91, risk_level="HIGH", action="review", reason_codes=["velocity"], model_version="test-v1", rules_triggered=["velocity"], features={}, created_at=datetime.now(timezone.utc)),
+            FraudRiskAssessment(id="risk-b", tenant_id="tenant-b", transaction_id="txn-b", risk_score=0.99, risk_level="CRITICAL", action="review", reason_codes=["velocity"], model_version="test-v1", rules_triggered=["velocity"], features={}, created_at=datetime.now(timezone.utc)),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    client = dashboard_api.app.test_client()
+    response = client.get("/api/v1/fraud/assessments?status=HIGH", headers={"X-Tenant-ID": "tenant-a"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["transaction_id"] == "txn-a"
+    assert payload["items"][0]["risk_level"] == "HIGH"
+
+    hidden = client.get("/api/v1/fraud/assessments", headers={"X-Tenant-ID": "tenant-a"})
+    assert hidden.status_code == 200
+    assert all(item["transaction_id"] != "txn-b" for item in hidden.get_json()["items"])
+
+    invalid = client.get("/api/v1/fraud/assessments?status=EXTREME", headers={"X-Tenant-ID": "tenant-a"})
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_status_filter"
