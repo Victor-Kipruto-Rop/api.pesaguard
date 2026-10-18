@@ -168,15 +168,22 @@ _circuit_breaker = CircuitBreaker()
 
 
 def _require_payload_tenant_id(payload: Dict[str, Any]) -> str:
-    """Return an explicit tenant scope; never invent a shared default tenant."""
+    """Return one explicit tenant scope; reject missing, placeholder, or conflicting aliases."""
+    tenant_values = []
     for key in ("tenant_id", "TenantID", "tenantId", "Tenant-Id"):
         value = payload.get(key)
         if value is None:
             continue
         tenant_id = str(value).strip()
-        if tenant_id and tenant_id.lower() not in {"default", "unknown", "none", "null"}:
-            return tenant_id
-    raise ValueError("A concrete tenant_id is required before publishing or dead-lettering an event.")
+        if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
+            raise ValueError("A concrete tenant_id is required before publishing or dead-lettering an event.")
+        tenant_values.append(tenant_id)
+
+    if not tenant_values:
+        raise ValueError("A concrete tenant_id is required before publishing or dead-lettering an event.")
+    if len(set(tenant_values)) != 1:
+        raise ValueError("Conflicting tenant identifiers were supplied in the event payload.")
+    return tenant_values[0]
 
 
 def _validate_payload_schema(payload: Dict[str, Any]) -> None:
