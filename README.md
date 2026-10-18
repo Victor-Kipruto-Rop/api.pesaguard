@@ -59,7 +59,7 @@ Do not commit .env or production credentials. Generate secrets outside Git and p
 
 ## Documentation
 
-Operational, security, database, testing, and recovery procedures are under docs/ and infra/README.md.
+Operational, security, database, testing, and recovery procedures are under docs/ and infra/README.md. The [tenant isolation release gate](docs/operations/TENANT_ISOLATION_RELEASE_GATE.md) defines the trust boundary and evidence required before enabling live tenant traffic.
 
 ## Public status service and email subscriptions
 
