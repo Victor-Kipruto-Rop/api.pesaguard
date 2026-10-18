@@ -21,7 +21,8 @@ timeline within five business days.
 - Configure Daraja shared-secret or source allowlist controls; do not enable
   unrestricted webhook sources in production.
 - Configure payload encryption and rotate provider credentials outside source
-  control.
+  control. Follow the [webhook-secret encryption rollout](WEBHOOK_SECRET_MIGRATION.md)
+  before treating stored webhook credentials as migrated.
 - Apply Alembic migrations before starting application and worker processes.
 - Configure encrypted off-site backups and verify restore procedures.
 - Protect Prometheus metrics at the network or scrape layer.
