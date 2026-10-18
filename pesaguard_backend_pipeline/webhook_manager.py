@@ -24,6 +24,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from models import WebhookConfig, WebhookDelivery
+from data_protection import decrypt_value, encrypt_value
 
 logger = logging.getLogger("pesaguard.webhooks")
 
@@ -61,6 +62,13 @@ def _validate_webhook_url(url: str) -> Optional[str]:
     if not parsed.hostname:
         return "url_missing_hostname"
 
+    if parsed.username is not None or parsed.password is not None:
+        return "url_userinfo_not_allowed"
+    if parsed.fragment:
+        return "url_fragment_not_allowed"
+    if parsed.port not in (None, 443):
+        return "url_port_not_allowed"
+
     if parsed.hostname.lower() in {"localhost", "metadata.google.internal", "169.254.169.254"}:
         return "url_targets_reserved_hostname"
 
@@ -95,7 +103,7 @@ class WebhookManager:
         """Register a new webhook endpoint for a tenant."""
         rejection_reason = _validate_webhook_url(url)
         if rejection_reason:
-            logger.warning("Rejected webhook registration for tenant=%s: %s (url=%s)", tenant_id, rejection_reason, url)
+            logger.warning("Rejected webhook registration for tenant=%s: %s", tenant_id, rejection_reason)
             return {"error": "invalid_webhook_url", "reason": rejection_reason}
 
         webhook_id = f"webhook_{uuid.uuid4().hex[:12]}"
