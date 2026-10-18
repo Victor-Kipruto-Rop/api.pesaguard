@@ -14,8 +14,8 @@ import sys
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from data_protection import encrypt_value
-from models import WebhookConfig
+from data_protection import encrypt_value, protect_payload
+from models import WebhookConfig, WebhookDelivery
 
 
 def main() -> int:
@@ -53,14 +53,25 @@ def main() -> int:
         ]
         print(f"Webhook records inspected: {len(records)}")
         print(f"Legacy plaintext secrets found: {len(plaintext_records)}")
+
+        deliveries = session.query(WebhookDelivery).all()
+        protected_deliveries = [
+            (delivery, protect_payload(delivery.payload))
+            for delivery in deliveries
+            if protect_payload(delivery.payload) != delivery.payload
+        ]
+        print(f"Delivery payloads needing sensitive-field protection: {len(protected_deliveries)}")
         if not args.apply:
             print("Dry-run only; no database values changed. Re-run with --apply to migrate.")
             return 0
 
         for record in plaintext_records:
             record.signing_secret = encrypt_value(record.signing_secret)
+        for delivery, protected_payload in protected_deliveries:
+            delivery.payload = protected_payload
         session.commit()
         print(f"Encrypted secrets migrated: {len(plaintext_records)}")
+        print(f"Delivery payloads protected: {len(protected_deliveries)}")
         return 0
     except Exception:
         session.rollback()
