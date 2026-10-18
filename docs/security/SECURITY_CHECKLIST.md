@@ -21,7 +21,8 @@ timeline within five business days.
 - Configure Daraja shared-secret or source allowlist controls; do not enable
   unrestricted webhook sources in production.
 - Configure payload encryption and rotate provider credentials outside source
-  control.
+  control. Follow the [webhook-secret encryption rollout](WEBHOOK_SECRET_MIGRATION.md)
+  before treating stored webhook credentials as migrated.
 - Apply Alembic migrations before starting application and worker processes.
 - Configure encrypted off-site backups and verify restore procedures.
 - Protect Prometheus metrics at the network or scrape layer.
@@ -31,5 +32,6 @@ timeline within five business days.
 ## Operational Review
 
 - Record the deployment owner and rollback plan.
-- Review dependency and secret rotation status.
+- Review dependency and secret rotation status using [the production secret rotation runbook](../operations/SECRETS_ROTATION.md).
 - Confirm monitoring, alert routing, retention, and incident contacts.
+- Track implementation and evidence for every control in [the security implementation tracker](IMPLEMENTATION_TRACKER.md).

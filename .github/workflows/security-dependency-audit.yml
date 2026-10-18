@@ -1,0 +1,39 @@
+name: Security dependency audit
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main, staging]
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    name: Audit pinned Python dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pesaguard_backend_pipeline/requirements-dev.txt
+
+      - name: Install dependency auditor
+        run: python -m pip install --upgrade pip pip-audit
+
+      - name: Audit runtime and test dependencies
+        run: pip-audit -r pesaguard_backend_pipeline/requirements-dev.txt

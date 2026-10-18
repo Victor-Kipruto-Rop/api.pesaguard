@@ -24,6 +24,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from models import WebhookConfig, WebhookDelivery
+from data_protection import decrypt_value, encrypt_value, protect_payload
 
 logger = logging.getLogger("pesaguard.webhooks")
 
@@ -61,12 +62,26 @@ def _validate_webhook_url(url: str) -> Optional[str]:
     if not parsed.hostname:
         return "url_missing_hostname"
 
+    if parsed.username is not None or parsed.password is not None:
+        return "url_userinfo_not_allowed"
+    if parsed.fragment:
+        return "url_fragment_not_allowed"
+    try:
+        port = parsed.port
+    except ValueError:
+        return "url_invalid_port"
+    if port not in (None, 443):
+        return "url_port_not_allowed"
+
     if parsed.hostname.lower() in {"localhost", "metadata.google.internal", "169.254.169.254"}:
         return "url_targets_reserved_hostname"
 
     try:
         resolved_ips = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None)}
     except socket.gaierror:
+        return "url_hostname_cannot_be_resolved"
+
+    if not resolved_ips:
         return "url_hostname_cannot_be_resolved"
 
     for ip_str in resolved_ips:
@@ -95,7 +110,7 @@ class WebhookManager:
         """Register a new webhook endpoint for a tenant."""
         rejection_reason = _validate_webhook_url(url)
         if rejection_reason:
-            logger.warning("Rejected webhook registration for tenant=%s: %s (url=%s)", tenant_id, rejection_reason, url)
+            logger.warning("Rejected webhook registration for tenant=%s: %s", tenant_id, rejection_reason)
             return {"error": "invalid_webhook_url", "reason": rejection_reason}
 
         webhook_id = f"webhook_{uuid.uuid4().hex[:12]}"
@@ -109,7 +124,10 @@ class WebhookManager:
             retry_attempts=min(retry_attempts, 5),
             timeout_seconds=min(timeout_seconds, 30),
             active=True,
-            signing_secret=signing_secret,
+            # Store ciphertext at rest; return the plaintext to the tenant only
+            # in this registration response. Legacy plaintext values remain
+            # readable until explicitly migrated/rotated.
+            signing_secret=encrypt_value(signing_secret),
         )
         self.session.add(webhook)
         self.session.commit()
@@ -174,7 +192,9 @@ class WebhookManager:
             tenant_id=webhook.tenant_id,
             webhook_id=webhook.id,
             event_type=event_type,
-            payload=payload,
+            # Protect sensitive leaves before persisting the delivery audit row;
+            # the outbound HTTP request below still uses the original payload.
+            payload=protect_payload(payload),
             status="pending",
             attempt_count=0,
         )
@@ -204,7 +224,9 @@ class WebhookManager:
                     allow_redirects=False,
                 )
                 delivery.response_status = response.status_code
-                delivery.response_body = response.text[:500] if response.text else ""
+                # Receiver responses are untrusted and may echo request payloads
+                # or secrets. Persist the status code, not response content.
+                delivery.response_body = ""
 
                 if 200 <= response.status_code < 300:
                     delivery.status = "success"
@@ -226,7 +248,13 @@ class WebhookManager:
             except requests.Timeout:
                 logger.warning("Webhook delivery_id=%s timed out on attempt %d", delivery_id, attempt + 1)
             except Exception as exc:
-                logger.error("Webhook delivery_id=%s failed on attempt %d: %s", delivery_id, attempt + 1, exc)
+                # Exception strings may contain destination URLs/query credentials.
+                logger.error(
+                    "Webhook delivery_id=%s failed on attempt %d (error_type=%s)",
+                    delivery_id,
+                    attempt + 1,
+                    type(exc).__name__,
+                )
 
             if attempt < max_attempts - 1:
                 wait_seconds = 2 ** attempt
@@ -245,7 +273,11 @@ class WebhookManager:
 
     def _generate_signature(self, webhook: WebhookConfig, payload: Dict[str, Any], timestamp: str) -> str:
         """Generate HMAC SHA-256 signature using the webhook signing secret."""
-        secret = getattr(webhook, "signing_secret", None) or webhook.id
+        stored_secret = getattr(webhook, "signing_secret", None) or webhook.id
+        secret_value = decrypt_value(stored_secret) if stored_secret.startswith("enc:v1:") else stored_secret
+        if not isinstance(secret_value, str) or not secret_value:
+            raise ValueError("Webhook signing secret is unavailable")
+        secret = secret_value
         raw_body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         signed_payload = f"{timestamp}.{raw_body}".encode("utf-8")
 

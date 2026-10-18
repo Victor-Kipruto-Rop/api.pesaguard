@@ -46,12 +46,17 @@ def _record_security_event() -> None:
 _INSECURE_DEV_SECRET = "pesaguard-secret-key-change-in-prod"
 
 
+def _allow_insecure_development_secret() -> bool:
+    """Permit the bootstrap signing secret only in explicit dev/test environments."""
+    return (
+        os.getenv("PESAGUARD_ALLOW_INSECURE_DEV_SECRET") == "1"
+        and runtime_environment() in {"development", "test"}
+    )
+
+
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
-    if (
-        os.getenv("PESAGUARD_ALLOW_INSECURE_DEV_SECRET") == "1"
-        and runtime_environment() != "production"
-    ):
+    if _allow_insecure_development_secret():
         SECRET_KEY = _INSECURE_DEV_SECRET
         logger.warning(
             "JWT_SECRET_KEY is not set â€” using an insecure dev secret because "
@@ -179,7 +184,10 @@ def _jwt_verification_key(token: str) -> str:
 
 def _session_is_active(session_id: Optional[str], user_id: str, tenant_id: str) -> bool:
     if not session_id:
-        return True
+        # Production and staging user tokens must be tied to persisted session
+        # state so revocation and idle/absolute expiry cannot be bypassed by
+        # omitting the session claim. Machine principals are handled separately.
+        return runtime_environment() not in {"production", "staging"}
     if not isinstance(session_id, str):
         return False
     _ensure_revocation_store_ready()
@@ -219,17 +227,20 @@ def _session_is_active(session_id: Optional[str], user_id: str, tenant_id: str) 
         return True
     except Exception as exc:
         session.rollback()
-        # Keep older test/bootstrap schemas readable while production migrations
-        # add the lifecycle columns used by the primary path above.
-        try:
-            legacy_row = session.execute(
-                text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
-                {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
-            ).first()
-            return bool(legacy_row and legacy_row[0])
-        except Exception:
-            session.rollback()
-            raise AuthenticationUnavailable("Session state is unavailable") from exc
+        # Legacy bootstrap schemas are tolerated only for local development/tests.
+        # Production and staging must fail closed if lifecycle columns or session
+        # state cannot be read; otherwise a migration error could bypass expiry
+        # and idle-timeout enforcement.
+        if runtime_environment() not in {"production", "staging"}:
+            try:
+                legacy_row = session.execute(
+                    text("SELECT active FROM user_sessions WHERE id = :session_id AND user_id = :user_id AND tenant_id = :tenant_id"),
+                    {"session_id": session_id, "user_id": user_id, "tenant_id": tenant_id},
+                ).first()
+                return bool(legacy_row and legacy_row[0])
+            except Exception:
+                session.rollback()
+        raise AuthenticationUnavailable("Session state is unavailable") from exc
     finally:
         session.close()
 
@@ -269,9 +280,9 @@ def _account_is_active_and_current(user_id: str, tenant_id: str, authorization_v
 
 
 def auth_required() -> bool:
-    """Allow auth bypass only outside production deployments."""
+    """Require API authentication in staging and production regardless of overrides."""
     environment = runtime_environment()
-    if environment in {"production", "prod"}:
+    if environment in {"production", "staging"}:
         return True
     return os.getenv("PESAGUARD_API_AUTH_REQUIRED", "1") == "1"
 
@@ -849,6 +860,10 @@ class AuthRBAC:
         organization_id: Optional[str] = None,
     ) -> str:
         """Generate a short-lived access JWT with explicit security claims and minimal payload data."""
+        if runtime_environment() in {"production", "staging"} and not (
+            isinstance(session_id, str) and session_id.strip()
+        ):
+            raise ValueError("session_id is required for user access tokens in staging and production.")
         if not _valid_tenant_id(tenant_id):
             raise ValueError("tenant_id must match the configured tenant ID format.")
         authorization_version = _account_authorization_version(user_id, tenant_id)

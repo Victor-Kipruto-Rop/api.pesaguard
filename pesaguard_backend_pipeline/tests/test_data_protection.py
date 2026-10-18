@@ -18,3 +18,10 @@ def test_identifier_tokens_are_deterministic_without_revealing_plaintext():
     assert first == second
     assert first.startswith("tok:v1:")
     assert "254700000000" not in first
+
+def test_protect_payload_is_idempotent_for_already_encrypted_values():
+    payload = {"msisdn": "254700000000"}
+    protected = protect_payload(payload)
+
+    assert protect_payload(protected) == protected
+    assert unprotect_payload(protected) == payload
