@@ -10,7 +10,7 @@ try:
     from a2wsgi import WSGIMiddleware
     from fastapi.responses import JSONResponse
 except ImportError as exc:  # pragma: no cover - exercised in dependency installation
-    raise RuntimeError("FastAPI control plane requires fastapi and uvicorn dependencies") from exc
+    raise RuntimeError("FastAPI control plane requires fastapi, uvicorn, and a2wsgi dependencies") from exc
 
 from .api.dashboard_app import create_app as create_dashboard_app
 from .health import build_health_payload, sanitize_health_payload
