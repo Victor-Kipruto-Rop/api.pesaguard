@@ -23,6 +23,18 @@ financial traffic on the basis of this tracker.
 - [x] Add focused regression tests for key separation and reset behavior.
 - [x] Add a production secret-rotation runbook covering signing, encryption,
   backup, provider, database, Redis, monitoring, and CI credentials.
+- [x] Add API baseline security headers, HSTS for HTTPS requests, and no-store
+  cache controls for authentication/admin responses; regression tests added.
+- [x] Use constant-time comparison for the administrative API token.
+- [x] Disable the legacy static-user login route in staging/production so only
+  database-backed, persisted-session authentication can be used.
+- [x] Encrypt newly registered webhook signing secrets at rest, avoid persisting
+  receiver response bodies, and redact raw delivery exception strings.
+- [x] Reject webhook destination URL credentials, fragments, malformed ports,
+  and nonstandard ports; repeat URL validation at delivery.
+- [x] Require an independent payload encryption key in staging/production and
+  add a dry-run-first migration for legacy plaintext webhook secrets.
+- [x] Add a scheduled/PR dependency vulnerability audit workflow.
 - [ ] Run focused tests and the full CI suite on the branch.
 - [ ] Verify the Redis-backed integration test against a real Redis service.
 - [ ] Merge only after review and passing checks.
@@ -40,6 +52,8 @@ financial traffic on the basis of this tracker.
 - [x] Restrict the insecure bootstrap JWT secret override to explicit development/test environments; regression test added (execution pending).
 - [x] Prevent API authentication from being disabled in staging as well as production; regression test added (execution pending).
 - [ ] Verify every route's role/permission and object-level authorization.
+- [ ] Verify webhook DNS-rebinding defenses with an IP-pinned TLS transport or
+  controlled egress proxy; URL validation alone is not sufficient.
 - [ ] Add cross-tenant regression tests for all tenant-owned resources.
 - [ ] Verify PostgreSQL RLS/constraints where supported and prove tenant context
   cannot be forged by request input.
@@ -122,8 +136,9 @@ financial traffic on the basis of this tracker.
   staging environment/deployment secrets remain unconfigured.
 - This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
 - Focused tests were added for Redis key separation/reset and bounded distinct
-  state, production/staging session-lifecycle fail-closed behavior, and insecure JWT-secret environment
-  restrictions. They have not yet been executed by this
+  state, session-lifecycle fail-closed behavior, auth/secret environment
+  restrictions, API security headers, webhook secret encryption, and destination
+  URL validation. They have not yet been executed by this
   tool session; a passing result must not be inferred from test code alone.
 - Render currently has no provisioned managed Redis service; provisioning was
   blocked by Render billing requirements. Sentry initialization was previously
