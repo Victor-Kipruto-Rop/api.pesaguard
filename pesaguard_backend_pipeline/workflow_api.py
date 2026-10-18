@@ -8,6 +8,7 @@ at the configured time. Report runs execute a bounded persisted-data summary.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
@@ -16,7 +17,8 @@ from sqlalchemy import func
 
 from auth_rbac import get_current_user, require_auth
 from action_audit import ActionAuditRecord, persist_audit_event
-from models import Discrepancy, Transaction
+from models import DeletionRequest, Discrepancy, Transaction
+from deletion_workflow import DeletionWorkflow, DeletionWorkflowError
 from workflow_models import TenantWorkflowRecord
 
 DOMAIN_PATHS = {
@@ -296,8 +298,15 @@ def create_workflow_blueprint(session_factory):
         elif domain == "privacy_request":
             if payload.get("request_type") not in {"access", "export", "correction", "deletion"}:
                 return None, "request_type must be access, export, correction or deletion"
-            if payload.get("request_type") == "deletion" and payload.get("execute_immediately"):
-                return None, "deletion requires a reviewed, separately authorized execution workflow"
+            if payload.get("request_type") == "deletion":
+                transaction_id = payload.get("transaction_id")
+                reason = payload.get("reason")
+                if not isinstance(transaction_id, str) or not transaction_id.strip() or len(transaction_id) > 255:
+                    return None, "deletion requests require a transaction_id of at most 255 characters"
+                if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 1000:
+                    return None, "deletion requests require a reason of at most 1000 characters"
+                if payload.get("execute_immediately"):
+                    return None, "deletion requires a reviewed, separately authorized execution workflow"
         elif domain == "fraud_investigation":
             evidence = payload.get("evidence", [])
             if not isinstance(evidence, list) or len(evidence) > 100:
@@ -505,9 +514,14 @@ def create_workflow_blueprint(session_factory):
                 if domain == "privacy_request" and valid["status"] == "completed":
                     return jsonify({"error": "separate_execution_required", "message": "A privacy request cannot be marked completed until an approved export/deletion execution workflow confirms completion."}), 409
                 record.status = valid["status"]
-            if domain in {"settlement_review", "refund_reversal_request"} and record.status in {"approved", "rejected"}:
-                # Approval is a review decision only; no provider call or money movement is triggered.
-                record.payload = {**(record.payload or {}), "review_decision_at": datetime.now(timezone.utc).isoformat()}
+            if domain in {"settlement_review", "refund_reversal_request", "privacy_request"} and record.status in {"approved", "rejected"}:
+                # Review decisions are auditable metadata only; financial provider actions are never triggered.
+                record.payload = {
+                    **(record.payload or {}),
+                    "review_decision_at": datetime.now(timezone.utc).isoformat(),
+                    "reviewed_by": user_id,
+                    "review_decision": record.status,
+                }
             record.updated_by = user_id
             record.version += 1
             record.updated_at = datetime.now(timezone.utc)
@@ -532,6 +546,139 @@ def create_workflow_blueprint(session_factory):
         bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth(write_permission)(_make_create(domain, _create_domain)), methods=["POST"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth(read_permission)(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth(write_permission)(_make_update(domain, _update_domain)), methods=["PATCH"])
+
+    @bp.post("/api/v1/privacy-requests/<record_id>/execute")
+    @require_auth("write:settings")
+    def execute_privacy_deletion(record_id):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        body, error = _json_object()
+        if error:
+            return error
+        authorization_reference = body.get("authorization_reference")
+        if not isinstance(authorization_reference, str) or not authorization_reference.strip() or len(authorization_reference.strip()) > 255:
+            return jsonify({"error": "authorization_reference_required", "message": "A reviewed authorization reference is required."}), 400
+        result, error = _get_domain_record("privacy_request", record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            principal = get_current_user()
+            roles = {str(role).lower() for role in (getattr(principal, "roles", []) or [])}
+            if not roles.intersection({"admin", "owner", "compliance_officer", "security_admin"}):
+                return jsonify({"error": "privacy_execution_permission_required", "message": "A privileged compliance/security reviewer is required."}), 403
+            payload = dict(record.payload or {})
+            if payload.get("request_type") != "deletion":
+                return jsonify({"error": "unsupported_privacy_execution", "message": "This execution endpoint currently supports approved transaction-deletion requests only."}), 409
+            if record.status != "approved":
+                return jsonify({"error": "privacy_request_not_approved", "message": "The privacy request must be approved before execution."}), 409
+            if not payload.get("reviewed_by") or payload.get("reviewed_by") == record.created_by or user_id == record.created_by:
+                return jsonify({"error": "separation_of_duties_required", "message": "A different privileged reviewer must approve and execute the request."}), 403
+            transaction_id = payload.get("transaction_id")
+            reason = payload.get("reason")
+            if not isinstance(transaction_id, str) or not transaction_id.strip():
+                return jsonify({"error": "transaction_id_required", "message": "The approved request has no valid transaction_id."}), 400
+
+            deletion_request_id = payload.get("deletion_request_id")
+            deletion_request = None
+            if deletion_request_id:
+                deletion_request = session.query(DeletionRequest).filter_by(
+                    id=deletion_request_id, tenant_id=tenant_id, transaction_id=transaction_id
+                ).with_for_update().first()
+                if deletion_request is None:
+                    return jsonify({"error": "deletion_execution_record_missing", "message": "The linked deletion execution record was not found."}), 409
+                if deletion_request.status in {"deleted", "anonymized"}:
+                    payload.update({
+                        "execution_status": "completed",
+                        "execution_decision": deletion_request.decision,
+                        "execution_completed_at": deletion_request.completed_at.isoformat() if deletion_request.completed_at else datetime.now(timezone.utc).isoformat(),
+                    })
+                    record.payload = payload
+                    record.status = "completed"
+                    record.updated_by = user_id
+                    record.updated_at = datetime.now(timezone.utc)
+                    record.version += 1
+                    _record_workflow_audit(
+                        session, tenant_id=tenant_id, user_id=user_id,
+                        action="configuration.updated", domain="privacy_request", record_id=record.id,
+                        operation="privacy_execution_reconciled", version=record.version,
+                    )
+                    session.commit()
+                    return jsonify({"item": _serialize(record), "execution": {"status": deletion_request.status, "decision": deletion_request.decision}}), 200
+                if deletion_request.status != "pending":
+                    return jsonify({"error": "deletion_execution_not_pending", "message": "The linked deletion execution is not pending."}), 409
+            else:
+                deletion_request = DeletionRequest(
+                    id=f"del_{uuid.uuid4().hex}",
+                    tenant_id=tenant_id,
+                    transaction_id=transaction_id,
+                    requested_by=record.created_by,
+                    reason=reason.strip()[:1000],
+                    status="pending",
+                )
+                session.add(deletion_request)
+                session.flush()
+                payload["deletion_request_id"] = deletion_request.id
+                payload["execution_status"] = "running"
+                payload["execution_started_at"] = datetime.now(timezone.utc).isoformat()
+                record.payload = payload
+                record.updated_by = user_id
+                record.updated_at = datetime.now(timezone.utc)
+                record.version += 1
+                _record_workflow_audit(
+                    session, tenant_id=tenant_id, user_id=user_id,
+                    action="configuration.updated", domain="privacy_request", record_id=record.id,
+                    operation="privacy_execution_started", version=record.version,
+                )
+                session.commit()
+
+            deletion_workflow = DeletionWorkflow()
+            deletion_request = deletion_workflow.execute(
+                session,
+                deletion_request.id,
+                authorize=lambda item: (
+                    item.tenant_id == tenant_id
+                    and item.transaction_id == transaction_id
+                    and item.requested_by == record.created_by
+                    and payload.get("reviewed_by") != item.requested_by
+                    and user_id != item.requested_by
+                    and bool(roles.intersection({"admin", "owner", "compliance_officer", "security_admin"}))
+                ),
+                authorization_reference=authorization_reference.strip(),
+            )
+            session.refresh(record)
+            payload = dict(record.payload or {})
+            payload.update({
+                "execution_status": "completed" if deletion_request.status in {"deleted", "anonymized"} else "failed",
+                "execution_decision": deletion_request.decision,
+                "execution_completed_at": deletion_request.completed_at.isoformat() if deletion_request.completed_at else datetime.now(timezone.utc).isoformat(),
+                "dependency_report": dict(deletion_request.dependency_report or {}),
+            })
+            record.payload = payload
+            record.status = "completed" if deletion_request.status in {"deleted", "anonymized"} else "failed"
+            record.updated_by = user_id
+            record.updated_at = datetime.now(timezone.utc)
+            record.version += 1
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.updated", domain="privacy_request", record_id=record.id,
+                operation="privacy_execution_completed", version=record.version,
+            )
+            session.commit()
+            return jsonify({"item": _serialize(record), "execution": {
+                "status": deletion_request.status,
+                "decision": deletion_request.decision,
+                "dependency_report": dict(deletion_request.dependency_report or {}),
+            }}), 200
+        except DeletionWorkflowError as exc:
+            session.rollback()
+            return jsonify({"error": "privacy_execution_failed", "message": str(exc)}), 409
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "privacy_execution_failed", "message": "The privacy request could not be executed safely."}), 500
+        finally:
+            session.close()
 
     # Matching-rule deletion is a soft-disable to preserve auditability of prior runs.
     @bp.delete("/api/v1/matching-rules/<record_id>")
