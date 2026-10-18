@@ -277,9 +277,9 @@ def _account_is_active_and_current(user_id: str, tenant_id: str, authorization_v
 
 
 def auth_required() -> bool:
-    """Allow auth bypass only outside production deployments."""
+    """Require API authentication in staging and production regardless of overrides."""
     environment = runtime_environment()
-    if environment in {"production", "prod"}:
+    if environment in {"production", "staging"}:
         return True
     return os.getenv("PESAGUARD_API_AUTH_REQUIRED", "1") == "1"
 
