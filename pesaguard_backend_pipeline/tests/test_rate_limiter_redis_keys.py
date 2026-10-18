@@ -1,47 +1,29 @@
-"""Regression tests for Redis rate-limiter key-type separation."""
+"""Regression tests for Redis rate-limiter key-type separation and bounded state."""
 
 from __future__ import annotations
 
-from rate_limiter import RedisRateLimiter
-
-
-class _Pipeline:
-    def __init__(self, client):
-        self.client = client
-
-    def sadd(self, key, value):
-        self.client.sadd_calls.append((key, value))
-        return self
-
-    def expire(self, key, seconds):
-        self.client.expire_calls.append((key, seconds))
-        return self
-
-    def scard(self, key):
-        self.client.scard_calls.append(key)
-        return self
-
-    def execute(self):
-        return [1, True, 1]
+from rate_limiter import (
+    RedisRateLimiter,
+    TokenBucketRateLimiter,
+    _MAX_DISTINCT_VALUES_PER_BUCKET,
+)
 
 
 class _RedisClient:
     def __init__(self):
-        self.sadd_calls = []
-        self.expire_calls = []
-        self.scard_calls = []
+        self.eval_calls = []
         self.delete_calls = []
 
-    def pipeline(self, transaction=True):
-        assert transaction is True
-        return _Pipeline(self)
+    def eval(self, script, numkeys, *args):
+        self.eval_calls.append((script, numkeys, args))
+        return 1
 
     def delete(self, *keys):
         self.delete_calls.append(keys)
         return len(keys)
 
 
-def test_distinct_attempts_use_a_different_key_from_token_bucket():
+def test_distinct_attempts_use_separate_bounded_key_from_token_bucket():
     client = _RedisClient()
     limiter = RedisRateLimiter("redis://unused")
     limiter._get_client = lambda: client
@@ -58,9 +40,12 @@ def test_distinct_attempts_use_a_different_key_from_token_bucket():
     distinct_key = "pesaguard:ratelimit:distinct:tenant-a:user-1:login"
     assert distinct_count == 1
     assert bucket_key != distinct_key
-    assert client.sadd_calls == [(distinct_key, "attempt-1")]
-    assert client.expire_calls == [(distinct_key, 60)]
-    assert client.scard_calls == [distinct_key]
+    assert len(client.eval_calls) == 1
+    script, numkeys, args = client.eval_calls[0]
+    assert numkeys == 1
+    assert args == (distinct_key, "attempt-1", 60, _MAX_DISTINCT_VALUES_PER_BUCKET)
+    assert "SPOP" in script
+    assert "EXPIRE" in script
 
 
 def test_reset_clears_bucket_and_distinct_attempt_state():
@@ -76,3 +61,13 @@ def test_reset_clears_bucket_and_distinct_attempt_state():
             "pesaguard:ratelimit:distinct:tenant-a:user-1:login",
         )
     ]
+
+
+def test_in_memory_distinct_attempt_tracking_has_a_hard_cap(monkeypatch):
+    limiter = TokenBucketRateLimiter(default_max_per_minute=10)
+    for index in range(_MAX_DISTINCT_VALUES_PER_BUCKET + 25):
+        count = limiter.record_distinct("client-a", "login", f"account-{index}", 60)
+
+    key = "client-a:login"
+    assert count == _MAX_DISTINCT_VALUES_PER_BUCKET
+    assert len(limiter.distinct_values[key][0]) == _MAX_DISTINCT_VALUES_PER_BUCKET
