@@ -4,9 +4,11 @@ import io
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from action_audit import Base as AuditBase
 from batch_ingestion import BatchImportError, BatchImportService, ObjectStorage
 from event_store import ProcessResult
 from models import Base, ImportJob
+from workflow_models import TenantWorkflowRecord
 
 
 class FakeIngestionService:
@@ -30,6 +32,7 @@ def _csv_content():
 def test_submit_and_process_tracks_batch_counters(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'imports.db'}")
     Base.metadata.create_all(engine)
+    AuditBase.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     service = BatchImportService(FakeIngestionService(), ObjectStorage(str(tmp_path / "objects")))
 
@@ -49,6 +52,12 @@ def test_submit_and_process_tracks_batch_counters(tmp_path):
         assert processed.records_failed == 1
         assert processed.completed_at is not None
         assert processed.error_summary[0]["record"] == 2
+        findings = session.query(TenantWorkflowRecord).filter_by(tenant_id="tenant-a", domain="data_quality_finding").all()
+        assert len(findings) == 1
+        assert findings[0].payload["source"] == "batch_import"
+        assert findings[0].payload["finding_code"] == "IMPORT_RECORD_INVALID"
+        assert findings[0].payload["failed_record_count"] == 1
+        assert "record" not in findings[0].payload
 
 
 def test_submit_rejects_unsupported_formats_and_sources(tmp_path):
