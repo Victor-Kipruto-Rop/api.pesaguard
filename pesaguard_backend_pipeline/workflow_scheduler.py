@@ -281,8 +281,6 @@ def process_queued_reconciliation_runs(
     batch_size: int = 100,
 ) -> dict[str, int]:
     """Execute queued runs over pending tenant transactions through the established reconciliation path."""
-    import reconciliation_job
-
     instant = _as_utc(now or datetime.now(timezone.utc))
     max_runs = max(1, min(50, int(max_runs)))
     batch_size = max(1, min(500, int(batch_size)))
@@ -392,6 +390,8 @@ def process_queued_reconciliation_runs(
                 join_count = joined_query.count()
                 if join_count < pending_count:
                     raise RuntimeError("pending_transaction_payload_missing")
+
+                import reconciliation_job
 
                 registry = reconciliation_job.ConnectorRegistry()
                 connector = registry.get_connector(tenant_id)
