@@ -18,7 +18,7 @@ This contract describes the additive workflow endpoints introduced for the tenan
 | Privacy requests | `/api/v1/privacy-requests` | `read:settings`, `write:settings` | Registers access/export/correction/deletion requests. Deletion/export execution remains a separately authorized workflow; requests cannot be marked completed through the generic update route. |
 | Support cases | `/api/v1/support-cases` | `read:settings`, `write:settings` | Persists tenant-scoped support cases and status. |
 
-Each collection supports `GET` and `POST`; each `/<record_id>` route supports tenant-scoped `GET` and `PATCH`. List parameters: `page` (minimum 1), `per_page` (1–100), `status` (comma-separated validated statuses), and `q` (title search). Updates accept optional `version`; mismatches return HTTP 409.
+Each collection supports `GET` and `POST`; each `/<record_id>` route supports tenant-scoped `GET` and `PATCH`. Matching rules additionally support `DELETE`, implemented as an auditable soft-disable (`status=disabled`) rather than physical deletion. List parameters: `page` (minimum 1), `per_page` (1–100), `status` (comma-separated validated statuses), and `q` (title search). Updates accept optional `version`; mismatches return HTTP 409.
 
 Fraud investigation evidence is append-only through `POST /api/v1/fraud-investigations/<record_id>/evidence` with `{ "evidence": { "type": "...", ... } }`. Evidence entries are tenant-scoped, stamped with actor/time, capped at 100 per case, and reject raw payment payloads and credential/phone fields.
 
