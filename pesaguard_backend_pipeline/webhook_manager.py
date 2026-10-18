@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 import requests
 from sqlalchemy.orm import Session
 
+from webhook_transport import post_json_pinned
+
 from models import WebhookConfig, WebhookDelivery
 from data_protection import decrypt_value, encrypt_value, protect_payload
 
@@ -216,12 +218,14 @@ class WebhookManager:
         for attempt in range(max_attempts):
             delivery.attempt_count = attempt + 1
             try:
-                response = requests.post(
+                # Resolve, validate, and connect to the exact same public IP.
+                # TLS SNI and certificate verification still use the original hostname.
+                # This avoids a second DNS lookup by requests after SSRF validation.
+                response = post_json_pinned(
                     webhook.url,
-                    json=payload,
+                    payload=payload,
                     headers=headers,
                     timeout=timeout,
-                    allow_redirects=False,
                 )
                 delivery.response_status = response.status_code
                 # Receiver responses are untrusted and may echo request payloads
