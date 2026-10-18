@@ -121,6 +121,33 @@ def test_dashboard_filters_and_resolves_discrepancies(dashboard_app, dashboard_a
         session.close()
 
 
+def test_dashboard_assigned_discrepancy_filter_uses_assignee_field(dashboard_app, dashboard_auth_token):
+    client, app_module = dashboard_app
+
+    session = app_module.SessionLocal()
+    try:
+        items = session.query(app_module.Discrepancy).order_by(app_module.Discrepancy.id.asc()).all()
+        assert len(items) >= 2
+        for item in items:
+            item.assignee = None
+        items[0].assignee = "finance-reviewer"
+        session.commit()
+        assigned_id = items[0].id
+    finally:
+        session.close()
+
+    response = client.get(
+        "/discrepancies?status=assigned",
+        headers={"Authorization": f"Bearer {dashboard_auth_token}"},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["id"] == assigned_id
+    assert payload["items"][0]["assignee"] == "finance-reviewer"
+
+
 def test_dashboard_supports_pagination_and_bulk_resolve(dashboard_app, dashboard_auth_token):
     client, app_module = dashboard_app
 
