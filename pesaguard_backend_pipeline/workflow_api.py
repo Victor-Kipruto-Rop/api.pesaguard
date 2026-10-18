@@ -154,22 +154,26 @@ def create_workflow_blueprint(session_factory):
             per_page = max(1, min(100, int(request.args.get("per_page", "25"))))
         except ValueError:
             return jsonify({"error": "invalid_pagination", "message": "page and per_page must be integers."}), 400
-        query = session_factory().query(TenantWorkflowRecord).filter(
-            TenantWorkflowRecord.tenant_id == tenant_id,
-            TenantWorkflowRecord.domain == domain,
-        )
         status = request.args.get("status", "").strip()
-        if status:
-            statuses = [item.strip() for item in status.split(",") if item.strip()]
-            if not statuses or any(item not in VALID_STATUSES[domain] for item in statuses):
-                return jsonify({"error": "invalid_status", "message": "Unsupported status filter."}), 400
-            query = query.filter(TenantWorkflowRecord.status.in_(statuses))
+        statuses = [item.strip() for item in status.split(",") if item.strip()] if status else []
+        if statuses and (not statuses or any(item not in VALID_STATUSES[domain] for item in statuses)):
+            return jsonify({"error": "invalid_status", "message": "Unsupported status filter."}), 400
         search = request.args.get("q", "").strip()[:200]
-        if search:
-            query = query.filter(TenantWorkflowRecord.title.ilike(f"%{search}%"))
-        total = query.count()
-        records = query.order_by(TenantWorkflowRecord.created_at.desc(), TenantWorkflowRecord.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
-        return jsonify({"items": [_serialize(item) for item in records], "page": page, "per_page": per_page, "total": total})
+        session = session_factory()
+        try:
+            query = session.query(TenantWorkflowRecord).filter(
+                TenantWorkflowRecord.tenant_id == tenant_id,
+                TenantWorkflowRecord.domain == domain,
+            )
+            if statuses:
+                query = query.filter(TenantWorkflowRecord.status.in_(statuses))
+            if search:
+                query = query.filter(TenantWorkflowRecord.title.ilike(f"%{search}%"))
+            total = query.count()
+            records = query.order_by(TenantWorkflowRecord.created_at.desc(), TenantWorkflowRecord.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+            return jsonify({"items": [_serialize(item) for item in records], "page": page, "per_page": per_page, "total": total})
+        finally:
+            session.close()
 
     def _create_domain(domain):
         tenant_id, user_id = _tenant_user()
