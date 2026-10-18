@@ -10,6 +10,7 @@ import os
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from environment import runtime_environment
 
 _ENCRYPTED_PREFIX = "enc:v1:"
 _SENSITIVE_KEYS = {
@@ -30,8 +31,10 @@ def _configured_secrets() -> tuple[str, ...]:
     active = os.getenv("PESAGUARD_PAYLOAD_ENCRYPTION_KEY") or os.getenv("PROVIDER_ENCRYPTION_KEY")
     previous = os.getenv("PESAGUARD_PAYLOAD_ENCRYPTION_KEY_PREVIOUS") or os.getenv("PROVIDER_ENCRYPTION_KEY_PREVIOUS")
     if not active:
-        if os.getenv("PESAGUARD_ENVIRONMENT", "development").lower() in {"production", "prod"}:
-            raise RuntimeError("PESAGUARD_PAYLOAD_ENCRYPTION_KEY must be configured in production")
+        if runtime_environment() in {"production", "staging"}:
+            raise RuntimeError(
+                "PESAGUARD_PAYLOAD_ENCRYPTION_KEY must be configured in staging and production"
+            )
         active = os.getenv("JWT_SECRET_KEY", "development-payload-key")
     return tuple(dict.fromkeys(secret for secret in (active, previous) if secret))
 
