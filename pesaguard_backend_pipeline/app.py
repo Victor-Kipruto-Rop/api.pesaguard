@@ -517,6 +517,10 @@ def ops_alerts():
         return jsonify({"error": "alertmanager_auth_not_configured"}), 503
     if secret:
         provided = request.headers.get("X-Alertmanager-Secret", "")
+        if not provided:
+            authorization = request.headers.get("Authorization", "")
+            if authorization.lower().startswith("bearer "):
+                provided = authorization[7:].strip()
         if not hmac_lib.compare_digest(provided, secret):
             record_security_event()
             logger.warning("Alertmanager webhook rejected: secret mismatch")
