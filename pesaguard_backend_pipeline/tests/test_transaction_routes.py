@@ -290,3 +290,50 @@ def test_transaction_search_supports_server_side_lifecycle_filters(dashboard_api
     assert failed.json["items"][0]["status"] == "FAILED"
     assert combined.status_code == 200
     assert combined.json["total"] == 2
+
+def test_import_history_is_paginated_and_tenant_scoped(dashboard_api, monkeypatch):
+    from types import SimpleNamespace
+
+    dashboard = dashboard_api
+    client = dashboard.app.test_client()
+    monkeypatch.setattr(dashboard, "get_current_user", lambda: SimpleNamespace(tenant_id="tenant-import-a"))
+
+    with dashboard.transaction_event_store.Session() as session:
+        session.add_all([
+            dashboard.ImportJob(
+                id="import-job-a",
+                tenant_id="tenant-import-a",
+                source="mpesa",
+                filename="tenant-a.csv",
+                file_format="csv",
+                object_key="tenant-import-a/import-job-a.csv",
+                status="failed",
+                records_received=4,
+                records_valid=2,
+                records_failed=2,
+            ),
+            dashboard.ImportJob(
+                id="import-job-b",
+                tenant_id="tenant-import-b",
+                source="mpesa",
+                filename="tenant-b.csv",
+                file_format="csv",
+                object_key="tenant-import-b/import-job-b.csv",
+                status="completed",
+                records_received=8,
+                records_valid=8,
+                records_failed=0,
+            ),
+        ])
+        session.commit()
+
+    response = client.get("/api/v1/imports?page=1&per_page=1")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["import_id"] == "import-job-a"
+    assert payload["items"][0]["filename"] == "tenant-a.csv"
+
+    failed = client.get("/api/v1/imports?status=failed")
+    assert failed.status_code == 200
+    assert failed.get_json()["total"] == 1
