@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -11,8 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Mapping, Optional
 
+from action_audit import ActionAuditRecord, persist_audit_event
 from ingestion import IngestionError, IngestionService
 from models import ImportJob
+from workflow_models import TenantWorkflowRecord
 from partitioning import raw_object_partition
 
 
@@ -109,6 +112,76 @@ def _records_from_bytes(filename: str, content: bytes) -> Iterator[Mapping[str, 
     yield from table.to_pylist()
 
 
+
+def _persist_import_quality_findings(
+    session: Any,
+    job: ImportJob,
+    failure_counts: Mapping[str, int],
+    sample_records: Mapping[str, list[int]],
+) -> None:
+    """Persist aggregated, retry-safe import validation findings without row payloads."""
+    for code, count in failure_counts.items():
+        if count <= 0:
+            continue
+        digest = hashlib.sha256(f"{job.tenant_id}:{job.id}:{code}".encode("utf-8")).hexdigest()[:32]
+        finding_id = f"dq_{digest}"
+        record = session.get(TenantWorkflowRecord, finding_id)
+        now = datetime.now(timezone.utc)
+        previous_payload = dict(record.payload or {}) if record is not None else {}
+        previous_samples = previous_payload.get("sample_record_numbers", [])
+        payload = {
+            "source": "batch_import",
+            "finding_code": code,
+            "import_id": job.id,
+            "source_name": job.source,
+            "failed_record_count": max(int(previous_payload.get("failed_record_count", 0)), int(count)),
+            "sample_record_numbers": sorted(set(
+                [int(value) for value in previous_samples if isinstance(value, int)]
+                + [int(value) for value in sample_records.get(code, []) if isinstance(value, int)]
+            ))[:10],
+            "severity": "warning" if code != "IMPORT_FILE_PROCESSING_FAILED" else "high",
+        }
+        is_new = record is None
+        if is_new:
+            record = TenantWorkflowRecord(
+                id=finding_id,
+                tenant_id=job.tenant_id,
+                domain="data_quality_finding",
+                status="open",
+                title=("Import quality: " + code.replace("_", " ").lower())[:200],
+                description="Aggregated import validation finding. Inspect the import job's bounded error summary for operator context.",
+                payload=payload,
+                created_by="batch_import_worker",
+                updated_by="batch_import_worker",
+            )
+            session.add(record)
+            session.flush()
+        else:
+            record.payload = payload
+            record.updated_by = "batch_import_worker"
+            record.updated_at = now
+            record.version += 1
+        audit = ActionAuditRecord(
+            tenant_id=job.tenant_id,
+            actor="batch_import_worker",
+            actor_id="batch_import_worker",
+            actor_type="system",
+            action="configuration.created" if is_new else "configuration.updated",
+            category="operations",
+            outcome="success",
+            resource_type="data_quality_finding",
+            resource_id=finding_id,
+            idempotency_key=f"import-quality:{finding_id}:{record.version}",
+            details={
+                "source": "batch_import",
+                "import_id": job.id,
+                "finding_code": code,
+                "failed_record_count": int(count),
+            },
+        )
+        persist_audit_event(session, audit, event_type="workflow.data_quality_finding")
+
+
 class BatchImportService:
     """Submit and process bounded files through the shared ingestion service."""
 
@@ -163,6 +236,15 @@ class BatchImportService:
         job.started_at = datetime.now(timezone.utc)
         session.commit()
         errors = list(job.error_summary or [])
+        failure_counts: Dict[str, int] = {}
+        sample_records: Dict[str, list[int]] = {}
+
+        def record_failure(code: str) -> None:
+            failure_counts[code] = failure_counts.get(code, 0) + 1
+            samples = sample_records.setdefault(code, [])
+            if len(samples) < 10:
+                samples.append(max(1, int(job.records_received)))
+
         try:
             records = _records_from_bytes(job.filename, self.storage.get(job.object_key))
             for record in records:
@@ -175,10 +257,12 @@ class BatchImportService:
                         job.records_valid += 1
                     else:
                         job.records_failed += 1
+                        record_failure("IMPORT_PERSISTENCE_FAILED")
                         if len(errors) < 20:
                             errors.append({"record": job.records_received, "error": "transaction persistence failed"})
                 except (IngestionError, ValueError, TypeError) as exc:
                     job.records_failed += 1
+                    record_failure("IMPORT_RECORD_INVALID")
                     if len(errors) < 20:
                         errors.append({"record": job.records_received, "error": str(exc)[:500]})
                 if job.records_received % 100 == 0:
@@ -186,10 +270,12 @@ class BatchImportService:
             job.status = "completed" if job.records_failed == 0 else "failed"
         except Exception as exc:
             job.status = "failed"
+            record_failure("IMPORT_FILE_PROCESSING_FAILED")
             if len(errors) < 20:
                 errors.append({"record": job.records_received, "error": str(exc)[:500]})
         job.error_summary = errors
         job.completed_at = datetime.now(timezone.utc)
+        _persist_import_quality_findings(session, job, failure_counts, sample_records)
         session.commit()
         return job
 

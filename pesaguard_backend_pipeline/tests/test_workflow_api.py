@@ -118,6 +118,20 @@ def test_schedule_validation_and_report_summary_execution(workflow_client):
     )
     assert invalid.status_code == 400
 
+    invalid_timezone = client.post(
+        "/api/v1/reconciliation-schedules",
+        headers=headers,
+        json={"title": "Invalid timezone", "payload": {"cadence": "daily", "timezone": "Mars/Olympus", "enabled": True}},
+    )
+    assert invalid_timezone.status_code == 400
+
+    invalid_report_schedule = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Invalid report schedule", "payload": {"report_type": "transactions", "schedule": {"cadence": "whenever"}}},
+    )
+    assert invalid_report_schedule.status_code == 400
+
     scheduled = client.post(
         "/api/v1/reconciliation-schedules",
         headers=headers,
@@ -206,3 +220,75 @@ def test_investigation_evidence_is_append_only_and_rejects_sensitive_fields(work
     assert len(evidence) == 1
     assert evidence[0]["reference"] == "internal-ref-123"
     assert evidence[0]["added_by"] == "workflow-admin"
+
+
+
+def test_workflow_creation_cannot_bypass_review_or_execution_transitions(workflow_client):
+    client, _, headers = workflow_client
+    attempts = [
+        (
+            "/api/v1/settlement-reviews",
+            {"title": "Bypass settlement review", "status": "approved", "payload": {"amount": 100, "currency": "KES"}},
+        ),
+        (
+            "/api/v1/refund-reversal-requests",
+            {"title": "Bypass refund review", "status": "approved", "payload": {"amount": 100, "currency": "KES"}},
+        ),
+        (
+            "/api/v1/privacy-requests",
+            {"title": "Bypass privacy review", "status": "completed", "payload": {"request_type": "deletion"}},
+        ),
+        (
+            "/api/v1/report-runs",
+            {"title": "Fake completed report", "status": "completed", "payload": {"report_type": "transactions"}},
+        ),
+        (
+            "/api/v1/matching-rules",
+            {"title": "Unreviewed active rule", "status": "open", "payload": {"amount_tolerance": 0, "time_window_minutes": 5}},
+        ),
+    ]
+    for endpoint, body in attempts:
+        response = client.post(endpoint, headers=headers, json=body)
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "invalid_initial_status"
+
+    scheduled_without_config = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Unconfigured schedule", "status": "scheduled", "payload": {"report_type": "transactions"}},
+    )
+    assert scheduled_without_config.status_code == 400
+    assert scheduled_without_config.get_json()["error"] == "schedule_required"
+
+
+def test_schedules_cannot_enter_scheduled_state_without_valid_config(workflow_client):
+    client, _, headers = workflow_client
+    definition = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Unscheduled report", "payload": {"report_type": "transactions"}},
+    )
+    assert definition.status_code == 201
+    definition_item = definition.get_json()["item"]
+    scheduled_report = client.patch(
+        f"/api/v1/report-definitions/{definition_item['id']}",
+        headers=headers,
+        json={"status": "scheduled", "version": definition_item["version"]},
+    )
+    assert scheduled_report.status_code == 400
+    assert scheduled_report.get_json()["error"] == "schedule_required"
+
+    schedule = client.post(
+        "/api/v1/reconciliation-schedules",
+        headers=headers,
+        json={"title": "Disabled schedule", "payload": {"cadence": "daily", "enabled": False}},
+    )
+    assert schedule.status_code == 201
+    schedule_item = schedule.get_json()["item"]
+    scheduled_reconciliation = client.patch(
+        f"/api/v1/reconciliation-schedules/{schedule_item['id']}",
+        headers=headers,
+        json={"status": "scheduled", "version": schedule_item["version"]},
+    )
+    assert scheduled_reconciliation.status_code == 400
+    assert scheduled_reconciliation.get_json()["error"] == "schedule_required"

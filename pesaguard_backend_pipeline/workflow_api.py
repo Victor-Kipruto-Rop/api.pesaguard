@@ -8,6 +8,8 @@ at the configured time. Report runs execute a bounded persisted-data summary.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -15,7 +17,8 @@ from sqlalchemy import func
 
 from auth_rbac import get_current_user, require_auth
 from action_audit import ActionAuditRecord, persist_audit_event
-from models import Discrepancy, Transaction
+from models import DeletionRequest, Discrepancy, Transaction
+from deletion_workflow import DeletionWorkflow, DeletionWorkflowError
 from workflow_models import TenantWorkflowRecord
 
 DOMAIN_PATHS = {
@@ -43,6 +46,21 @@ VALID_STATUSES = {
     "fraud_investigation": {"open", "triage", "in_progress", "needs_information", "resolved", "closed"},
     "privacy_request": {"requested", "pending_review", "approved", "rejected", "completed", "failed"},
     "support_case": {"open", "triage", "in_progress", "needs_information", "resolved", "closed"},
+}
+# Client-supplied status is restricted to safe initial states. Terminal/review states
+# must be reached through the versioned transition path and its role checks.
+INITIAL_STATUSES = {
+    "reconciliation_run": {"draft", "requested"},
+    "matching_rule": {"draft"},
+    "data_quality_finding": {"open"},
+    "scheduled_reconciliation": {"draft", "scheduled", "disabled"},
+    "settlement_review": {"open"},
+    "refund_reversal_request": {"requested"},
+    "report_definition": {"draft", "open", "scheduled", "disabled"},
+    "report_run": {"requested"},
+    "fraud_investigation": {"open"},
+    "privacy_request": {"requested"},
+    "support_case": {"open"},
 }
 TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 4000
@@ -180,19 +198,69 @@ def create_workflow_blueprint(session_factory):
         status = body.get("status")
         if status is not None and status not in VALID_STATUSES[domain]:
             return None, "unsupported status for this workflow"
-        if domain == "matching_rule":
-            for key in ("amount_tolerance", "time_window_minutes"):
-                if key in payload and (not isinstance(payload[key], (int, float)) or isinstance(payload[key], bool) or payload[key] < 0):
-                    return None, f"{key} must be a non-negative number"
-            if payload.get("currency") and (not isinstance(payload["currency"], str) or len(payload["currency"]) != 3):
-                return None, "currency must be a three-character ISO currency code"
+        if domain == "reconciliation_run":
+            parsed_bounds = {}
+            for field_name in ("start_at", "end_at"):
+                if field_name in payload:
+                    value = payload[field_name]
+                    if not isinstance(value, str):
+                        return None, f"{field_name} must be an ISO-8601 timestamp with timezone"
+                    try:
+                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    except ValueError:
+                        return None, f"{field_name} must be an ISO-8601 timestamp with timezone"
+                    if parsed.tzinfo is None:
+                        return None, f"{field_name} must include a timezone"
+                    parsed_bounds[field_name] = parsed.astimezone(timezone.utc)
+            if "start_at" in parsed_bounds and "end_at" in parsed_bounds:
+                if parsed_bounds["start_at"] > parsed_bounds["end_at"]:
+                    return None, "start_at must be earlier than or equal to end_at"
+                if (parsed_bounds["end_at"] - parsed_bounds["start_at"]).total_seconds() > 90 * 24 * 3600:
+                    return None, "reconciliation run windows cannot exceed 90 days"
+            if "provider_account_id" in payload and (
+                not isinstance(payload["provider_account_id"], str)
+                or not payload["provider_account_id"].strip()
+                or len(payload["provider_account_id"]) > 128
+            ):
+                return None, "provider_account_id must be a non-empty string of at most 128 characters"
+            if "max_transactions" in payload and (
+                not isinstance(payload["max_transactions"], int)
+                or isinstance(payload["max_transactions"], bool)
+                or not 1 <= payload["max_transactions"] <= 5000
+            ):
+                return None, "max_transactions must be an integer between 1 and 5000"
+        elif domain == "matching_rule":
+            if "amount_tolerance" in payload:
+                tolerance = payload["amount_tolerance"]
+                if not isinstance(tolerance, (int, float)) or isinstance(tolerance, bool) or not 0 <= tolerance <= 5:
+                    return None, "amount_tolerance is a percentage and must be between 0 and 5"
+            if "time_window_minutes" in payload:
+                window = payload["time_window_minutes"]
+                if not isinstance(window, int) or isinstance(window, bool) or not 0 <= window <= 1440:
+                    return None, "time_window_minutes must be an integer between 0 and 1440"
+            if payload.get("currency") and (
+                not isinstance(payload["currency"], str)
+                or len(payload["currency"]) != 3
+                or payload["currency"] != payload["currency"].upper()
+            ):
+                return None, "currency must be an uppercase three-character ISO currency code"
+            if "provider_account_id" in payload and (
+                not isinstance(payload["provider_account_id"], str)
+                or not payload["provider_account_id"].strip()
+                or len(payload["provider_account_id"]) > 128
+            ):
+                return None, "provider_account_id must be a non-empty string of at most 128 characters"
         elif domain == "scheduled_reconciliation":
             cadence = payload.get("cadence")
             if cadence not in {"hourly", "daily", "weekly", "monthly"}:
                 return None, "cadence must be hourly, daily, weekly or monthly"
             timezone_name = payload.get("timezone", "Africa/Nairobi")
-            if not isinstance(timezone_name, str) or len(timezone_name) > 64:
+            if not isinstance(timezone_name, str) or not timezone_name or len(timezone_name) > 64:
                 return None, "timezone must be a valid timezone name"
+            try:
+                ZoneInfo(timezone_name)
+            except (ZoneInfoNotFoundError, ValueError):
+                return None, "timezone must be a valid IANA timezone"
             if not isinstance(payload.get("enabled", True), bool):
                 return None, "enabled must be boolean"
         elif domain in {"settlement_review", "refund_reversal_request"}:
@@ -209,16 +277,36 @@ def create_workflow_blueprint(session_factory):
         elif domain == "report_definition":
             if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
                 return None, "report_type must be transactions, discrepancies or reconciliation_summary"
-            if "schedule" in payload and not isinstance(payload["schedule"], dict):
-                return None, "schedule must be an object"
+            if "schedule" in payload:
+                schedule = payload["schedule"]
+                if not isinstance(schedule, dict):
+                    return None, "schedule must be an object"
+                if schedule.get("cadence") not in {"hourly", "daily", "weekly", "monthly"}:
+                    return None, "schedule cadence must be hourly, daily, weekly or monthly"
+                timezone_name = schedule.get("timezone", "Africa/Nairobi")
+                if not isinstance(timezone_name, str) or not timezone_name or len(timezone_name) > 64:
+                    return None, "schedule timezone must be a valid timezone name"
+                try:
+                    ZoneInfo(timezone_name)
+                except (ZoneInfoNotFoundError, ValueError):
+                    return None, "schedule timezone must be a valid IANA timezone"
+                if not isinstance(schedule.get("enabled", True), bool):
+                    return None, "schedule enabled must be boolean"
         elif domain == "report_run":
             if payload.get("report_type") not in {"transactions", "discrepancies", "reconciliation_summary"}:
                 return None, "report_type must be transactions, discrepancies or reconciliation_summary"
         elif domain == "privacy_request":
             if payload.get("request_type") not in {"access", "export", "correction", "deletion"}:
                 return None, "request_type must be access, export, correction or deletion"
-            if payload.get("request_type") == "deletion" and payload.get("execute_immediately"):
-                return None, "deletion requires a reviewed, separately authorized execution workflow"
+            if payload.get("request_type") == "deletion":
+                transaction_id = payload.get("transaction_id")
+                reason = payload.get("reason")
+                if not isinstance(transaction_id, str) or not transaction_id.strip() or len(transaction_id) > 255:
+                    return None, "deletion requests require a transaction_id of at most 255 characters"
+                if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 1000:
+                    return None, "deletion requests require a reason of at most 1000 characters"
+                if payload.get("execute_immediately"):
+                    return None, "deletion requires a reviewed, separately authorized execution workflow"
         elif domain == "fraud_investigation":
             evidence = payload.get("evidence", [])
             if not isinstance(evidence, list) or len(evidence) > 100:
@@ -270,9 +358,37 @@ def create_workflow_blueprint(session_factory):
         valid, message = _validate(domain, body, creating=True)
         if message:
             return jsonify({"error": "validation_error", "message": message}), 400
-        status = valid["status"] or ("requested" if domain in {"reconciliation_run", "report_run", "refund_reversal_request", "privacy_request"} else "open")
-        if domain == "scheduled_reconciliation":
-            status = valid["status"] or ("scheduled" if valid["payload"].get("enabled", True) else "disabled")
+        requested_status = valid["status"]
+        if requested_status is not None and requested_status not in INITIAL_STATUSES[domain]:
+            return jsonify({
+                "error": "invalid_initial_status",
+                "message": "The requested status cannot be used at creation; use the audited status-transition workflow.",
+            }), 400
+        if domain == "report_definition" and requested_status == "scheduled":
+            schedule = valid["payload"].get("schedule")
+            if not isinstance(schedule, dict) or schedule.get("enabled", True) is not True:
+                return jsonify({"error": "schedule_required", "message": "An enabled, valid schedule is required before a report definition can be scheduled."}), 400
+        if domain == "reconciliation_run":
+            # This field is worker-owned; never trust a client-supplied execution state.
+            valid["payload"] = {
+                **valid["payload"],
+                "execution_status": "queued_for_reconciliation_worker",
+            }
+        status = requested_status or {
+            "reconciliation_run": "requested",
+            "matching_rule": "draft",
+            "data_quality_finding": "open",
+            "scheduled_reconciliation": "scheduled" if valid["payload"].get("enabled", True) else "disabled",
+            "settlement_review": "open",
+            "refund_reversal_request": "requested",
+            "report_definition": "draft",
+            "report_run": "requested",
+            "fraud_investigation": "open",
+            "privacy_request": "requested",
+            "support_case": "open",
+        }[domain]
+        if domain == "scheduled_reconciliation" and status == "scheduled" and valid["payload"].get("enabled", True) is not True:
+            return jsonify({"error": "schedule_disabled", "message": "A disabled schedule cannot be created in scheduled status."}), 400
         if domain == "report_run":
             # A bounded execution reads only persisted rows belonging to the authenticated tenant.
             report_type = valid["payload"]["report_type"]
@@ -353,12 +469,39 @@ def create_workflow_blueprint(session_factory):
             valid, message = _validate(domain, body, creating=False)
             if message:
                 return jsonify({"error": "validation_error", "message": message}), 400
+            target_payload = valid["payload"] if "payload" in body else dict(record.payload or {})
+            target_status = valid["status"] or record.status
+            if domain == "scheduled_reconciliation" and target_status == "scheduled":
+                cadence = target_payload.get("cadence")
+                timezone_name = target_payload.get("timezone", "Africa/Nairobi")
+                if cadence not in {"hourly", "daily", "weekly", "monthly"} or target_payload.get("enabled", True) is not True:
+                    return jsonify({"error": "schedule_required", "message": "A scheduled reconciliation requires an enabled supported cadence."}), 400
+                try:
+                    ZoneInfo(timezone_name)
+                except (ZoneInfoNotFoundError, TypeError, ValueError):
+                    return jsonify({"error": "invalid_schedule_timezone", "message": "A scheduled reconciliation requires a valid IANA timezone."}), 400
+            if domain == "report_definition" and target_status == "scheduled":
+                schedule = target_payload.get("schedule")
+                if not isinstance(schedule, dict) or schedule.get("cadence") not in {"hourly", "daily", "weekly", "monthly"} or schedule.get("enabled", True) is not True:
+                    return jsonify({"error": "schedule_required", "message": "An enabled, valid report schedule is required before scheduling."}), 400
+                try:
+                    ZoneInfo(schedule.get("timezone", "Africa/Nairobi"))
+                except (ZoneInfoNotFoundError, TypeError, ValueError):
+                    return jsonify({"error": "invalid_schedule_timezone", "message": "A report schedule requires a valid IANA timezone."}), 400
             if valid["title"] is not None:
                 record.title = valid["title"]
             if valid["description"] is not None:
                 record.description = valid["description"]
             if "payload" in body:
-                record.payload = valid["payload"]
+                next_payload = dict(valid["payload"])
+                if domain == "reconciliation_run":
+                    worker_fields = {"execution_status", "progress", "started_at", "completed_at", "lease_expires_at", "failure_reason"}
+                    previous_payload = dict(record.payload or {})
+                    for field_name in worker_fields:
+                        next_payload.pop(field_name, None)
+                        if field_name in previous_payload:
+                            next_payload[field_name] = previous_payload[field_name]
+                record.payload = next_payload
             if valid["status"] is not None and valid["status"] != record.status:
                 allowed = ALLOWED_TRANSITIONS[domain].get(record.status, set())
                 if valid["status"] not in allowed:
@@ -371,9 +514,14 @@ def create_workflow_blueprint(session_factory):
                 if domain == "privacy_request" and valid["status"] == "completed":
                     return jsonify({"error": "separate_execution_required", "message": "A privacy request cannot be marked completed until an approved export/deletion execution workflow confirms completion."}), 409
                 record.status = valid["status"]
-            if domain in {"settlement_review", "refund_reversal_request"} and record.status in {"approved", "rejected"}:
-                # Approval is a review decision only; no provider call or money movement is triggered.
-                record.payload = {**(record.payload or {}), "review_decision_at": datetime.now(timezone.utc).isoformat()}
+            if domain in {"settlement_review", "refund_reversal_request", "privacy_request"} and record.status in {"approved", "rejected"}:
+                # Review decisions are auditable metadata only; financial provider actions are never triggered.
+                record.payload = {
+                    **(record.payload or {}),
+                    "review_decision_at": datetime.now(timezone.utc).isoformat(),
+                    "reviewed_by": user_id,
+                    "review_decision": record.status,
+                }
             record.updated_by = user_id
             record.version += 1
             record.updated_at = datetime.now(timezone.utc)
@@ -398,6 +546,139 @@ def create_workflow_blueprint(session_factory):
         bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth(write_permission)(_make_create(domain, _create_domain)), methods=["POST"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth(read_permission)(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth(write_permission)(_make_update(domain, _update_domain)), methods=["PATCH"])
+
+    @bp.post("/api/v1/privacy-requests/<record_id>/execute")
+    @require_auth("write:settings")
+    def execute_privacy_deletion(record_id):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        body, error = _json_object()
+        if error:
+            return error
+        authorization_reference = body.get("authorization_reference")
+        if not isinstance(authorization_reference, str) or not authorization_reference.strip() or len(authorization_reference.strip()) > 255:
+            return jsonify({"error": "authorization_reference_required", "message": "A reviewed authorization reference is required."}), 400
+        result, error = _get_domain_record("privacy_request", record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            principal = get_current_user()
+            roles = {str(role).lower() for role in (getattr(principal, "roles", []) or [])}
+            if not roles.intersection({"admin", "owner", "compliance_officer", "security_admin"}):
+                return jsonify({"error": "privacy_execution_permission_required", "message": "A privileged compliance/security reviewer is required."}), 403
+            payload = dict(record.payload or {})
+            if payload.get("request_type") != "deletion":
+                return jsonify({"error": "unsupported_privacy_execution", "message": "This execution endpoint currently supports approved transaction-deletion requests only."}), 409
+            if record.status != "approved":
+                return jsonify({"error": "privacy_request_not_approved", "message": "The privacy request must be approved before execution."}), 409
+            if not payload.get("reviewed_by") or payload.get("reviewed_by") == record.created_by or user_id == record.created_by:
+                return jsonify({"error": "separation_of_duties_required", "message": "A different privileged reviewer must approve and execute the request."}), 403
+            transaction_id = payload.get("transaction_id")
+            reason = payload.get("reason")
+            if not isinstance(transaction_id, str) or not transaction_id.strip():
+                return jsonify({"error": "transaction_id_required", "message": "The approved request has no valid transaction_id."}), 400
+
+            deletion_request_id = payload.get("deletion_request_id")
+            deletion_request = None
+            if deletion_request_id:
+                deletion_request = session.query(DeletionRequest).filter_by(
+                    id=deletion_request_id, tenant_id=tenant_id, transaction_id=transaction_id
+                ).with_for_update().first()
+                if deletion_request is None:
+                    return jsonify({"error": "deletion_execution_record_missing", "message": "The linked deletion execution record was not found."}), 409
+                if deletion_request.status in {"deleted", "anonymized"}:
+                    payload.update({
+                        "execution_status": "completed",
+                        "execution_decision": deletion_request.decision,
+                        "execution_completed_at": deletion_request.completed_at.isoformat() if deletion_request.completed_at else datetime.now(timezone.utc).isoformat(),
+                    })
+                    record.payload = payload
+                    record.status = "completed"
+                    record.updated_by = user_id
+                    record.updated_at = datetime.now(timezone.utc)
+                    record.version += 1
+                    _record_workflow_audit(
+                        session, tenant_id=tenant_id, user_id=user_id,
+                        action="configuration.updated", domain="privacy_request", record_id=record.id,
+                        operation="privacy_execution_reconciled", version=record.version,
+                    )
+                    session.commit()
+                    return jsonify({"item": _serialize(record), "execution": {"status": deletion_request.status, "decision": deletion_request.decision}}), 200
+                if deletion_request.status != "pending":
+                    return jsonify({"error": "deletion_execution_not_pending", "message": "The linked deletion execution is not pending."}), 409
+            else:
+                deletion_request = DeletionRequest(
+                    id=f"del_{uuid.uuid4().hex}",
+                    tenant_id=tenant_id,
+                    transaction_id=transaction_id,
+                    requested_by=record.created_by,
+                    reason=reason.strip()[:1000],
+                    status="pending",
+                )
+                session.add(deletion_request)
+                session.flush()
+                payload["deletion_request_id"] = deletion_request.id
+                payload["execution_status"] = "running"
+                payload["execution_started_at"] = datetime.now(timezone.utc).isoformat()
+                record.payload = payload
+                record.updated_by = user_id
+                record.updated_at = datetime.now(timezone.utc)
+                record.version += 1
+                _record_workflow_audit(
+                    session, tenant_id=tenant_id, user_id=user_id,
+                    action="configuration.updated", domain="privacy_request", record_id=record.id,
+                    operation="privacy_execution_started", version=record.version,
+                )
+                session.commit()
+
+            deletion_workflow = DeletionWorkflow()
+            deletion_request = deletion_workflow.execute(
+                session,
+                deletion_request.id,
+                authorize=lambda item: (
+                    item.tenant_id == tenant_id
+                    and item.transaction_id == transaction_id
+                    and item.requested_by == record.created_by
+                    and payload.get("reviewed_by") != item.requested_by
+                    and user_id != item.requested_by
+                    and bool(roles.intersection({"admin", "owner", "compliance_officer", "security_admin"}))
+                ),
+                authorization_reference=authorization_reference.strip(),
+            )
+            session.refresh(record)
+            payload = dict(record.payload or {})
+            payload.update({
+                "execution_status": "completed" if deletion_request.status in {"deleted", "anonymized"} else "failed",
+                "execution_decision": deletion_request.decision,
+                "execution_completed_at": deletion_request.completed_at.isoformat() if deletion_request.completed_at else datetime.now(timezone.utc).isoformat(),
+                "dependency_report": dict(deletion_request.dependency_report or {}),
+            })
+            record.payload = payload
+            record.status = "completed" if deletion_request.status in {"deleted", "anonymized"} else "failed"
+            record.updated_by = user_id
+            record.updated_at = datetime.now(timezone.utc)
+            record.version += 1
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.updated", domain="privacy_request", record_id=record.id,
+                operation="privacy_execution_completed", version=record.version,
+            )
+            session.commit()
+            return jsonify({"item": _serialize(record), "execution": {
+                "status": deletion_request.status,
+                "decision": deletion_request.decision,
+                "dependency_report": dict(deletion_request.dependency_report or {}),
+            }}), 200
+        except DeletionWorkflowError as exc:
+            session.rollback()
+            return jsonify({"error": "privacy_execution_failed", "message": str(exc)}), 409
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "privacy_execution_failed", "message": "The privacy request could not be executed safely."}), 500
+        finally:
+            session.close()
 
     # Matching-rule deletion is a soft-disable to preserve auditability of prior runs.
     @bp.delete("/api/v1/matching-rules/<record_id>")

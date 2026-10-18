@@ -184,6 +184,25 @@ services:
     depends_on:
       - postgres
 
+  workflow_scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    command: ["python", "pesaguard_backend_pipeline/workflow_scheduler.py"]
+    env_file:
+      - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
+    environment:
+      <<: [*residency-env, *observability-env]
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
+      PESAGUARD_WORKFLOW_SCHEDULER_INTERVAL_SECONDS: ${PESAGUARD_WORKFLOW_SCHEDULER_INTERVAL_SECONDS:-30}
+      PESAGUARD_WORKFLOW_SCHEDULER_BATCH: ${PESAGUARD_WORKFLOW_SCHEDULER_BATCH:-100}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
   rq_worker:
     build:
       context: ../..
