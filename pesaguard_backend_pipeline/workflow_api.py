@@ -262,7 +262,14 @@ def create_workflow_blueprint(session_factory):
                 record.description = valid["description"]
             if "payload" in body:
                 record.payload = valid["payload"]
-            if valid["status"] is not None:
+            if valid["status"] is not None and valid["status"] != record.status:
+                if domain in {"settlement_review", "refund_reversal_request", "privacy_request"}:
+                    current_user = get_current_user()
+                    roles = {str(role).lower() for role in (getattr(current_user, "roles", []) or [])}
+                    if not roles.intersection({"admin", "owner", "finance_manager", "compliance_officer", "security_admin"}):
+                        return jsonify({"error": "review_permission_required", "message": "A privileged reviewer is required to change this request status."}), 403
+                if domain == "privacy_request" and valid["status"] == "completed":
+                    return jsonify({"error": "separate_execution_required", "message": "A privacy request cannot be marked completed until an approved export/deletion execution workflow confirms completion."}), 409
                 record.status = valid["status"]
             if domain in {"settlement_review", "refund_reversal_request"} and record.status in {"approved", "rejected"}:
                 # Approval is a review decision only; no provider call or money movement is triggered.
@@ -280,10 +287,12 @@ def create_workflow_blueprint(session_factory):
 
     for slug, domain in DOMAIN_PATHS.items():
         endpoint = slug.replace("-", "_")
-        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"list_{endpoint}", view_func=require_auth("read:discrepancies")(_make_list(domain, _list_domain)), methods=["GET"])
-        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth("write:discrepancies")(_make_create(domain, _create_domain)), methods=["POST"])
-        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth("read:discrepancies")(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
-        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth("write:discrepancies")(_make_update(domain, _update_domain)), methods=["PATCH"])
+        read_permission = "read:analytics" if domain in {"report_definition", "report_run"} else ("read:settings" if domain in {"privacy_request", "support_case"} else "read:discrepancies")
+        write_permission = "write:settings" if domain in {"privacy_request", "support_case", "report_definition", "report_run"} else "write:discrepancies"
+        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"list_{endpoint}", view_func=require_auth(read_permission)(_make_list(domain, _list_domain)), methods=["GET"])
+        bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth(write_permission)(_make_create(domain, _create_domain)), methods=["POST"])
+        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth(read_permission)(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
+        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth(write_permission)(_make_update(domain, _update_domain)), methods=["PATCH"])
 
     # Evidence is append-only metadata attached to a tenant-scoped investigation.
     @bp.post("/api/v1/fraud-investigations/<record_id>/evidence")
