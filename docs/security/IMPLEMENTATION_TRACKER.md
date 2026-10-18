@@ -28,13 +28,16 @@ financial traffic on the basis of this tracker.
 - [x] Use constant-time comparison for the administrative API token.
 - [x] Disable the legacy static-user login route in staging/production so only
   database-backed, persisted-session authentication can be used.
-- [x] Encrypt newly registered webhook signing secrets at rest, avoid persisting
-  receiver response bodies, and redact raw delivery exception strings.
+- [x] Encrypt newly registered webhook signing secrets and sensitive webhook
+  delivery payload fields at rest, avoid persisting receiver response bodies,
+  and redact raw delivery exception strings.
 - [x] Reject webhook destination URL credentials, fragments, malformed ports,
   and nonstandard ports; repeat URL validation at delivery.
 - [x] Require an independent payload encryption key in staging/production and
   add a dry-run-first migration for legacy plaintext webhook secrets.
 - [x] Add a scheduled/PR dependency vulnerability audit workflow.
+- [x] Require Alertmanager receiver authentication in staging/production and wire
+  Compose's environment-backed secret mount into all four alert routes.
 - [ ] Run focused tests and the full CI suite on the branch.
 - [ ] Verify the Redis-backed integration test against a real Redis service.
 - [ ] Merge only after review and passing checks.
@@ -137,7 +140,8 @@ financial traffic on the basis of this tracker.
 - This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
 - Focused tests were added for Redis key separation/reset and bounded distinct
   state, session-lifecycle fail-closed behavior, auth/secret environment
-  restrictions, API security headers, webhook secret encryption, and destination
+  restrictions, API security headers, Alertmanager receiver authentication,
+  webhook secret/payload encryption, and destination
   URL validation. They have not yet been executed by this
   tool session; a passing result must not be inferred from test code alone.
 - Render currently has no provisioned managed Redis service; provisioning was
