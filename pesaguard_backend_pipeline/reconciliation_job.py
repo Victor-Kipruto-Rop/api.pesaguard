@@ -435,6 +435,59 @@ def publish_reconciliation_outbox_batch(producer: Any, limit: int = 100) -> Dict
     return {"published": published, "failed": failed}
 
 
+def _load_active_matching_policy(tenant_id: str, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Load the single applicable, enabled tenant matching rule; ambiguity fails closed."""
+    session = AuditSession()
+    try:
+        event_currency = str(event.get("currency") or event.get("Currency") or "").strip().upper()
+        event_account = str(
+            event.get("provider_account_id") or event.get("account_id")
+            or event.get("BusinessShortCode") or event.get("business_short_code") or ""
+        ).strip()
+        records = session.query(TenantWorkflowRecord).filter_by(
+            tenant_id=tenant_id, domain="matching_rule", status="open"
+        ).order_by(TenantWorkflowRecord.updated_at.desc(), TenantWorkflowRecord.id.asc()).limit(100).all()
+        applicable = []
+        for record in records:
+            payload = record.payload if isinstance(record.payload, dict) else {}
+            currency = str(payload.get("currency") or "").strip().upper()
+            account = str(payload.get("provider_account_id") or "").strip()
+            if currency and currency != event_currency:
+                continue
+            if account and account != event_account:
+                continue
+            try:
+                tolerance_percent = Decimal(str(payload.get("amount_tolerance", "0.5")))
+                window_minutes = int(payload.get("time_window_minutes", WINDOW_MINUTES))
+            except (InvalidOperation, TypeError, ValueError):
+                return {"error": "invalid_active_matching_rule", "rule_id": record.id}
+            if (
+                not tolerance_percent.is_finite()
+                or tolerance_percent < Decimal("0")
+                or tolerance_percent > Decimal("5")
+                or window_minutes < 0
+                or window_minutes > 1440
+            ):
+                return {"error": "invalid_active_matching_rule", "rule_id": record.id}
+            applicable.append({
+                "rule_id": record.id,
+                "version": int(record.version),
+                "title": record.title,
+                "amount_tolerance_percent": tolerance_percent,
+                "time_window_minutes": window_minutes,
+                "currency": currency or None,
+                "provider_account_id": account or None,
+            })
+        if len(applicable) > 1:
+            return {"error": "ambiguous_active_matching_rules", "rule_ids": [item["rule_id"] for item in applicable]}
+        return applicable[0] if applicable else None
+    except Exception:
+        logger.exception("Tenant matching-rule configuration could not be loaded; reconciliation will fail closed.")
+        return {"error": "matching_rule_store_unavailable"}
+    finally:
+        session.close()
+
+
 def _process_message(event: Dict[str, Any], consumer: Any, producer: Any, connector_registry: Any) -> bool:
     tenant_id = str(event.get("tenant_id") or event.get("TenantID") or DEFAULT_TENANT_ID)
     with tenant_limiter.acquire(tenant_id):
@@ -451,29 +504,84 @@ def _process_message_unbounded(event: Dict[str, Any], consumer: Any, producer: A
         tenant_settings = settings_store.get(tenant_id)
         anomalies = check_for_anomalies(event, seen_trans_ids, tenant_settings)
 
+        matching_policy = _load_active_matching_policy(tenant_id, event)
         connector = connector_registry.get_connector(tenant_id)
-        if connector and hasattr(connector, "fetch_candidate_records"):
-            raw_amount = event.get("TransAmount") or event.get("amount")
-            try:
-                amount = Decimal(str(raw_amount)) if raw_amount is not None else None
-            except Exception:
-                amount = None
-            tolerance = (amount * Decimal("0.005")) if amount is not None else None
-            internal_records = connector.fetch_candidate_records(
-                since_minutes=WINDOW_MINUTES,
-                amount=amount,
-                phone_number=str(event.get("MSISDN") or event.get("phone_number") or "").strip() or None,
-                tolerance=tolerance,
-                limit=500,
-            )
+        if matching_policy and matching_policy.get("error"):
+            internal_records = []
+            phase3_result = {
+                "status": "EXCEPTION",
+                "evidence": {
+                    "matching_rules": [matching_policy["error"]],
+                    "matching_rule_configuration": {
+                        "status": "unavailable_or_ambiguous",
+                        "rule_ids": matching_policy.get("rule_ids") or ([matching_policy["rule_id"]] if matching_policy.get("rule_id") else []),
+                    },
+                    "automatic_match_blocked": True,
+                },
+                "processing_latency_ms": 0,
+            }
         else:
-            internal_records = connector.fetch_recent_records(since_minutes=WINDOW_MINUTES) if connector else []
+            tolerance_percent = (
+                matching_policy["amount_tolerance_percent"]
+                if matching_policy else Decimal("0.5")
+            )
+            window_minutes = (
+                matching_policy["time_window_minutes"]
+                if matching_policy else WINDOW_MINUTES
+            )
+            if connector and hasattr(connector, "fetch_candidate_records"):
+                raw_amount = event.get("TransAmount") or event.get("amount")
+                try:
+                    amount = Decimal(str(raw_amount)) if raw_amount is not None else None
+                except Exception:
+                    amount = None
+                tolerance = (amount * tolerance_percent / Decimal("100")) if amount is not None else None
+                internal_records = connector.fetch_candidate_records(
+                    since_minutes=window_minutes,
+                    amount=amount,
+                    phone_number=str(event.get("MSISDN") or event.get("phone_number") or "").strip() or None,
+                    tolerance=tolerance,
+                    limit=500,
+                )
+            else:
+                internal_records = connector.fetch_recent_records(since_minutes=window_minutes) if connector else []
 
-        phase3_result = reconciliation_engine.reconcile(
-            event,
-            internal_records,
-            seen_transaction_ids=seen_trans_ids,
-        )
+            active_engine = (
+                ReconciliationEngine(
+                    tolerance_percent=tolerance_percent,
+                    window_seconds=window_minutes * 60,
+                )
+                if matching_policy else reconciliation_engine
+            )
+            phase3_result = active_engine.reconcile(
+                event,
+                internal_records,
+                seen_transaction_ids=seen_trans_ids,
+            )
+
+        phase3_evidence = dict(phase3_result.get("evidence") or {})
+        if matching_policy and not matching_policy.get("error"):
+            phase3_evidence["matching_rule_snapshot"] = {
+                "mode": "tenant_rule",
+                "rule_id": matching_policy["rule_id"],
+                "version": matching_policy["version"],
+                "amount_tolerance_percent": str(matching_policy["amount_tolerance_percent"]),
+                "time_window_minutes": matching_policy["time_window_minutes"],
+                "currency": matching_policy["currency"],
+                "provider_account_id": matching_policy["provider_account_id"],
+            }
+        elif matching_policy is None:
+            phase3_evidence["matching_rule_snapshot"] = {
+                "mode": "default",
+                "amount_tolerance_percent": "0.5",
+                "time_window_minutes": WINDOW_MINUTES,
+            }
+        else:
+            phase3_evidence["matching_rule_snapshot"] = {
+                "mode": "blocked",
+                "reason": matching_policy.get("error"),
+            }
+        phase3_result["evidence"] = phase3_evidence
 
         # Reversal lifecycle validation is a review-only gate. It reads only
         # tenant/provider-account scoped persisted evidence and never authorizes
