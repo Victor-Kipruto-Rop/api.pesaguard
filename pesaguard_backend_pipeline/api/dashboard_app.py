@@ -3032,9 +3032,14 @@ def tenant_dashboard_overview():
     try:
         transaction_scope = session.query(Transaction).filter(Transaction.tenant_id == tenant_id)
         transaction_count = transaction_scope.count()
-        transaction_amount = transaction_scope.with_entities(
-            func.coalesce(func.sum(Transaction.trans_amount), 0)
-        ).scalar()
+        transaction_amount_rows = (
+            transaction_scope.with_entities(
+                Transaction.currency,
+                func.coalesce(func.sum(Transaction.trans_amount), 0),
+            )
+            .group_by(Transaction.currency)
+            .all()
+        )
         transaction_status_rows = (
             transaction_scope.with_entities(Transaction.status, func.count(Transaction.id))
             .group_by(Transaction.status)
@@ -3062,7 +3067,7 @@ def tenant_dashboard_overview():
             "transactions": {
                 "total": transaction_count,
                 "recent_30_days": recent_transactions,
-                "total_amount": str(transaction_amount or 0),
+                "amount_by_currency": {str(currency): str(amount or 0) for currency, amount in transaction_amount_rows},
                 "by_status": {str(status): count for status, count in transaction_status_rows},
             },
             "discrepancies": {
