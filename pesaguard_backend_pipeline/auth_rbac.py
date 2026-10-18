@@ -860,6 +860,10 @@ class AuthRBAC:
         organization_id: Optional[str] = None,
     ) -> str:
         """Generate a short-lived access JWT with explicit security claims and minimal payload data."""
+        if runtime_environment() in {"production", "staging"} and not (
+            isinstance(session_id, str) and session_id.strip()
+        ):
+            raise ValueError("session_id is required for user access tokens in staging and production.")
         if not _valid_tenant_id(tenant_id):
             raise ValueError("tenant_id must match the configured tenant ID format.")
         authorization_version = _account_authorization_version(user_id, tenant_id)
