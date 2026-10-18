@@ -25,6 +25,7 @@ This matrix is the source of truth for wiring `app.pesaguard.co.ke` to `api.pesa
 | Operational activity | `GET /activity-feed` | Existing route; verify response shape and tenant filtering. |
 | Reconciliation analytics | `GET /analytics/reconciliation-report` | Existing route; validate definitions and permissions. |
 | Other analytics | `GET /analytics/incident-trends`, `/analytics/operator-stats`, `/analytics/resolution-times`, `/analytics/sla-metrics` | Do not reuse for unrelated business metrics. |
+| Import history | `GET /api/v1/imports` | Newly implemented tenant-scoped, paginated import history with lifecycle status filtering; does not expose object storage keys or raw error payloads. |
 | Import jobs | `POST /api/v1/imports`, `GET /api/v1/imports/{import_id}` | Verify upload format, async job contract and status lifecycle. |
 | Data catalog | `GET /api/v1/catalog/datasets`, `GET /api/v1/catalog/datasets/{dataset_name}` | Dataset catalog is not a data-quality result API. |
 | Transaction lineage | `GET /api/v1/lineage/transactions/{transaction_id}` | Requires a real transaction identifier. |
