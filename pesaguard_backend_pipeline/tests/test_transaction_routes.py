@@ -100,6 +100,7 @@ def test_dashboard_transaction_routes_are_tenant_scoped_and_idempotent(dashboard
         ("?page=0", "invalid_pagination"),
         ("?per_page=101", "invalid_pagination"),
         ("?sort=tenant_id:asc", "invalid_sort"),
+        ("?status=SETTLED", "invalid_status_filter"),
     ],
 )
 def test_transaction_search_rejects_invalid_query_parameters(dashboard_api, query, error):
@@ -261,3 +262,31 @@ def test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only(da
     assert payload["discrepancies"]["total"] == 1
     assert payload["discrepancies"]["open"] == 1
     assert payload["discrepancies"]["by_severity"] == {"warning": 1}
+
+def test_transaction_search_supports_server_side_lifecycle_filters(dashboard_api):
+    client = dashboard_api.app.test_client()
+    assert _create(client, "tenant-status", "status-tx-failed", "status-key-failed").status_code == 200
+    assert _create(client, "tenant-status", "status-tx-received", "status-key-received").status_code == 200
+
+    with dashboard_api.transaction_event_store.Session() as session:
+        session.query(dashboard_api.Transaction).filter_by(
+            tenant_id="tenant-status", trans_id="status-tx-failed"
+        ).update({"status": "FAILED"})
+        session.query(dashboard_api.Transaction).filter_by(
+            tenant_id="tenant-status", trans_id="status-tx-received"
+        ).update({"status": "RECEIVED"})
+        session.commit()
+
+    failed = client.get(
+        "/api/v1/transactions/search?status=FAILED",
+        headers={"X-Tenant-ID": "tenant-status"},
+    )
+    combined = client.get(
+        "/api/v1/transactions/search?status=FAILED,RECEIVED",
+        headers={"X-Tenant-ID": "tenant-status"},
+    )
+    assert failed.status_code == 200
+    assert failed.json["total"] == 1
+    assert failed.json["items"][0]["status"] == "FAILED"
+    assert combined.status_code == 200
+    assert combined.json["total"] == 2
