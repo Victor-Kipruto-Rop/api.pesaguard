@@ -1,0 +1,46 @@
+# Tenant workflow API contract
+
+This contract describes the additive workflow endpoints introduced for the tenant dashboard. Every route is tenant-scoped using the authenticated principal; client-supplied tenant IDs are ignored. Collection responses use `{ items, page, per_page, total }`. Detail responses use `{ item }`. Mutations use JSON and return persisted records; the UI must never substitute fixtures when a request fails.
+
+## Collections
+
+| Capability | Collection | Permissions | Behavior |
+|---|---|---|---|
+| Reconciliation run requests | `/api/v1/reconciliation-runs` | `read:discrepancies`, `write:discrepancies` | Stores run requests and lifecycle status; does not execute settlement or ledger posting. |
+| Matching rule definitions | `/api/v1/matching-rules` | `read:discrepancies`, `write:discrepancies` | Stores validated configuration; applying rules to transactions remains a separate execution path. |
+| Data-quality findings | `/api/v1/data-quality-findings` | `read:discrepancies`, `write:discrepancies` | Persists findings and triage status; no synthetic quality scores. |
+| Reconciliation schedules | `/api/v1/reconciliation-schedules` | `read:discrepancies`, `write:discrepancies` | Persists cadence/timezone/enabled state. A production scheduler worker must be configured to trigger scheduled work. |
+| Settlement review records | `/api/v1/settlement-reviews` | `read:discrepancies`, `write:discrepancies` | Review records only; never initiates, confirms, or executes settlements. |
+| Refund/reversal review requests | `/api/v1/refund-reversal-requests` | `read:discrepancies`, `write:discrepancies` | Review queue only; provider commands, refunds, reversals and ledger writes are explicitly excluded. Status changes require a privileged reviewer role. |
+| Report definitions | `/api/v1/report-definitions` | `read:analytics`, `write:settings` | Stores supported report definitions and schedule metadata. Scheduled delivery requires a scheduler/worker. |
+| Report runs | `/api/v1/report-runs` | `read:analytics`, `write:settings` | Executes a bounded tenant-scoped summary for transactions, discrepancies or reconciliation summary; does not yet create downloadable CSV/PDF artifacts. |
+| Fraud investigation cases | `/api/v1/fraud-investigations` | `read:discrepancies`, `write:discrepancies` | Persists investigation state and evidence metadata. It does not block payments or treat a risk flag as proof of fraud. |
+| Privacy requests | `/api/v1/privacy-requests` | `read:settings`, `write:settings` | Registers access/export/correction/deletion requests. Deletion/export execution remains a separately authorized workflow; requests cannot be marked completed through the generic update route. |
+| Support cases | `/api/v1/support-cases` | `read:settings`, `write:settings` | Persists tenant-scoped support cases and status. |
+
+Each collection supports `GET` and `POST`; each `/<record_id>` route supports tenant-scoped `GET` and `PATCH`. List parameters: `page` (minimum 1), `per_page` (1–100), `status` (comma-separated validated statuses), and `q` (title search). Updates accept optional `version`; mismatches return HTTP 409.
+
+Fraud investigation evidence is append-only through `POST /api/v1/fraud-investigations/<record_id>/evidence` with `{ "evidence": { "type": "...", ... } }`. Evidence entries are tenant-scoped, stamped with actor/time, capped at 100 per case, and reject raw payment payloads and credential/phone fields.
+
+## Common record shape
+
+```json
+{
+  "title": "Review missing ledger reference",
+  "description": "Optional reviewer context",
+  "payload": { "finding_code": "LEDGER_REF_MISSING" }
+}
+```
+
+Every record contains server-assigned `id`, `tenant_id`, `domain`, `status`, `created_by`, `updated_by`, `version`, `created_at`, and `updated_at`. The server never trusts a tenant ID from request JSON.
+
+## Production gates and known limitations
+
+- Apply `pesaguard_backend_pipeline/sql/migrations/20261018_tenant_workflow_records.sql` through the approved migration runner before deploying this code. Do not use `Base.metadata.create_all()` as a production migration strategy.
+- Run the focused workflow tests and the full backend suite; validate tenant-isolation and permission behavior against PostgreSQL in staging.
+- The scheduler and report-delivery worker are not enabled by persisting schedule metadata alone.
+- Report-run execution currently produces persisted-data summary JSON, not a downloadable artifact.
+- Matching rules are configuration records only until a separate tested engine integration applies them.
+- Settlement/refund/reversal endpoints are review-only and cannot move funds.
+- Privacy requests do not directly delete/export personal data; the execution workflow and audit evidence must be separately implemented and approved.
+- Route registration does not imply production readiness. CI, migrations, staging smoke tests and the deployed OpenAPI snapshot must pass before release.
