@@ -144,12 +144,14 @@ def run_due_workflows(session_factory, *, now: datetime | None = None, limit: in
                 TenantWorkflowRecord.domain.in_(["scheduled_reconciliation", "report_definition"]),
             )
             .order_by(TenantWorkflowRecord.updated_at.asc(), TenantWorkflowRecord.id.asc())
-            .limit(max(1, min(500, int(limit))))
+            .limit(max(1000, min(10000, max(1, int(limit)) * 10)))
             .with_for_update(skip_locked=True)
             .all()
         )
         stats["scanned"] = len(candidates)
         for schedule in candidates:
+            if stats["dispatched"] >= max(1, min(500, int(limit))):
+                break
             try:
                 selected = _schedule_for(schedule)
                 if selected is None:
@@ -161,12 +163,7 @@ def run_due_workflows(session_factory, *, now: datetime | None = None, limit: in
                 stored_next = config.get("next_run_at")
                 due_at = _parse_datetime(stored_next)
                 if due_at is None:
-                    due_at = _as_utc(schedule.created_at) + {
-                        "hourly": timedelta(hours=1),
-                        "daily": timedelta(days=1),
-                        "weekly": timedelta(days=7),
-                        "monthly": timedelta(days=30),
-                    }[cadence]
+                    due_at = _next_run(schedule.created_at, cadence, timezone_name)
                 if due_at > instant:
                     stats["skipped"] += 1
                     continue
