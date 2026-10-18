@@ -1133,10 +1133,9 @@ def enforce_api_security():
         return None
 
     # Root requests are served by the FastAPI control plane in production, but
-    # some hosting probes may still reach this legacy Flask mount. Keep a root
-    # probe from consuming the API's distributed rate-limit bucket or returning
-    # 429/503 merely because Redis is unavailable. This exemption applies only
-    # to an unauthenticated GET of the exact root path; API routes stay protected.
+    # some hosting probes may still reach this legacy Flask mount. Keep GET/HEAD
+    # root probes from consuming the distributed rate-limit bucket or returning
+    # 429/503 merely because Redis is unavailable. API routes stay protected.
     if request.method in {"GET", "HEAD"} and request.path == "/":
         return None
 
