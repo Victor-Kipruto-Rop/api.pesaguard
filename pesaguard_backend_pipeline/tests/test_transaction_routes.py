@@ -100,6 +100,7 @@ def test_dashboard_transaction_routes_are_tenant_scoped_and_idempotent(dashboard
         ("?page=0", "invalid_pagination"),
         ("?per_page=101", "invalid_pagination"),
         ("?sort=tenant_id:asc", "invalid_sort"),
+        ("?status=SETTLED", "invalid_status_filter"),
     ],
 )
 def test_transaction_search_rejects_invalid_query_parameters(dashboard_api, query, error):
@@ -219,3 +220,120 @@ def test_versioned_auth_aliases_are_registered(dashboard_api):
     assert login.json()["error"] in {"invalid_credentials", "mfa_required"}
     assert refresh.status_code == 400
     assert refresh.json()["error"]["code"] == "invalid_request"
+
+def test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only(dashboard_api, monkeypatch):
+    dashboard = dashboard_api
+    client = dashboard.app.test_client()
+    monkeypatch.setattr(dashboard.runtime_config, "tenant_id", "tenant-a")
+
+    assert _create(client, "tenant-a", "overview-tx-a", "overview-key-a").status_code == 200
+    assert _create(client, "tenant-b", "overview-tx-b", "overview-key-b").status_code == 200
+
+    with dashboard.transaction_event_store.Session() as session:
+        session.add(dashboard.Discrepancy(
+            id="overview-discrepancy-a",
+            tenant_id="tenant-a",
+            trans_id="overview-tx-a",
+            anomaly_type="amount_mismatch",
+            status="needs_review",
+            severity="warning",
+            details="Tenant A discrepancy",
+            resolved=False,
+        ))
+        session.add(dashboard.Discrepancy(
+            id="overview-discrepancy-b",
+            tenant_id="tenant-b",
+            trans_id="overview-tx-b",
+            anomaly_type="amount_mismatch",
+            status="needs_review",
+            severity="critical",
+            details="Tenant B discrepancy",
+            resolved=False,
+        ))
+        session.commit()
+
+    response = client.get("/api/v1/dashboard/overview")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["tenant_id"] == "tenant-a"
+    assert payload["data_source"] == "persisted_tenant_records"
+    assert payload["transactions"]["total"] == 1
+    assert payload["transactions"]["amount_by_currency"] == {"KES": "25.00"}
+    assert payload["discrepancies"]["total"] == 1
+    assert payload["discrepancies"]["open"] == 1
+    assert payload["discrepancies"]["by_severity"] == {"warning": 1}
+
+def test_transaction_search_supports_server_side_lifecycle_filters(dashboard_api):
+    client = dashboard_api.app.test_client()
+    assert _create(client, "tenant-status", "status-tx-failed", "status-key-failed").status_code == 200
+    assert _create(client, "tenant-status", "status-tx-received", "status-key-received").status_code == 200
+
+    with dashboard_api.transaction_event_store.Session() as session:
+        session.query(dashboard_api.Transaction).filter_by(
+            tenant_id="tenant-status", trans_id="status-tx-failed"
+        ).update({"status": "FAILED"})
+        session.query(dashboard_api.Transaction).filter_by(
+            tenant_id="tenant-status", trans_id="status-tx-received"
+        ).update({"status": "RECEIVED"})
+        session.commit()
+
+    failed = client.get(
+        "/api/v1/transactions/search?status=FAILED",
+        headers={"X-Tenant-ID": "tenant-status"},
+    )
+    combined = client.get(
+        "/api/v1/transactions/search?status=FAILED,RECEIVED",
+        headers={"X-Tenant-ID": "tenant-status"},
+    )
+    assert failed.status_code == 200
+    assert failed.json["total"] == 1
+    assert failed.json["items"][0]["status"] == "FAILED"
+    assert combined.status_code == 200
+    assert combined.json["total"] == 2
+
+def test_import_history_is_paginated_and_tenant_scoped(dashboard_api, monkeypatch):
+    from types import SimpleNamespace
+
+    dashboard = dashboard_api
+    client = dashboard.app.test_client()
+    monkeypatch.setattr(dashboard, "get_current_user", lambda: SimpleNamespace(tenant_id="tenant-import-a"))
+
+    with dashboard.transaction_event_store.Session() as session:
+        session.add_all([
+            dashboard.ImportJob(
+                id="import-job-a",
+                tenant_id="tenant-import-a",
+                source="mpesa",
+                filename="tenant-a.csv",
+                file_format="csv",
+                object_key="tenant-import-a/import-job-a.csv",
+                status="failed",
+                records_received=4,
+                records_valid=2,
+                records_failed=2,
+            ),
+            dashboard.ImportJob(
+                id="import-job-b",
+                tenant_id="tenant-import-b",
+                source="mpesa",
+                filename="tenant-b.csv",
+                file_format="csv",
+                object_key="tenant-import-b/import-job-b.csv",
+                status="completed",
+                records_received=8,
+                records_valid=8,
+                records_failed=0,
+            ),
+        ])
+        session.commit()
+
+    response = client.get("/api/v1/imports?page=1&per_page=1")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["import_id"] == "import-job-a"
+    assert payload["items"][0]["filename"] == "tenant-a.csv"
+
+    failed = client.get("/api/v1/imports?status=failed")
+    assert failed.status_code == 200
+    assert failed.get_json()["total"] == 1

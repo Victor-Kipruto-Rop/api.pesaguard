@@ -27,6 +27,12 @@
     },
     {
       "name": "Authentication"
+    },
+    {
+      "name": "Dashboard"
+    },
+    {
+      "name": "Imports"
     }
   ],
   "paths": {
@@ -208,6 +214,17 @@
           },
           {
             "$ref": "#/components/parameters/Filter"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Optional comma-separated transaction lifecycle states. Supported values: RECEIVED, VALIDATED, PROCESSING, RECONCILING, RECONCILED, FAILED, REJECTED. This filters processing lifecycle state, not reconciliation match outcome.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "example": "FAILED,REJECTED"
+            }
           }
         ],
         "responses": {
@@ -503,6 +520,290 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/dashboard/overview": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Get persisted tenant dashboard metrics",
+        "description": "Returns aggregate metrics computed from persisted transactions and discrepancies for the authenticated tenant. Does not infer fraud probabilities, revenue, settlement state, or reconciliation match rates.",
+        "operationId": "getTenantDashboardOverview",
+        "x-required-permission": "read:analytics",
+        "responses": {
+          "200": {
+            "description": "Tenant-scoped dashboard overview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "tenant_id",
+                    "generated_at",
+                    "transactions",
+                    "discrepancies",
+                    "data_source"
+                  ],
+                  "properties": {
+                    "tenant_id": {
+                      "type": "string"
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "data_source": {
+                      "type": "string",
+                      "enum": [
+                        "persisted_tenant_records"
+                      ]
+                    },
+                    "transactions": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "recent_30_days",
+                        "total_amount",
+                        "by_status"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recent_30_days": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "by_status": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "amount_by_currency": {
+                          "type": "object",
+                          "description": "Exact decimal aggregate per currency; values are strings and currencies are never mixed.",
+                          "additionalProperties": {
+                            "type": "string",
+                            "pattern": "^[0-9]+(\\\\.[0-9]+)?$"
+                          }
+                        }
+                      }
+                    },
+                    "discrepancies": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "open",
+                        "resolved",
+                        "recent_30_days",
+                        "by_severity"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recent_30_days": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "by_severity": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated tenant context or permission is required."
+          },
+          "503": {
+            "description": "Dashboard metrics are temporarily unavailable."
+          }
+        }
+      }
+    },
+    "/imports": {
+      "get": {
+        "tags": [
+          "Imports"
+        ],
+        "summary": "List import jobs for the authenticated tenant",
+        "description": "Returns persisted import history scoped to the authenticated tenant. This read endpoint does not upload files or start imports.",
+        "operationId": "listTenantImports",
+        "x-required-permission": "read:transactions",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant-scoped paginated import jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "page",
+                    "per_page",
+                    "total"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "import_id",
+                          "source",
+                          "filename",
+                          "file_format",
+                          "status",
+                          "records_received",
+                          "records_valid",
+                          "records_failed"
+                        ],
+                        "properties": {
+                          "import_id": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "file_format": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "running",
+                              "completed",
+                              "failed"
+                            ]
+                          },
+                          "records_received": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "records_valid": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "records_failed": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "created_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "started_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "completed_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "per_page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination or status filter"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Tenant or permission context unavailable"
+          },
+          "503": {
+            "description": "Import history temporarily unavailable"
           }
         }
       }

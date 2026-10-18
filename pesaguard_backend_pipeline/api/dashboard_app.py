@@ -2059,6 +2059,62 @@ def metrics():
     return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
 
 
+@app.route("/api/v1/imports", methods=["GET"])
+@require_auth(required_permission="read:transactions")
+def list_imports():
+    """List durable import jobs for the authenticated tenant."""
+    user = get_current_user()
+    tenant_id = str(getattr(user, "tenant_id", "") or "").strip()
+    if not tenant_id:
+        return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+
+    page, error = _query_int("page", 1, 1, 1000000)
+    if error:
+        return error
+    per_page, error = _query_int("per_page", 20, 1, 100)
+    if error:
+        return error
+    status = request.args.get("status", "").strip().lower()
+    if status and status not in {"queued", "running", "completed", "failed"}:
+        return jsonify({"error": "invalid_status", "message": "status must be queued, running, completed, or failed."}), 400
+
+    session = _open_session(read_only=True)
+    try:
+        query = session.query(ImportJob).filter(ImportJob.tenant_id == tenant_id)
+        if status:
+            query = query.filter(ImportJob.status == status)
+        total = query.count()
+        rows = (
+            query.order_by(ImportJob.created_at.desc(), ImportJob.id.asc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify({
+            "items": [{
+                "import_id": job.id,
+                "source": job.source,
+                "filename": job.filename,
+                "file_format": job.file_format,
+                "status": job.status,
+                "records_received": job.records_received,
+                "records_valid": job.records_valid,
+                "records_failed": job.records_failed,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            } for job in rows],
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+        }), 200
+    except SQLAlchemyError:
+        logger.exception("Tenant import listing failed")
+        return jsonify({"error": "imports_unavailable", "message": "Import history is temporarily unavailable."}), 503
+    finally:
+        session.close()
+
+
 @app.route("/api/v1/imports", methods=["POST"])
 @require_auth(required_permission="write:transactions")
 def create_import():
@@ -3013,6 +3069,78 @@ def incident_filter_presets():
         for preset in session.query(DiscrepancyFilterPreset).filter(DiscrepancyFilterPreset.tenant_id == tenant_id):
             presets[preset.name] = preset.filters
         return jsonify({"presets": presets}), 200
+    finally:
+        session.close()
+
+
+@app.route("/api/v1/dashboard/overview", methods=["GET"])
+@require_auth("read:analytics")
+def tenant_dashboard_overview():
+    """Return persisted, tenant-scoped transaction and discrepancy KPIs."""
+    tenant_id = _current_tenant_id()
+    if not tenant_id:
+        return jsonify({
+            "error": "tenant_context_required",
+            "message": "Authenticated tenant context is required.",
+        }), 403
+
+    session = _open_session(read_only=True)
+    try:
+        transaction_scope = session.query(Transaction).filter(Transaction.tenant_id == tenant_id)
+        transaction_count = transaction_scope.count()
+        transaction_amount_rows = (
+            transaction_scope.with_entities(
+                Transaction.currency,
+                func.coalesce(func.sum(Transaction.trans_amount), 0),
+            )
+            .group_by(Transaction.currency)
+            .all()
+        )
+        transaction_status_rows = (
+            transaction_scope.with_entities(Transaction.status, func.count(Transaction.id))
+            .group_by(Transaction.status)
+            .all()
+        )
+
+        discrepancy_scope = session.query(Discrepancy).filter(Discrepancy.tenant_id == tenant_id)
+        discrepancy_count = discrepancy_scope.count()
+        open_discrepancies = discrepancy_scope.filter(Discrepancy.resolved.is_(False)).count()
+        resolved_discrepancies = discrepancy_scope.filter(Discrepancy.resolved.is_(True)).count()
+        severity_rows = (
+            discrepancy_scope.with_entities(Discrepancy.severity, func.count(Discrepancy.id))
+            .group_by(Discrepancy.severity)
+            .all()
+        )
+
+        now = datetime.now(timezone.utc)
+        recent_cutoff = now - timedelta(days=30)
+        recent_transactions = transaction_scope.filter(Transaction.created_at >= recent_cutoff).count()
+        recent_discrepancies = discrepancy_scope.filter(Discrepancy.detected_at >= recent_cutoff).count()
+
+        return jsonify({
+            "tenant_id": tenant_id,
+            "generated_at": now.isoformat(),
+            "transactions": {
+                "total": transaction_count,
+                "recent_30_days": recent_transactions,
+                "amount_by_currency": {str(currency): str(amount or 0) for currency, amount in transaction_amount_rows},
+                "by_status": {str(status): count for status, count in transaction_status_rows},
+            },
+            "discrepancies": {
+                "total": discrepancy_count,
+                "open": open_discrepancies,
+                "resolved": resolved_discrepancies,
+                "recent_30_days": recent_discrepancies,
+                "by_severity": {str(severity): count for severity, count in severity_rows},
+            },
+            "data_source": "persisted_tenant_records",
+        }), 200
+    except SQLAlchemyError:
+        logger.exception("Tenant dashboard overview query failed")
+        return jsonify({
+            "error": "dashboard_overview_unavailable",
+            "message": "Dashboard metrics are temporarily unavailable.",
+        }), 503
     finally:
         session.close()
 
