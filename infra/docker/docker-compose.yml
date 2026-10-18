@@ -16,6 +16,7 @@ x-observability-env: &observability-env
   OTEL_DEPLOYMENT_ENVIRONMENT: ${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
   OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
   OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.10}
+  OTEL_PYTHON_FASTAPI_EXCLUDED_URLS: ${OTEL_PYTHON_FASTAPI_EXCLUDED_URLS:-/health,/livez,/metrics}
   PESAGUARD_SHARED_METRICS: ${PESAGUARD_SHARED_METRICS:-1}
   PROMETHEUS_MULTIPROC_DIR: /tmp/pesaguard-prometheus
   KAFKA_LAG_TOPICS: ${KAFKA_LAG_TOPICS:-pesaguard.transactions.raw,pesaguard.reconciliation.exceptions,pesaguard.notifications.requested}
@@ -155,6 +156,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-webhook
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
@@ -187,6 +189,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-reconciliation
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
@@ -215,6 +218,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-api
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       PESAGUARD_API_URL: ${PESAGUARD_API_URL:?PESAGUARD_API_URL must be set}
@@ -243,6 +247,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-workflow-scheduler
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       PESAGUARD_WORKFLOW_SCHEDULER_INTERVAL_SECONDS: ${PESAGUARD_WORKFLOW_SCHEDULER_INTERVAL_SECONDS:-30}
       PESAGUARD_WORKFLOW_SCHEDULER_BATCH: ${PESAGUARD_WORKFLOW_SCHEDULER_BATCH:-100}
@@ -265,6 +270,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-rq-worker
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
       REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
@@ -292,6 +298,7 @@ services:
       - ${PESAGUARD_COMPOSE_ENV_FILE:-../../.env}
     environment:
       <<: [*residency-env, *observability-env]
+      OTEL_SERVICE_NAME: pesaguard-communications-worker
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER must be set}
       REDIS_URL: ${REDIS_URL_DOCKER:?REDIS_URL_DOCKER must be set}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_DOCKER:?KAFKA_BOOTSTRAP_SERVERS_DOCKER must be set}
