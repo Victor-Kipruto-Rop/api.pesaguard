@@ -14,6 +14,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
 from auth_rbac import get_current_user, require_auth
+from action_audit import ActionAuditRecord, persist_audit_event
 from models import Discrepancy, Transaction
 from workflow_models import TenantWorkflowRecord
 
@@ -120,6 +121,27 @@ def create_workflow_blueprint(session_factory):
         if not tenant_id or not user_id:
             return None, None
         return tenant_id, user_id
+
+    def _record_workflow_audit(session, *, tenant_id: str, user_id: str, action: str, domain: str, record_id: str, operation: str, version: int) -> None:
+        """Persist an append-only audit event in the same transaction as a workflow mutation."""
+        request_id = (request.headers.get("X-Request-ID") or "").strip()[:128] or None
+        correlation_id = (request.headers.get("X-Correlation-ID") or "").strip()[:128] or None
+        audit = ActionAuditRecord(
+            tenant_id=tenant_id,
+            actor=user_id,
+            actor_id=user_id,
+            actor_type="user",
+            action=action,
+            category="operations",
+            outcome="success",
+            resource_type=domain,
+            resource_id=record_id,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            idempotency_key=f"workflow:{record_id}:{operation}:{version}",
+            details={"domain": domain, "operation": operation, "status_version": version},
+        )
+        persist_audit_event(session, audit, event_type=f"workflow.{operation}")
 
     def _serialize(record: TenantWorkflowRecord) -> dict[str, Any]:
         return {
@@ -289,6 +311,12 @@ def create_workflow_blueprint(session_factory):
                 payload=valid["payload"], created_by=user_id, updated_by=user_id,
             )
             session.add(record)
+            session.flush()
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.created", domain=domain, record_id=record.id,
+                operation="created", version=record.version,
+            )
             session.commit()
             return jsonify({"item": _serialize(record)}), 201
         except Exception:
@@ -349,6 +377,11 @@ def create_workflow_blueprint(session_factory):
             record.updated_by = user_id
             record.version += 1
             record.updated_at = datetime.now(timezone.utc)
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.updated", domain=domain, record_id=record.id,
+                operation="updated", version=record.version,
+            )
             session.commit()
             return jsonify({"item": _serialize(record)})
         except Exception:
@@ -384,6 +417,11 @@ def create_workflow_blueprint(session_factory):
             record.updated_by = user_id
             record.updated_at = datetime.now(timezone.utc)
             record.version += 1
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.updated", domain="matching_rule", record_id=record.id,
+                operation="soft_disabled", version=record.version,
+            )
             session.commit()
             return jsonify({"item": _serialize(record), "disabled": True})
         except Exception:
@@ -429,6 +467,11 @@ def create_workflow_blueprint(session_factory):
             record.updated_by = user_id
             record.updated_at = datetime.now(timezone.utc)
             record.version += 1
+            _record_workflow_audit(
+                session, tenant_id=tenant_id, user_id=user_id,
+                action="configuration.updated", domain="fraud_investigation", record_id=record.id,
+                operation="evidence_appended", version=record.version,
+            )
             session.commit()
             return jsonify({"item": _serialize(record)}), 201
         except Exception:
