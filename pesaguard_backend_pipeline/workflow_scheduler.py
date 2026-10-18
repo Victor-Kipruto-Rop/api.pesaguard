@@ -412,9 +412,11 @@ def process_queued_reconciliation_runs(
                 transaction_failed = False
                 for processed_record, transaction in rows:
                     event = dict(transaction.raw_payload or {})
-                    event.setdefault("TransID", processed_record.daraja_trans_id)
+                    if not event.get("TransID") and not event.get("trans_id"):
+                        event["TransID"] = processed_record.daraja_trans_id
                     event["tenant_id"] = tenant_id
-                    event.setdefault("provider_account_id", processed_record.provider_account_id)
+                    if not event.get("provider_account_id"):
+                        event["provider_account_id"] = processed_record.provider_account_id
                     if not reconciliation_job._process_message_unbounded(
                         event,
                         consumer=None,
