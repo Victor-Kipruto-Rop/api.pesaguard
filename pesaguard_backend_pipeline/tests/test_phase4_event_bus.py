@@ -229,6 +229,18 @@ def test_replay_preserves_event_identity_after_retry_exhaustion(tmp_path):
         "business"
     ].get("transaction_received", 0) + 1
 
+
+def test_legacy_publish_rejects_missing_or_placeholder_tenant_scope():
+    import producer
+
+    for payload in (
+        {"TransID": "missing-tenant"},
+        {"TransID": "default-tenant", "tenant_id": "default"},
+        {"TransID": "unknown-tenant", "tenant_id": "unknown"},
+    ):
+        with pytest.raises(ValueError, match="tenant_id is required"):
+            producer._validate_payload_schema(payload)
+
 def test_broker_unavailable_raises_without_acknowledging_event(monkeypatch):
     import producer
 
@@ -237,7 +249,7 @@ def test_broker_unavailable_raises_without_acknowledging_event(monkeypatch):
     producer._circuit_breaker.state = "CLOSED"
     producer._circuit_breaker.failure_count = 0
     with pytest.raises(ConnectionError):
-        producer.publish_transaction_event("mpesa.transactions.raw", {"TransID": "broker-down"})
+        producer.publish_transaction_event("mpesa.transactions.raw", {"TransID": "broker-down", "tenant_id": "tenant-a"})
 
 
 def test_batch_publish_preserves_per_message_delivery_results(monkeypatch):
@@ -271,7 +283,7 @@ def test_batch_publish_preserves_per_message_delivery_results(monkeypatch):
 
     results = producer.publish_transaction_batch_results(
         "mpesa.transactions.raw",
-        [{"TransID": "tx-1"}, {"TransID": "tx-2"}, {"TransID": "tx-3"}],
+        [{"TransID": "tx-1", "tenant_id": "tenant-a"}, {"TransID": "tx-2", "tenant_id": "tenant-a"}, {"TransID": "tx-3", "tenant_id": "tenant-a"}],
     )
 
     assert results == [True, False, True]
