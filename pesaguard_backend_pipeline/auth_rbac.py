@@ -184,7 +184,10 @@ def _jwt_verification_key(token: str) -> str:
 
 def _session_is_active(session_id: Optional[str], user_id: str, tenant_id: str) -> bool:
     if not session_id:
-        return True
+        # Production and staging user tokens must be tied to persisted session
+        # state so revocation and idle/absolute expiry cannot be bypassed by
+        # omitting the session claim. Machine principals are handled separately.
+        return runtime_environment() not in {"production", "staging"}
     if not isinstance(session_id, str):
         return False
     _ensure_revocation_store_ready()
