@@ -101,6 +101,8 @@ jobs:
           if [ -f frontend/package.json ]; then
             npm --prefix frontend ci
             npm --prefix frontend test -- --watchAll=false
+          else
+            echo "No frontend/package.json found; frontend tests are not applicable."
           fi
 
   integration:
