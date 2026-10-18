@@ -460,6 +460,25 @@ def create_workflow_blueprint(session_factory):
             valid, message = _validate(domain, body, creating=False)
             if message:
                 return jsonify({"error": "validation_error", "message": message}), 400
+            target_payload = valid["payload"] if "payload" in body else dict(record.payload or {})
+            target_status = valid["status"] or record.status
+            if domain == "scheduled_reconciliation" and target_status == "scheduled":
+                cadence = target_payload.get("cadence")
+                timezone_name = target_payload.get("timezone", "Africa/Nairobi")
+                if cadence not in {"hourly", "daily", "weekly", "monthly"} or target_payload.get("enabled", True) is not True:
+                    return jsonify({"error": "schedule_required", "message": "A scheduled reconciliation requires an enabled supported cadence."}), 400
+                try:
+                    ZoneInfo(timezone_name)
+                except (ZoneInfoNotFoundError, TypeError, ValueError):
+                    return jsonify({"error": "invalid_schedule_timezone", "message": "A scheduled reconciliation requires a valid IANA timezone."}), 400
+            if domain == "report_definition" and target_status == "scheduled":
+                schedule = target_payload.get("schedule")
+                if not isinstance(schedule, dict) or schedule.get("cadence") not in {"hourly", "daily", "weekly", "monthly"} or schedule.get("enabled", True) is not True:
+                    return jsonify({"error": "schedule_required", "message": "An enabled, valid report schedule is required before scheduling."}), 400
+                try:
+                    ZoneInfo(schedule.get("timezone", "Africa/Nairobi"))
+                except (ZoneInfoNotFoundError, TypeError, ValueError):
+                    return jsonify({"error": "invalid_schedule_timezone", "message": "A report schedule requires a valid IANA timezone."}), 400
             if valid["title"] is not None:
                 record.title = valid["title"]
             if valid["description"] is not None:
