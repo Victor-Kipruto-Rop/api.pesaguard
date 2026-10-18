@@ -62,6 +62,9 @@ def _context_error(tenant_id: str | None, role: str | None):
 def get_tenant_settings():
     """Retrieve full merged settings configuration for the active tenant."""
     tenant_id, role = _get_current_context()
+    context_error = _context_error(tenant_id, role)
+    if context_error is not None:
+        return context_error
 
     if not has_permission(role, PERM_VIEW_SETTINGS):
         return jsonify({"error": "forbidden", "message": "Insufficient permissions to view settings."}), 403
@@ -88,6 +91,9 @@ def update_tenant_settings():
         return jsonify({"error": "payload_too_large", "message": "Request payload exceeds size limit."}), 413
 
     tenant_id, role = _get_current_context()
+    context_error = _context_error(tenant_id, role)
+    if context_error is not None:
+        return context_error
 
     try:
         enforce_permission(role, PERM_MANAGE_SETTINGS, tenant_id=tenant_id)
@@ -117,6 +123,9 @@ def update_tenant_settings():
 def trigger_test_alert():
     """Send a test verification notification to tenant's configured alert channels."""
     tenant_id, role = _get_current_context()
+    context_error = _context_error(tenant_id, role)
+    if context_error is not None:
+        return context_error
 
     try:
         enforce_permission(role, PERM_MANAGE_SETTINGS, tenant_id=tenant_id)
