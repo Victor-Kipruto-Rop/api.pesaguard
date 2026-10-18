@@ -118,6 +118,20 @@ def test_schedule_validation_and_report_summary_execution(workflow_client):
     )
     assert invalid.status_code == 400
 
+    invalid_timezone = client.post(
+        "/api/v1/reconciliation-schedules",
+        headers=headers,
+        json={"title": "Invalid timezone", "payload": {"cadence": "daily", "timezone": "Mars/Olympus", "enabled": True}},
+    )
+    assert invalid_timezone.status_code == 400
+
+    invalid_report_schedule = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Invalid report schedule", "payload": {"report_type": "transactions", "schedule": {"cadence": "whenever"}}},
+    )
+    assert invalid_report_schedule.status_code == 400
+
     scheduled = client.post(
         "/api/v1/reconciliation-schedules",
         headers=headers,
