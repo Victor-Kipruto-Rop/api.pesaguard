@@ -36,104 +36,189 @@ def _try_import_first(*module_names: str) -> Any:
     return None
 
 
-def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
-    """Initialize OTLP tracing with per-integration defensive imports.
+def _instrument_application(app: Any) -> bool:
+    """Instrument one ASGI or WSGI application without making it a hard dependency."""
+    if app is None:
+        return False
+    # Try ASGI first; FastAPIInstrumentor instruments incoming requests and W3C
+    # context propagation. It raises on unsupported app types, so Flask remains a
+    # supported fallback for the webhook receiver.
+    fm = _try_import_first("opentelemetry.instrumentation.fastapi")
+    fastapi_cls = getattr(fm, "FastAPIInstrumentor", None) if fm else None
+    if fastapi_cls is not None:
+        try:
+            fastapi_cls().instrument_app(app)
+            return True
+        except Exception:
+            logger.debug("FastAPI OTel instrumentation not applicable; trying Flask.", exc_info=True)
+    fm = _try_import_first("opentelemetry.instrumentation.flask")
+    flask_cls = getattr(fm, "FlaskInstrumentor", None) if fm else None
+    if flask_cls is not None:
+        try:
+            flask_cls().instrument_app(app)
+            return True
+        except Exception:
+            logger.debug("Flask OTel instrumentation skipped.", exc_info=True)
+    return False
 
-    This is an optional, defensive bootstrap. When the OpenTelemetry SDK is
-    unavailable the process continues to use the lightweight generated span
-    and W3C traceparent fallback implemented in this module. OTel is therefore
-    compatible but not required.
+
+def init_opentelemetry(app: Any = None, engine: Any = None) -> bool:
+    """Initialize the OTel SDK once and instrument ASGI/WSGI and data clients.
+
+    The SDK remains safe to run without an OTLP endpoint: spans are created and
+    the structured trace fallback remains available, but spans are not exported.
+    Configure OTEL_EXPORTER_OTLP_ENDPOINT to enable actual remote trace export.
     """
     global _otel_tracer, _otel_initialized, _otel_instrumented, _otel_exporter_attached
     if _otel_initialized:
+        if app is not None:
+            _otel_instrumented = _instrument_application(app) or _otel_instrumented
+        if engine is not None:
+            _otel_instrumented = instrument_sqlalchemy_engine(engine) or _otel_instrumented
         return _otel_tracer is not None
-    _otel_initialized = True
+
     trace_api = _try_import_first("opentelemetry.trace")
     sdk_trace = _try_import_first("opentelemetry.sdk.trace")
     sdk_resources = _try_import_first("opentelemetry.sdk.resources")
     sdk_export = _try_import_first("opentelemetry.sdk.trace.export")
-    propagator_api = _try_import_first("opentelemetry.propagators")
     if trace_api is None or sdk_trace is None:
-        logger.info("OTel unavailable; using structured trace fallback.")
+        _otel_initialized = True
+        logger.info("OTel SDK unavailable; using structured trace fallback.")
         return False
+
     try:
+        service_name = os.getenv("OTEL_SERVICE_NAME", "pesaguard")
+        attributes = {
+            "service.name": service_name,
+            "service.version": os.getenv("OTEL_SERVICE_VERSION", os.getenv("PESAGUARD_RELEASE", "unknown")),
+            "deployment.environment.name": os.getenv("OTEL_DEPLOYMENT_ENVIRONMENT", _normalized_environment()),
+        }
         resource = None
         if sdk_resources is not None:
             try:
-                resource = sdk_resources.Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "pesaguard")})
+                resource = sdk_resources.Resource.create(attributes)
             except Exception:
-                resource = None
+                logger.debug("OTel resource attributes could not be set.", exc_info=True)
+
+        ratio_raw = os.getenv("OTEL_TRACES_SAMPLER_ARG", "0.10")
         try:
-            provider = sdk_trace.TracerProvider(resource=resource) if resource is not None else sdk_trace.TracerProvider()
-        except TypeError:
-            provider = sdk_trace.TracerProvider()
-        if sdk_export is not None:
-            exp_mod = _try_import_first("opentelemetry.exporter.otlp.proto.grpc.trace_exporter", "opentelemetry.exporter.otlp.proto.http.trace_exporter")
-            exp_cls = getattr(exp_mod, "OTLPSpanExporter", None) if exp_mod else None
+            ratio = max(0.0, min(1.0, float(ratio_raw)))
+        except (TypeError, ValueError):
+            ratio = 0.10
+        sampler = None
+        sampler_name = os.getenv("OTEL_TRACES_SAMPLER", "parentbased_traceidratio").lower()
+        try:
+            if sampler_name in {"always_on", "alwayson"}:
+                sampler = sdk_trace.ALWAYS_ON
+            elif sampler_name in {"always_off", "alwaysoff"}:
+                sampler = sdk_trace.ALWAYS_OFF
+            elif sampler_name in {"traceidratio", "trace_id_ratio"}:
+                sampler = sdk_trace.TraceIdRatioBased(ratio)
+            else:
+                sampler = sdk_trace.ParentBased(root=sdk_trace.TraceIdRatioBased(ratio))
+        except (AttributeError, TypeError):
+            sampler = None
+
+        provider_kwargs = {}
+        if resource is not None:
+            provider_kwargs["resource"] = resource
+        if sampler is not None:
+            provider_kwargs["sampler"] = sampler
+        provider = sdk_trace.TracerProvider(**provider_kwargs)
+
+        endpoint = (os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "").strip()
+        protocol = (os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL") or "grpc").strip().lower()
+        if endpoint and sdk_export is not None:
+            if protocol in {"http/protobuf", "http"}:
+                exporter_module = _try_import_first("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+            else:
+                exporter_module = _try_import_first("opentelemetry.exporter.otlp.proto.grpc.trace_exporter")
+            exporter_cls = getattr(exporter_module, "OTLPSpanExporter", None) if exporter_module else None
             batch_cls = getattr(sdk_export, "BatchSpanProcessor", None)
-            if exp_cls is not None and batch_cls is not None:
+            if exporter_cls is not None and batch_cls is not None:
                 try:
-                    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel_collector:4317")
-                    try:
-                        exporter = exp_cls(endpoint=endpoint, insecure=True)
-                    except TypeError:
-                        exporter = exp_cls(endpoint=endpoint)
+                    timeout = float(os.getenv("OTEL_EXPORTER_OTLP_TIMEOUT", "5"))
+                    exporter = exporter_cls(endpoint=endpoint, timeout=max(1.0, timeout))
                     provider.add_span_processor(batch_cls(exporter))
                     _otel_exporter_attached = True
                 except Exception:
-                    logger.debug("OTLP exporter skipped", exc_info=True)
+                    logger.warning("OTLP exporter could not be configured; spans will not be exported.", exc_info=True)
+        else:
+            logger.info("OTel SDK active without an OTLP endpoint; spans are not exported.")
+
         try:
             trace_api.set_tracer_provider(provider)
         except Exception:
+            # A provider may already have been installed by a host integration.
+            logger.debug("OTel tracer provider was already configured.", exc_info=True)
+        _otel_tracer = trace_api.get_tracer(service_name)
+
+        done = _instrument_application(app)
+        integrations = (
+            (("opentelemetry.instrumentation.sqlalchemy", "SQLAlchemyInstrumentor"), engine),
+            (("opentelemetry.instrumentation.redis", "RedisInstrumentor"), None),
+            (("opentelemetry.instrumentation.kafka", "KafkaInstrumentor"), None),
+            (("opentelemetry.instrumentation.requests", "RequestsInstrumentor"), None),
+            (("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor"), None),
+        )
+        for (module_name, class_name), target_engine in integrations:
+            module = _try_import_first(module_name)
+            instrumentor_cls = getattr(module, class_name, None) if module else None
+            if instrumentor_cls is None:
+                continue
             try:
-                provider = trace_api.get_tracer_provider()
-            except Exception:
-                pass
-        _otel_tracer = trace_api.get_tracer("pesaguard")
-        done = False
-        if app is not None:
-            fm = _try_import_first("opentelemetry.instrumentation.flask")
-            fc = getattr(fm, "FlaskInstrumentor", None) if fm else None
-            if fc is not None:
-                try:
-                    fc().instrument_app(app); done = True
-                except Exception:
-                    logger.debug("Flask OTel skipped", exc_info=True)
-        sm = _try_import_first("opentelemetry.instrumentation.sqlalchemy")
-        sc = getattr(sm, "SQLAlchemyInstrumentor", None) if sm else None
-        if sc is not None:
-            try:
-                inst = sc()
-                inst.instrument(engine=engine) if engine is not None else inst.instrument()
+                instrumentor = instrumentor_cls()
+                if class_name == "SQLAlchemyInstrumentor":
+                    if target_engine is not None:
+                        instrumentor.instrument(engine=target_engine)
+                    else:
+                        instrumentor.instrument()
+                else:
+                    instrumentor.instrument()
                 done = True
             except Exception:
-                logger.debug("SA OTel skipped", exc_info=True)
-        rm = _try_import_first("opentelemetry.instrumentation.redis")
-        rc = getattr(rm, "RedisInstrumentor", None) if rm else None
-        if rc is not None:
+                logger.debug("%s OTel instrumentation skipped.", class_name, exc_info=True)
+
+        # kafka-python and RQ instrumentors are optional; their package/module names
+        # vary between compatible distributions, so retain defensive discovery.
+        for module_names, class_names in (
+            (("opentelemetry.instrumentation.kafka", "opentelemetry.instrumentation.kafka_python"), ("KafkaInstrumentor",)),
+            (("opentelemetry.instrumentation.rq", "opentelemetry_instrumentation_rq"), ("RqInstrumentor", "RQInstrumentor")),
+        ):
+            module = _try_import_first(*module_names)
+            instrumentor_cls = next((getattr(module, name, None) for name in class_names if module and getattr(module, name, None)), None)
+            if instrumentor_cls is None:
+                continue
             try:
-                rc().instrument(); done = True
+                instrumentor_cls().instrument()
+                done = True
             except Exception:
-                logger.debug("Redis OTel skipped", exc_info=True)
-        km = _try_import_first("opentelemetry.instrumentation.kafka", "opentelemetry.instrumentation.kafka_python")
-        kc = getattr(km, "KafkaInstrumentor", None) if km else None
-        if kc is not None:
-            try:
-                kc().instrument(); done = True
-            except Exception:
-                logger.debug("Kafka OTel skipped", exc_info=True)
-        qm = _try_import_first("opentelemetry.instrumentation.rq", "opentelemetry_instrumentation_rq")
-        qc = (getattr(qm, "RqInstrumentor", None) or getattr(qm, "RQInstrumentor", None)) if qm else None
-        if qc is not None:
-            try:
-                qc().instrument(); done = True
-            except Exception:
-                logger.debug("RQ OTel skipped", exc_info=True)
+                logger.debug("%s instrumentation skipped.", class_names[0], exc_info=True)
+
         _otel_instrumented = bool(done)
+        _otel_initialized = True
+        logger.info(
+            "OpenTelemetry initialized: service=%s exporter_attached=%s instrumentation_active=%s protocol=%s",
+            service_name, _otel_exporter_attached, _otel_instrumented, protocol,
+        )
         return True
     except Exception:
-        logger.exception("OTel init failed; using fallback.")
+        _otel_initialized = True
+        logger.exception("OTel initialization failed; using structured trace fallback.")
         return _otel_tracer is not None
+
+
+def otel_status() -> Dict[str, Any]:
+    """Return safe runtime diagnostics without exposing exporter credentials."""
+    return {
+        "sdk_initialized": _otel_initialized,
+        "sdk_available": _otel_tracer is not None,
+        "instrumentation_active": _otel_instrumented,
+        "exporter_configured": _otel_exporter_attached,
+        "endpoint_configured": bool((os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "").strip()),
+        "service_name": os.getenv("OTEL_SERVICE_NAME", "pesaguard"),
+        "protocol": os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+    }
 
 
 
