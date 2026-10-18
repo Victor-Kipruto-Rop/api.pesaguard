@@ -1,10 +1,11 @@
 # Webhook Signing Secret Encryption Rollout
 
-New webhook signing secrets are stored as authenticated ciphertext using
+New webhook signing secrets and sensitive leaf fields in webhook delivery audit
+payloads are stored as authenticated ciphertext using
 `PESAGUARD_PAYLOAD_ENCRYPTION_KEY`. The API returns the plaintext signing
 secret only in the successful registration response. Existing legacy plaintext
-secrets remain readable temporarily for compatibility; migrate them before
-calling the rollout complete.
+secrets and historical delivery payloads remain readable temporarily for
+compatibility; migrate them before calling the rollout complete.
 
 ## Required environment
 
@@ -26,7 +27,8 @@ staging or production.
    approved recovery store.
 3. Set `PESAGUARD_PAYLOAD_ENCRYPTION_KEY` directly in the protected deployment
    environment. Never paste it into a pull request or chat.
-4. Run a dry-run from the repository root:
+4. Run a dry-run from the repository root. This reports legacy plaintext signing
+   secrets and delivery payloads that still contain sensitive plaintext fields:
 
    ```bash
    PYTHONPATH=pesaguard_backend_pipeline python pesaguard_backend_pipeline/scripts/encrypt_webhook_signing_secrets.py
@@ -40,8 +42,9 @@ staging or production.
 
 6. Restart workers/API processes as required. Run a controlled webhook delivery
    to confirm the recipient validates the signature.
-7. Verify the migrated records use the `enc:v1:` prefix without printing
-   ciphertext or plaintext values. Check errors and delivery status.
+7. Verify migrated signing secrets and sensitive delivery-payload fields use the
+   `enc:v1:` prefix without printing ciphertext or plaintext values. Check errors
+   and delivery status.
 8. Preserve the previous key if any other encrypted records still depend on it.
    Remove it only after all retained data is re-encrypted and recovery is tested.
 
