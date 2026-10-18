@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 try:
     from fastapi import FastAPI
-    from fastapi.middleware.wsgi import WSGIMiddleware
+    from a2wsgi import WSGIMiddleware
     from fastapi.responses import JSONResponse
 except ImportError as exc:  # pragma: no cover - exercised in dependency installation
     raise RuntimeError("FastAPI control plane requires fastapi and uvicorn dependencies") from exc
