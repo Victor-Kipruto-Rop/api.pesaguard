@@ -2059,6 +2059,62 @@ def metrics():
     return Response(build_metrics_payload(), mimetype="text/plain; version=0.0.4")
 
 
+@app.route("/api/v1/imports", methods=["GET"])
+@require_auth(required_permission="read:transactions")
+def list_imports():
+    """List durable import jobs for the authenticated tenant."""
+    user = get_current_user()
+    tenant_id = str(getattr(user, "tenant_id", "") or "").strip()
+    if not tenant_id:
+        return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+
+    page, error = _query_int("page", 1, 1, 1000000)
+    if error:
+        return error
+    per_page, error = _query_int("per_page", 20, 1, 100)
+    if error:
+        return error
+    status = request.args.get("status", "").strip().lower()
+    if status and status not in {"queued", "running", "completed", "failed"}:
+        return jsonify({"error": "invalid_status", "message": "status must be queued, running, completed, or failed."}), 400
+
+    session = _open_session(read_only=True)
+    try:
+        query = session.query(ImportJob).filter(ImportJob.tenant_id == tenant_id)
+        if status:
+            query = query.filter(ImportJob.status == status)
+        total = query.count()
+        rows = (
+            query.order_by(ImportJob.created_at.desc(), ImportJob.id.asc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify({
+            "items": [{
+                "import_id": job.id,
+                "source": job.source,
+                "filename": job.filename,
+                "file_format": job.file_format,
+                "status": job.status,
+                "records_received": job.records_received,
+                "records_valid": job.records_valid,
+                "records_failed": job.records_failed,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            } for job in rows],
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+        }), 200
+    except SQLAlchemyError:
+        logger.exception("Tenant import listing failed")
+        return jsonify({"error": "imports_unavailable", "message": "Import history is temporarily unavailable."}), 503
+    finally:
+        session.close()
+
+
 @app.route("/api/v1/imports", methods=["POST"])
 @require_auth(required_permission="write:transactions")
 def create_import():
