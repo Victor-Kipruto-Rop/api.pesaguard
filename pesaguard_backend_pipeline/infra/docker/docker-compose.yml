@@ -14,7 +14,6 @@ x-observability-env: &observability-env
   PROMETHEUS_MULTIPROC_DIR: /tmp/pesaguard-prometheus
   KAFKA_LAG_TOPICS: ${KAFKA_LAG_TOPICS:-pesaguard.transactions.raw,pesaguard.reconciliation.exceptions,pesaguard.notifications.requested}
   KAFKA_LAG_GROUPS: ${KAFKA_LAG_GROUPS:-reconciliation,communications}
-  PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET: ${PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET:-}
   PYTHONPATH: /app:/app/pesaguard_backend_pipeline
 
 services:
@@ -128,6 +127,7 @@ services:
       PESAGUARD_BIND_HOST: ${PESAGUARD_BIND_HOST_DOCKER:?PESAGUARD_BIND_HOST_DOCKER must be set}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
       PESAGUARD_PROMETHEUS_TOKEN_FILE: /run/secrets/dashboard_metrics_token
+      PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET: ${PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
