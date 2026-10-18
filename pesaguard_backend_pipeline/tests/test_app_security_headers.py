@@ -64,3 +64,20 @@ def test_alertmanager_receiver_rejects_wrong_secret(monkeypatch):
     )
 
     assert response.status_code == 401
+
+
+def test_alertmanager_receiver_accepts_configured_bearer_secret(monkeypatch):
+    secret = "test-alertmanager-secret-value"
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "production")
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET", secret)
+
+    response = webhook_app.app.test_client().post(
+        "/ops/alerts",
+        json={"alerts": []},
+        headers={"Authorization": f"Bearer {secret}"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "accepted"
