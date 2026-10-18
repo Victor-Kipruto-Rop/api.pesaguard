@@ -14,6 +14,7 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency install
 
 from .api.dashboard_app import create_app as create_dashboard_app
 from .health import build_health_payload, sanitize_health_payload
+from observability import init_opentelemetry
 
 
 app = FastAPI(
@@ -23,6 +24,10 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+# Instrument the production ASGI entry point, not only the legacy Flask webhook.
+# Export is enabled only when OTEL_EXPORTER_OTLP_ENDPOINT is configured.
+init_opentelemetry(app=app)
 
 
 @app.head("/")
