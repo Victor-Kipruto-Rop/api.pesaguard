@@ -196,7 +196,38 @@ def create_workflow_blueprint(session_factory):
         status = body.get("status")
         if status is not None and status not in VALID_STATUSES[domain]:
             return None, "unsupported status for this workflow"
-        if domain == "matching_rule":
+        if domain == "reconciliation_run":
+            parsed_bounds = {}
+            for field_name in ("start_at", "end_at"):
+                if field_name in payload:
+                    value = payload[field_name]
+                    if not isinstance(value, str):
+                        return None, f"{field_name} must be an ISO-8601 timestamp with timezone"
+                    try:
+                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    except ValueError:
+                        return None, f"{field_name} must be an ISO-8601 timestamp with timezone"
+                    if parsed.tzinfo is None:
+                        return None, f"{field_name} must include a timezone"
+                    parsed_bounds[field_name] = parsed.astimezone(timezone.utc)
+            if "start_at" in parsed_bounds and "end_at" in parsed_bounds:
+                if parsed_bounds["start_at"] > parsed_bounds["end_at"]:
+                    return None, "start_at must be earlier than or equal to end_at"
+                if (parsed_bounds["end_at"] - parsed_bounds["start_at"]).total_seconds() > 90 * 24 * 3600:
+                    return None, "reconciliation run windows cannot exceed 90 days"
+            if "provider_account_id" in payload and (
+                not isinstance(payload["provider_account_id"], str)
+                or not payload["provider_account_id"].strip()
+                or len(payload["provider_account_id"]) > 128
+            ):
+                return None, "provider_account_id must be a non-empty string of at most 128 characters"
+            if "max_transactions" in payload and (
+                not isinstance(payload["max_transactions"], int)
+                or isinstance(payload["max_transactions"], bool)
+                or not 1 <= payload["max_transactions"] <= 5000
+            ):
+                return None, "max_transactions must be an integer between 1 and 5000"
+        elif domain == "matching_rule":
             if "amount_tolerance" in payload:
                 tolerance = payload["amount_tolerance"]
                 if not isinstance(tolerance, (int, float)) or isinstance(tolerance, bool) or not 0 <= tolerance <= 5:
@@ -328,6 +359,12 @@ def create_workflow_blueprint(session_factory):
             schedule = valid["payload"].get("schedule")
             if not isinstance(schedule, dict) or schedule.get("enabled", True) is not True:
                 return jsonify({"error": "schedule_required", "message": "An enabled, valid schedule is required before a report definition can be scheduled."}), 400
+        if domain == "reconciliation_run":
+            # This field is worker-owned; never trust a client-supplied execution state.
+            valid["payload"] = {
+                **valid["payload"],
+                "execution_status": "queued_for_reconciliation_worker",
+            }
         status = requested_status or {
             "reconciliation_run": "requested",
             "matching_rule": "draft",
@@ -428,7 +465,15 @@ def create_workflow_blueprint(session_factory):
             if valid["description"] is not None:
                 record.description = valid["description"]
             if "payload" in body:
-                record.payload = valid["payload"]
+                next_payload = dict(valid["payload"])
+                if domain == "reconciliation_run":
+                    worker_fields = {"execution_status", "progress", "started_at", "completed_at", "lease_expires_at", "failure_reason"}
+                    previous_payload = dict(record.payload or {})
+                    for field_name in worker_fields:
+                        next_payload.pop(field_name, None)
+                        if field_name in previous_payload:
+                            next_payload[field_name] = previous_payload[field_name]
+                record.payload = next_payload
             if valid["status"] is not None and valid["status"] != record.status:
                 allowed = ALLOWED_TRANSITIONS[domain].get(record.status, set())
                 if valid["status"] not in allowed:
