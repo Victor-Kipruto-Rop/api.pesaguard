@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from environment import required_env
+from environment import required_env, runtime_environment
 
 import hashlib
 import hmac
@@ -181,7 +181,11 @@ def _verify_credentials(username: str, password: str) -> Optional[Dict[str, Any]
     return user
 
 
-if "login" not in app.view_functions:
+# This legacy API authenticates against a static environment-provided user map
+# and does not create persisted UserAccount/UserSession records. Never expose it
+# in staging or production; the canonical auth API in app_4_advanced_features
+# creates database-backed, revocable sessions.
+if "login" not in app.view_functions and runtime_environment() not in {"staging", "production"}:
     @app.route("/auth/login", methods=["POST"])
     def login():
         data = request.json or {}
