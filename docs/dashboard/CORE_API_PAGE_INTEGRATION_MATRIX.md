@@ -74,3 +74,5 @@ The route test `test_dashboard_overview_returns_persisted_metrics_for_current_te
 ## Reconciliation results collection
 
 `GET /api/v1/reconciliation/results` requires `read:transactions` and authenticated tenant context. It supports `page`, `per_page` (1–100), comma-separated `status` values from `MATCHED`, `UNMATCHED`, `PARTIAL`, `MISMATCH`, `DUPLICATE`, `PENDING`, and `EXCEPTION`, plus an optional exact `transaction_id`. Results are filtered by tenant before counting and pagination. Response fields exclude the raw `matched_record` payload and expose only a boolean indicating whether a matched record exists. Regression tests cover tenant isolation, status validation, pagination, and payload minimization.
+
+- Risk assessment collection: `GET /api/v1/fraud/assessments` requires `read:transactions`, filters to the authenticated tenant, validates risk-level filters (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`), and returns paginated persisted assessment summaries without raw feature payloads.
