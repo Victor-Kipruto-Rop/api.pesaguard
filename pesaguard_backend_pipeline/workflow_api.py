@@ -197,11 +197,26 @@ def create_workflow_blueprint(session_factory):
         if status is not None and status not in VALID_STATUSES[domain]:
             return None, "unsupported status for this workflow"
         if domain == "matching_rule":
-            for key in ("amount_tolerance", "time_window_minutes"):
-                if key in payload and (not isinstance(payload[key], (int, float)) or isinstance(payload[key], bool) or payload[key] < 0):
-                    return None, f"{key} must be a non-negative number"
-            if payload.get("currency") and (not isinstance(payload["currency"], str) or len(payload["currency"]) != 3):
-                return None, "currency must be a three-character ISO currency code"
+            if "amount_tolerance" in payload:
+                tolerance = payload["amount_tolerance"]
+                if not isinstance(tolerance, (int, float)) or isinstance(tolerance, bool) or not 0 <= tolerance <= 5:
+                    return None, "amount_tolerance is a percentage and must be between 0 and 5"
+            if "time_window_minutes" in payload:
+                window = payload["time_window_minutes"]
+                if not isinstance(window, int) or isinstance(window, bool) or not 0 <= window <= 1440:
+                    return None, "time_window_minutes must be an integer between 0 and 1440"
+            if payload.get("currency") and (
+                not isinstance(payload["currency"], str)
+                or len(payload["currency"]) != 3
+                or payload["currency"] != payload["currency"].upper()
+            ):
+                return None, "currency must be an uppercase three-character ISO currency code"
+            if "provider_account_id" in payload and (
+                not isinstance(payload["provider_account_id"], str)
+                or not payload["provider_account_id"].strip()
+                or len(payload["provider_account_id"]) > 128
+            ):
+                return None, "provider_account_id must be a non-empty string of at most 128 characters"
         elif domain == "scheduled_reconciliation":
             cadence = payload.get("cadence")
             if cadence not in {"hourly", "daily", "weekly", "monthly"}:
