@@ -76,16 +76,16 @@ Mutation audit records and their outbox messages are being added in API PR #97 s
 
 The persisted workflow APIs close the initial CRUD/API gap, but they do not by themselves deliver the end-to-end business workflows. Remaining work includes:
 
-- A durable reconciliation worker that consumes run requests and writes reconciliation outcomes using the established tenant-scoped matching pipeline.
-- A scheduler/worker that triggers enabled reconciliation schedules and recurring report definitions with lease/duplicate-run protection.
+- The scheduler now atomically dispatches due reconciliation schedules into deterministic, tenant-scoped queued run records. A separate reconciliation-run executor must still consume those queued records and invoke the established tenant-scoped matching pipeline before a run can be marked completed.
+- The workflow scheduler now advances enabled schedule timestamps atomically, uses row locks and deterministic run IDs to avoid duplicate occurrences, and generates persisted-data report summaries. Production deployment still must run the scheduler process and monitor its health.
 - Integration of matching-rule definitions with the authoritative reconciliation engine, versioned rule snapshots per run, and dry-run/rollback controls.
-- Reconciliation quality-gate findings are now persisted atomically as tenant-scoped data-quality review records, with deterministic IDs and no raw callback/phone data. Import-validation, profiling, schema-drift, and freshness producers still need separate integration.
+- Reconciliation quality-gate findings are persisted atomically as tenant-scoped data-quality review records, with deterministic IDs and no raw callback/phone data. Import-validation, profiling, schema-drift, and freshness producers still need separate integration.
 - An approved, idempotent artifact pipeline for report exports and delivery; current report runs return bounded JSON summaries only.
 - A separate privileged, auditable execution workflow for approved privacy export/deletion requests.
 - Support notification/delivery integration and service-level monitoring.
 - Production schema migration, permissions/role review, full CI, PostgreSQL tenant-isolation/concurrency testing, and staging smoke tests.
 
-The workflow API deliberately does not claim that scheduled jobs ran, report files exist, data was deleted, fraud was proven, or funds moved.
+The workflow API deliberately does not claim that scheduled jobs ran, report files exist, data was deleted, fraud was proven, or funds moved. The scheduler's reconciliation records remain queued until a separately deployed reconciliation-run executor processes them.
 
 ## Release gate
 
