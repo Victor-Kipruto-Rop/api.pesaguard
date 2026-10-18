@@ -126,7 +126,7 @@ def _audit(session, *, record: TenantWorkflowRecord, action: str, scheduled_for:
         resource_type=record.domain,
         resource_id=record.id,
         idempotency_key=f"workflow-scheduler:{record.id}:{scheduled_for}",
-        details={"schedule_id": record.id, "run_id": run_id, "scheduled_for": scheduled_for},
+        details={"schedule_id": record.id, "run_id": run_id, "scheduled_for": scheduled_for, "operation": "scheduled_run_dispatched"},
     )
     persist_audit_event(session, audit, event_type="workflow.scheduled_run_created")
 
@@ -221,7 +221,7 @@ def run_due_workflows(session_factory, *, now: datetime | None = None, limit: in
                 schedule.version += 1
                 schedule.updated_at = instant
                 schedule.updated_by = "workflow_scheduler"
-                _audit(session, record=schedule, action="scheduled_run_dispatched", scheduled_for=scheduled_for, run_id=run_id)
+                _audit(session, record=schedule, action="configuration.updated", scheduled_for=scheduled_for, run_id=run_id)
                 session.commit()
                 stats["dispatched"] += 1
             except Exception:
@@ -239,13 +239,13 @@ def _audit_run_transition(session, run: TenantWorkflowRecord, action: str, now: 
         actor="workflow_scheduler",
         actor_id="workflow_scheduler",
         actor_type="system",
-        action=action,
+        action="configuration.updated",
         category="operations",
         outcome="success",
         resource_type="reconciliation_run",
         resource_id=run.id,
         idempotency_key=f"workflow-run:{run.id}:{run.version}:{action}",
-        details={"run_id": run.id, "status": run.status, "progress": progress},
+        details={"run_id": run.id, "status": run.status, "progress": progress, "worker_action": action},
     )
     persist_audit_event(session, audit, event_type="workflow.reconciliation_run")
 
