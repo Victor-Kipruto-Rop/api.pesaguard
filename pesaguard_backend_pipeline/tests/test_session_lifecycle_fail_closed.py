@@ -58,3 +58,19 @@ def test_missing_session_id_remains_tolerated_in_development(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     assert auth_rbac._session_is_active(None, "user-1", "tenant-1") is True
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_user_access_token_cannot_be_issued_without_session_id(
+    monkeypatch, environment
+):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", environment)
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ValueError, match="session_id is required"):
+        auth_rbac.AuthRBAC.generate_token(
+            user_id="user-1",
+            username="user-1",
+            tenant_id="tenant-1",
+            roles=["operator"],
+        )
