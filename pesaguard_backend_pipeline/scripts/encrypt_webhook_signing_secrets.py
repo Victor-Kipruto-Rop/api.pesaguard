@@ -55,11 +55,11 @@ def main() -> int:
         print(f"Legacy plaintext secrets found: {len(plaintext_records)}")
 
         deliveries = session.query(WebhookDelivery).all()
-        protected_deliveries = [
-            (delivery, protect_payload(delivery.payload))
-            for delivery in deliveries
-            if protect_payload(delivery.payload) != delivery.payload
-        ]
+        protected_deliveries = []
+        for delivery in deliveries:
+            protected_payload = protect_payload(delivery.payload)
+            if protected_payload != delivery.payload:
+                protected_deliveries.append((delivery, protected_payload))
         print(f"Delivery payloads needing sensitive-field protection: {len(protected_deliveries)}")
         if not args.apply:
             print("Dry-run only; no database values changed. Re-run with --apply to migrate.")
