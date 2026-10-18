@@ -4016,7 +4016,15 @@ def external_idp_policy_route():
     trust_policy = data.get("trust_policy") or data
     policy = _provider_trust_policy_for_tenant(tenant_id)
     if isinstance(trust_policy, dict):
-        policy.update(trust_policy)
+        requested_review = bool(trust_policy.get("review_required", False))
+        # Approval metadata is server-controlled and may only be changed by the
+        # dedicated review endpoint, never by the policy configuration payload.
+        mutable_policy = {
+            key: value for key, value in trust_policy.items()
+            if key not in {"approved_by", "approved_at", "review_required"}
+        }
+        policy.update(mutable_policy)
+        policy["review_required"] = bool(policy.get("review_required") or requested_review)
 
     if bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip():
         return _api_error("policy_denied", "The tenant external IdP policy requires admin approval before activation.", 403)
