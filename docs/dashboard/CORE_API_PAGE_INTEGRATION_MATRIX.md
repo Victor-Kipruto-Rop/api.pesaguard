@@ -17,6 +17,7 @@ This matrix is the source of truth for wiring `app.pesaguard.co.ke` to `api.pesa
 |---|---|---|
 | Transactions | `GET /api/v1/transactions/search` | Tenant-scoped pagination, text search, sorting and validated comma-separated lifecycle-state filtering; tests cover status filters and tenant isolation. |
 | Tenant dashboard overview | `GET /api/v1/dashboard/overview` | Newly implemented tenant-scoped persisted transaction/discrepancy KPIs; tests verify cross-tenant records are excluded. |
+| Import history | `GET /api/v1/imports` | Newly implemented tenant-scoped paginated import-job listing with validated status filtering; regression test seeds two tenants. |
 | Transaction detail | `GET /transactions/{transaction_id}` | Tenant-scoped transaction route; validate mounted prefix and identifier semantics. |
 | Transaction status | `GET /transactions/{transaction_id}/status` | Tenant-scoped status route. |
 | Reconciliation history/results | `GET /reconciliation/{transaction_id}` | Existing published route; transaction-level result, not a run collection. |
