@@ -242,6 +242,28 @@ def test_payload_encryption_supports_previous_key_and_rewrapping(monkeypatch):
         decrypt_value(old_ciphertext)
 
 
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_payload_encryption_key_is_required_outside_development(
+    monkeypatch, environment
+):
+    from data_protection import _configured_secrets
+
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", environment)
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    for name in (
+        "PESAGUARD_PAYLOAD_ENCRYPTION_KEY",
+        "PROVIDER_ENCRYPTION_KEY",
+        "PESAGUARD_PAYLOAD_ENCRYPTION_KEY_PREVIOUS",
+        "PROVIDER_ENCRYPTION_KEY_PREVIOUS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-key-not-used-for-encryption")
+
+    with pytest.raises(RuntimeError, match="must be configured in staging and production"):
+        _configured_secrets()
+
 def test_external_identity_and_role_binding_are_tenant_scoped(client, iam_token):
     headers = {"Authorization": f"Bearer {iam_token}"}
     external = client.post(
