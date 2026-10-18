@@ -27,6 +27,9 @@
     },
     {
       "name": "Authentication"
+    },
+    {
+      "name": "Dashboard"
     }
   ],
   "paths": {
@@ -503,6 +506,122 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/dashboard/overview": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Get persisted tenant dashboard metrics",
+        "description": "Returns aggregate metrics computed from persisted transactions and discrepancies for the authenticated tenant. Does not infer fraud probabilities, revenue, settlement state, or reconciliation match rates.",
+        "operationId": "getTenantDashboardOverview",
+        "x-required-permission": "read:analytics",
+        "responses": {
+          "200": {
+            "description": "Tenant-scoped dashboard overview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "tenant_id",
+                    "generated_at",
+                    "transactions",
+                    "discrepancies",
+                    "data_source"
+                  ],
+                  "properties": {
+                    "tenant_id": {
+                      "type": "string"
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "data_source": {
+                      "type": "string",
+                      "enum": [
+                        "persisted_tenant_records"
+                      ]
+                    },
+                    "transactions": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "recent_30_days",
+                        "total_amount",
+                        "by_status"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recent_30_days": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "total_amount": {
+                          "type": "string",
+                          "description": "Exact decimal aggregate serialized as a string; no currency conversion is performed."
+                        },
+                        "by_status": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    },
+                    "discrepancies": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "open",
+                        "resolved",
+                        "recent_30_days",
+                        "by_severity"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "open": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "resolved": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "recent_30_days": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "by_severity": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated tenant context or permission is required."
+          },
+          "503": {
+            "description": "Dashboard metrics are temporarily unavailable."
           }
         }
       }
