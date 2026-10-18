@@ -219,3 +219,45 @@ def test_versioned_auth_aliases_are_registered(dashboard_api):
     assert login.json()["error"] in {"invalid_credentials", "mfa_required"}
     assert refresh.status_code == 400
     assert refresh.json()["error"]["code"] == "invalid_request"
+
+def test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only(dashboard_api, monkeypatch):
+    dashboard = dashboard_api
+    client = dashboard.app.test_client()
+    monkeypatch.setattr(dashboard.runtime_config, "tenant_id", "tenant-a")
+
+    assert _create(client, "tenant-a", "overview-tx-a", "overview-key-a").status_code == 200
+    assert _create(client, "tenant-b", "overview-tx-b", "overview-key-b").status_code == 200
+
+    with dashboard.transaction_event_store.Session() as session:
+        session.add(dashboard.Discrepancy(
+            id="overview-discrepancy-a",
+            tenant_id="tenant-a",
+            trans_id="overview-tx-a",
+            anomaly_type="amount_mismatch",
+            status="needs_review",
+            severity="warning",
+            details="Tenant A discrepancy",
+            resolved=False,
+        ))
+        session.add(dashboard.Discrepancy(
+            id="overview-discrepancy-b",
+            tenant_id="tenant-b",
+            trans_id="overview-tx-b",
+            anomaly_type="amount_mismatch",
+            status="needs_review",
+            severity="critical",
+            details="Tenant B discrepancy",
+            resolved=False,
+        ))
+        session.commit()
+
+    response = client.get("/api/v1/dashboard/overview")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["tenant_id"] == "tenant-a"
+    assert payload["data_source"] == "persisted_tenant_records"
+    assert payload["transactions"]["total"] == 1
+    assert payload["transactions"]["total_amount"] == "25.00"
+    assert payload["discrepancies"]["total"] == 1
+    assert payload["discrepancies"]["open"] == 1
+    assert payload["discrepancies"]["by_severity"] == {"warning": 1}
