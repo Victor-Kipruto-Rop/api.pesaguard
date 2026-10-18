@@ -7,6 +7,8 @@ export are working.
 
 ## 1. Run the read-only API smoke check
 
+You can run this manually from GitHub Actions using **Production read-only integration smoke** (`.github/workflows/production-smoke.yml`). It performs GET-only checks and does not deploy or modify application data. Optional repository variables are `PESAGUARD_SMOKE_BASE_URL`, `PESAGUARD_AUTHENTICATED_READ_PATH`, and `PESAGUARD_REQUIRE_OTEL`; optional secrets are `PESAGUARD_SMOKE_BEARER_TOKEN`, `SENTRY_DSN`, and `OTEL_EXPORTER_OTLP_ENDPOINT`. Only use a short-lived, least-privilege read-only token.
+
 From the repository root:
 
 ```bash
