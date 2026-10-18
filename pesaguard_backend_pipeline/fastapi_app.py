@@ -8,7 +8,7 @@ from typing import Any, Dict
 try:
     from fastapi import FastAPI
     from a2wsgi import WSGIMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
 except ImportError as exc:  # pragma: no cover - exercised in dependency installation
     raise RuntimeError("FastAPI control plane requires fastapi, uvicorn, and a2wsgi dependencies") from exc
 
@@ -23,6 +23,12 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+@app.head("/")
+def root_head() -> Response:
+    """Return a successful, bodyless response for hosting HEAD probes."""
+    return Response(status_code=200, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")
