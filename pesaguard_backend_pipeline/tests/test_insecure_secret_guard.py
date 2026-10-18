@@ -21,6 +21,7 @@ def test_insecure_jwt_bootstrap_secret_is_limited_to_dev_and_test(
 
     assert auth_rbac._allow_insecure_development_secret() is expected
 
+
 @pytest.mark.parametrize("environment", ["staging", "production"])
 def test_api_auth_cannot_be_disabled_in_staging_or_production(
     monkeypatch, environment
