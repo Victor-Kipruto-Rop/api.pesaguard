@@ -697,14 +697,15 @@ def _resolve_oidc_provider(tenant_id: Optional[str] = None, issuer: Optional[str
 
 
 def _response_tenant_id() -> str:
-    """Return authenticated or server-configured tenant context, never a raw header."""
+    """Return tenant identity only when trusted request authentication supplied it.
+
+    A process-wide TENANT_ID is deployment configuration, not proof of the
+    current API caller's tenant membership. Do not echo it into customer responses.
+    """
     tenant_id = str(getattr(g, "tenant_id", None) or "").strip()
-    if not tenant_id:
-        tenant_id = os.getenv("TENANT_ID", "").strip()
     if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
         return ""
     return tenant_id
-
 
 def _api_success(payload: Any, status_code: int = 200, meta: Optional[Dict[str, Any]] = None):
     body = {
