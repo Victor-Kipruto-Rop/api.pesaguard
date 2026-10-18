@@ -62,3 +62,15 @@ def test_health_status_code_follows_overall_status(control_plane, monkeypatch, s
 def test_flask_routes_are_still_mounted_behind_the_control_plane(control_plane):
     # Anything FastAPI does not own must reach Flask (401 from the stub), not FastAPI's 404.
     assert TestClient(control_plane.app).get("/discrepancies").status_code == 401
+
+
+def test_root_returns_service_information(control_plane):
+    response = TestClient(control_plane.app).get("/")
+    assert response.status_code == 200
+    assert response.json() == {
+        "service": "PesaGuard API",
+        "status": "ok",
+        "message": "PesaGuard API is running. Use the documented API endpoints for requests.",
+        "health": "/health",
+        "liveness": "/livez",
+    }

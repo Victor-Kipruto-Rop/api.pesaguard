@@ -25,6 +25,18 @@ app = FastAPI(
 )
 
 
+@app.get("/")
+def root() -> Dict[str, str]:
+    """Return service information at the public API base URL."""
+    return {
+        "service": "PesaGuard API",
+        "status": "ok",
+        "message": "PesaGuard API is running. Use the documented API endpoints for requests.",
+        "health": "/health",
+        "liveness": "/livez",
+    }
+
+
 @app.get("/livez")
 def livez() -> Dict[str, str]:
     """Liveness probe: the process is up and serving. Checks no dependencies.
