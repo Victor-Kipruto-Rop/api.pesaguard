@@ -34,8 +34,13 @@ def post_json_pinned(
     timeout: int,
 ):
     """POST JSON directly to a public resolved IP while preserving HTTPS identity."""
-    parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    if not isinstance(url, str) or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        raise ValueError("webhook URL contains invalid characters")
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise ValueError("webhook URL is malformed") from exc
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
         raise ValueError("webhook destination must be HTTPS with a hostname")
     if parsed.username is not None or parsed.password is not None or parsed.fragment:
         raise ValueError("webhook URL contains disallowed components")
@@ -46,7 +51,10 @@ def post_json_pinned(
     if port not in (None, 443):
         raise ValueError("webhook URL port is not allowed")
 
-    hostname = parsed.hostname.encode("idna").decode("ascii")
+    try:
+        hostname = parsed.hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError("webhook hostname is invalid") from exc
     try:
         records = socket.getaddrinfo(
             hostname,
@@ -73,8 +81,13 @@ def post_json_pinned(
     if parsed.query:
         request_path += "?" + parsed.query
 
-    request_headers = dict(headers)
-    request_headers["Host"] = hostname
+    request_headers = {
+        key: value for key, value in headers.items()
+        if key.lower() != "host"
+    }
+    # RFC 9110 requires IPv6 literals in Host to remain bracketed.
+    host_header = f"[{hostname}]" if ":" in hostname else hostname
+    request_headers["Host"] = host_header
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     pool = HTTPSConnectionPool(
         host=target_ip,
