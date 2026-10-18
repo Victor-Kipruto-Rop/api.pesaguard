@@ -239,7 +239,9 @@ class RedisRateLimiter:
 
     def record_distinct(self, client_id: str, endpoint: str, value: str, window_seconds: int) -> int:
         """Track distinct values atomically in Redis for distributed detection."""
-        key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
+        # Use a distinct Redis key type from the token-bucket hash. Reusing the
+        # token-bucket key here causes Redis WRONGTYPE errors (hash vs. set).
+        key = f"pesaguard:ratelimit:distinct:{client_id}:{endpoint}"
         client = self._get_client()
         try:
             pipe = client.pipeline(transaction=True)
@@ -254,10 +256,11 @@ class RedisRateLimiter:
 
     def reset(self, client_id: str, endpoint: str) -> None:
         """Delete a distributed token bucket during an authorized account unlock."""
-        key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
+        bucket_key = f"pesaguard:ratelimit:{client_id}:{endpoint}"
+        distinct_key = f"pesaguard:ratelimit:distinct:{client_id}:{endpoint}"
         client = self._get_client()
         try:
-            client.delete(key)
+            client.delete(bucket_key, distinct_key)
         except Exception:
             self._invalidate_client(client)
             raise
