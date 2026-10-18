@@ -290,6 +290,13 @@ def _apply_external_idp_policy_update(
     return policy, changed
 
 
+def _external_idp_reviewer_is_independent(policy: Dict[str, Any], reviewer: str) -> bool:
+    """Require a recorded, distinct configurator for SSO trust-policy approval."""
+    configured_by = str(policy.get("configured_by") or "").strip()
+    reviewer_id = str(reviewer or "").strip()
+    return bool(configured_by and reviewer_id and not hmac.compare_digest(configured_by, reviewer_id))
+
+
 def _validate_provider_trust_policy(tenant_id: Optional[str], policy: Optional[Dict[str, Any]], metadata: Optional[Dict[str, Any]]) -> bool:
     """Enforce tenant-specific provider trust rules for OIDC or SAML providers."""
     provider_policy = (policy or _provider_trust_policy_for_tenant(tenant_id)) or {}
@@ -4088,14 +4095,13 @@ def external_idp_policy_review_route():
         return _api_error("invalid_request", "decision must be either approve or reject.", 400)
 
     if decision == "approve":
-        configured_by = str(policy.get("configured_by") or "").strip()
-        if not configured_by:
+        if not str(policy.get("configured_by") or "").strip():
             return _api_error(
                 "policy_review_unavailable",
                 "This policy has no recorded configurator. Re-submit the policy configuration before requesting approval.",
                 409,
             )
-        if hmac.compare_digest(configured_by, reviewer):
+        if not _external_idp_reviewer_is_independent(policy, reviewer):
             return _api_error(
                 "separation_of_duties_required",
                 "The policy configurator cannot approve their own SSO trust-policy change.",
