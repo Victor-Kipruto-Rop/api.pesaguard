@@ -18,6 +18,8 @@ financial traffic on the basis of this tracker.
   distinct-attempt sets by assigning separate namespaces.
 - [x] Ensure a rate-limit reset clears both the token bucket and distinct-attempt
   state.
+- [x] Bound distinct-attempt tracking to 1,000 values per client/endpoint in
+  both Redis (atomic Lua operation) and in-memory fallback to prevent high-cardinality growth.
 - [x] Add focused regression tests for key separation and reset behavior.
 - [x] Add a production secret-rotation runbook covering signing, encryption,
   backup, provider, database, Redis, monitoring, and CI credentials.
@@ -112,8 +114,8 @@ financial traffic on the basis of this tracker.
   status as NOT VERIFIED and lists CI billing, staging configuration, secret
   management, and integration/recovery verification as gates.
 - This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
-- Focused tests were added for Redis key separation/reset, production/staging
-  session-lifecycle fail-closed behavior, and insecure JWT-secret environment
+- Focused tests were added for Redis key separation/reset and bounded distinct
+  state, production/staging session-lifecycle fail-closed behavior, and insecure JWT-secret environment
   restrictions. They have not yet been executed by this
   tool session; a passing result must not be inferred from test code alone.
 - Render currently has no provisioned managed Redis service; provisioning was
