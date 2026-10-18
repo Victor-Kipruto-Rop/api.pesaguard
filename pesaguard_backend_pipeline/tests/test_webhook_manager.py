@@ -148,3 +148,113 @@ def test_pinned_transport_rejects_private_dns_answers(monkeypatch):
             headers={},
             timeout=3,
         )
+
+
+
+def test_pinned_transport_rejects_mixed_public_and_private_dns(monkeypatch):
+    import pytest
+    import webhook_transport
+
+    monkeypatch.setattr(
+        webhook_transport.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+            (2, 1, 6, "", ("192.168.1.10", 443)),
+        ],
+    )
+    with pytest.raises(ValueError, match="disallowed"):
+        webhook_transport.post_json_pinned(
+            "https://hooks.example.test/events",
+            payload={},
+            headers={},
+            timeout=3,
+        )
+
+
+def test_pinned_transport_rejects_http_and_malformed_urls(monkeypatch):
+    import pytest
+    import webhook_transport
+
+    def fail_if_resolved(*args, **kwargs):
+        raise AssertionError("DNS must not be queried for an invalid URL")
+
+    monkeypatch.setattr(webhook_transport.socket, "getaddrinfo", fail_if_resolved)
+    for url in (
+        "http://hooks.example.test/events",
+        "https://user:pass@hooks.example.test/events",
+        "https://hooks.example.test/events#fragment",
+        "https://hooks.example.test:8443/events",
+        "https://[invalid-ip/events",
+        "https://hooks.example.test/events\nX-Injected: yes",
+    ):
+        with pytest.raises(ValueError):
+            webhook_transport.post_json_pinned(
+                url,
+                payload={},
+                headers={},
+                timeout=3,
+            )
+
+
+def test_pinned_transport_rejects_empty_and_unresolvable_dns(monkeypatch):
+    import pytest
+    import socket
+    import webhook_transport
+
+    monkeypatch.setattr(webhook_transport.socket, "getaddrinfo", lambda *args, **kwargs: [])
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        webhook_transport.post_json_pinned(
+            "https://hooks.example.test/events",
+            payload={},
+            headers={},
+            timeout=3,
+        )
+
+    def no_dns(*args, **kwargs):
+        raise socket.gaierror("no address")
+
+    monkeypatch.setattr(webhook_transport.socket, "getaddrinfo", no_dns)
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        webhook_transport.post_json_pinned(
+            "https://hooks.example.test/events",
+            payload={},
+            headers={},
+            timeout=3,
+        )
+
+
+def test_pinned_transport_formats_ipv6_host_header(monkeypatch):
+    import webhook_transport
+
+    captured = {}
+
+    class FakeResponse:
+        status = 204
+
+    class FakePool:
+        def __init__(self, **kwargs):
+            captured["pool"] = kwargs
+
+        def request(self, method, path, **kwargs):
+            captured["headers"] = kwargs["headers"]
+            return FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        webhook_transport.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(10, 1, 6, "", ("2606:4700:4700::1111", 443, 0, 0))],
+    )
+    monkeypatch.setattr(webhook_transport, "HTTPSConnectionPool", FakePool)
+
+    webhook_transport.post_json_pinned(
+        "https://[2606:4700:4700::1111]/events",
+        payload={},
+        headers={"host": "attacker.example"},
+        timeout=3,
+    )
+    assert captured["headers"]["Host"] == "[2606:4700:4700::1111]"
+    assert "host" not in captured["headers"]
