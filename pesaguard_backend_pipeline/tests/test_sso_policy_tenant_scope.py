@@ -41,3 +41,50 @@ def test_entra_policy_does_not_use_process_tenant_as_issuer_scope(monkeypatch):
     assert "https://login.microsoftonline.com/process-global-tenant/v2.0" not in policy["allowed_issuers"]
     assert "https://login.microsoftonline.com/" not in policy["allowed_issuers"]
 
+def test_policy_update_invalidates_existing_approval_on_trust_change():
+    current = {
+        "allowed_issuers": ["https://idp.example/old"],
+        "approved_by": "reviewer-1",
+        "approved_at": "2026-10-01T00:00:00+00:00",
+        "review_required": False,
+    }
+
+    policy, changed = advanced_features._apply_external_idp_policy_update(
+        current,
+        {
+            "allowed_issuers": ["https://idp.example/new"],
+            "approved_by": "attacker-supplied-reviewer",
+            "approved_at": "2099-01-01T00:00:00+00:00",
+            "review_required": False,
+        },
+    )
+
+    assert changed is True
+    assert policy["allowed_issuers"] == ["https://idp.example/new"]
+    assert policy["approved_by"] is None
+    assert policy["approved_at"] is None
+    assert policy["review_required"] is True
+
+
+def test_policy_update_does_not_invalidate_approval_when_values_are_unchanged():
+    current = {
+        "allowed_issuers": ["https://idp.example/issuer"],
+        "approved_by": "reviewer-1",
+        "approved_at": "2026-10-01T00:00:00+00:00",
+        "review_required": False,
+    }
+
+    policy, changed = advanced_features._apply_external_idp_policy_update(
+        current,
+        {
+            "allowed_issuers": ["https://idp.example/issuer"],
+            "approved_by": "attacker-supplied-reviewer",
+            "review_required": False,
+        },
+    )
+
+    assert changed is False
+    assert policy["approved_by"] == "reviewer-1"
+    assert policy["approved_at"] == "2026-10-01T00:00:00+00:00"
+    assert policy["review_required"] is False
+
