@@ -220,3 +220,42 @@ def test_investigation_evidence_is_append_only_and_rejects_sensitive_fields(work
     assert len(evidence) == 1
     assert evidence[0]["reference"] == "internal-ref-123"
     assert evidence[0]["added_by"] == "workflow-admin"
+
+
+
+def test_workflow_creation_cannot_bypass_review_or_execution_transitions(workflow_client):
+    client, _, headers = workflow_client
+    attempts = [
+        (
+            "/api/v1/settlement-reviews",
+            {"title": "Bypass settlement review", "status": "approved", "payload": {"amount": 100, "currency": "KES"}},
+        ),
+        (
+            "/api/v1/refund-reversal-requests",
+            {"title": "Bypass refund review", "status": "approved", "payload": {"amount": 100, "currency": "KES"}},
+        ),
+        (
+            "/api/v1/privacy-requests",
+            {"title": "Bypass privacy review", "status": "completed", "payload": {"request_type": "deletion"}},
+        ),
+        (
+            "/api/v1/report-runs",
+            {"title": "Fake completed report", "status": "completed", "payload": {"report_type": "transactions"}},
+        ),
+        (
+            "/api/v1/matching-rules",
+            {"title": "Unreviewed active rule", "status": "open", "payload": {"amount_tolerance": 0, "time_window_minutes": 5}},
+        ),
+    ]
+    for endpoint, body in attempts:
+        response = client.post(endpoint, headers=headers, json=body)
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "invalid_initial_status"
+
+    scheduled_without_config = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Unconfigured schedule", "status": "scheduled", "payload": {"report_type": "transactions"}},
+    )
+    assert scheduled_without_config.status_code == 400
+    assert scheduled_without_config.get_json()["error"] == "schedule_required"
