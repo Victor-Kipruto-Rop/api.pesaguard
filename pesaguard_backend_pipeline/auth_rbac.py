@@ -46,12 +46,17 @@ def _record_security_event() -> None:
 _INSECURE_DEV_SECRET = "pesaguard-secret-key-change-in-prod"
 
 
+def _allow_insecure_development_secret() -> bool:
+    """Permit the bootstrap signing secret only in explicit dev/test environments."""
+    return (
+        os.getenv("PESAGUARD_ALLOW_INSECURE_DEV_SECRET") == "1"
+        and runtime_environment() in {"development", "test"}
+    )
+
+
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
-    if (
-        os.getenv("PESAGUARD_ALLOW_INSECURE_DEV_SECRET") == "1"
-        and runtime_environment() != "production"
-    ):
+    if _allow_insecure_development_secret():
         SECRET_KEY = _INSECURE_DEV_SECRET
         logger.warning(
             "JWT_SECRET_KEY is not set â€” using an insecure dev secret because "
