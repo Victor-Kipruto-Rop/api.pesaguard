@@ -4017,16 +4017,22 @@ def external_idp_policy_route():
     data = request.get_json(silent=True) or {}
     trust_policy = data.get("trust_policy") or data
     policy = _provider_trust_policy_for_tenant(tenant_id)
+    policy_changed = False
     if isinstance(trust_policy, dict):
-        requested_review = bool(trust_policy.get("review_required", False))
         # Approval metadata is server-controlled and may only be changed by the
         # dedicated review endpoint, never by the policy configuration payload.
         mutable_policy = {
             key: value for key, value in trust_policy.items()
             if key not in {"approved_by", "approved_at", "review_required"}
         }
+        policy_changed = any(policy.get(key) != value for key, value in mutable_policy.items())
         policy.update(mutable_policy)
-        policy["review_required"] = bool(policy.get("review_required") or requested_review)
+        if policy_changed:
+            # Any trust-policy change invalidates prior approval. A separate
+            # authenticated review must approve the newly persisted configuration.
+            policy["approved_by"] = None
+            policy["approved_at"] = None
+            policy["review_required"] = True
 
     pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
