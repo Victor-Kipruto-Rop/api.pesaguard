@@ -5,6 +5,7 @@ from action_audit import ActionAuditEntry
 from event_store import EventStore, ProcessResult
 from models import Base, Discrepancy, FraudRiskAssessment, ProcessedTransaction, ReconciliationOutbox
 from reconciliation_job import _persist_atomically
+from workflow_models import TenantWorkflowRecord
 
 
 def _event():
@@ -36,6 +37,12 @@ def test_reconciliation_is_separate_from_ingestion_and_replay_safe(tmp_path, mon
         "severity": "critical",
         "match": {"match_type": "none"},
         "anomalies": ["missing_payment"],
+        "evidence": {
+            "engine_version": "test-engine",
+            "transaction_quality_findings": [
+                {"code": "missing_ledger_reference", "severity": "high"},
+            ],
+        },
         "event": event,
         "tenant_id": "tenant-a",
     }
@@ -47,6 +54,10 @@ def test_reconciliation_is_separate_from_ingestion_and_replay_safe(tmp_path, mon
         assert session.query(Discrepancy).count() == 1
         assert session.query(ActionAuditEntry).count() == 1
         assert session.query(ReconciliationOutbox).count() == 1
+        findings = session.query(TenantWorkflowRecord).filter_by(tenant_id="tenant-a", domain="data_quality_finding").all()
+        assert len(findings) == 1
+        assert findings[0].payload["finding_code"] == "missing_ledger_reference"
+        assert findings[0].payload["transaction_id"] == event["TransID"]
         assessment = session.query(FraudRiskAssessment).one()
         assert "duplicate_activity" not in assessment.rules_triggered
 
