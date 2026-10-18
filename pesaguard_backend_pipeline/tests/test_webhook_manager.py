@@ -13,8 +13,8 @@ def test_webhook_delivery_history_retains_owner_tenant(monkeypatch):
     session = sessionmaker(bind=engine)()
     monkeypatch.setattr(webhook_manager, "_validate_webhook_url", lambda url: None)
     monkeypatch.setattr(
-        webhook_manager.requests,
-        "post",
+        webhook_manager,
+        "post_json_pinned",
         lambda *args, **kwargs: SimpleNamespace(status_code=204, text="", is_redirect=False),
     )
 
@@ -78,3 +78,73 @@ def test_webhook_url_rejects_malformed_port():
     assert webhook_manager._validate_webhook_url(
         "https://example.com:notaport/events"
     ) == "url_invalid_port"
+
+
+
+def test_pinned_transport_connects_to_resolved_ip_and_preserves_tls_hostname(monkeypatch):
+    import webhook_transport
+
+    captured = {}
+
+    class FakeResponse:
+        status = 204
+        headers = {}
+
+        def release_conn(self):
+            pass
+
+    class FakePool:
+        def __init__(self, **kwargs):
+            captured["pool"] = kwargs
+
+        def request(self, method, path, **kwargs):
+            captured["request"] = (method, path, kwargs)
+            return FakeResponse()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(
+        webhook_transport.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+    monkeypatch.setattr(webhook_transport, "HTTPSConnectionPool", FakePool)
+
+    result = webhook_transport.post_json_pinned(
+        "https://hooks.example.test/events?kind=ok",
+        payload={"ok": True},
+        headers={"Content-Type": "application/json"},
+        timeout=3,
+    )
+
+    assert result.status_code == 204
+    assert captured["pool"]["host"] == "93.184.216.34"
+    assert captured["pool"]["server_hostname"] == "hooks.example.test"
+    assert captured["pool"]["assert_hostname"] == "hooks.example.test"
+    assert captured["pool"]["cert_reqs"] == "CERT_REQUIRED"
+    method, path, request = captured["request"]
+    assert method == "POST"
+    assert path == "/events?kind=ok"
+    assert request["headers"]["Host"] == "hooks.example.test"
+    assert captured["closed"] is True
+
+
+def test_pinned_transport_rejects_private_dns_answers(monkeypatch):
+    import pytest
+    import webhook_transport
+
+    monkeypatch.setattr(
+        webhook_transport.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("10.0.0.7", 443))],
+    )
+    with pytest.raises(ValueError, match="disallowed"):
+        webhook_transport.post_json_pinned(
+            "https://hooks.example.test/events",
+            payload={"ok": True},
+            headers={},
+            timeout=3,
+        )
