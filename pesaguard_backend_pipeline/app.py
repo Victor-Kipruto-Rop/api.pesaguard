@@ -511,6 +511,10 @@ def ops_alerts():
     import hmac as hmac_lib
 
     secret = os.getenv("PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET", "").strip()
+    if not secret and runtime_environment() in {"staging", "production"}:
+        record_security_event()
+        logger.error("Alertmanager webhook rejected: receiver authentication is not configured")
+        return jsonify({"error": "alertmanager_auth_not_configured"}), 503
     if secret:
         provided = request.headers.get("X-Alertmanager-Secret", "")
         if not hmac_lib.compare_digest(provided, secret):
