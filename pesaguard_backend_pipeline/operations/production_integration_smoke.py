@@ -11,6 +11,8 @@ import json
 import os
 import sys
 import time
+from math import isfinite
+from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -46,10 +48,25 @@ def request(url: str, token: str | None = None, timeout: float = 10.0):
 
 def main() -> int:
     base_url = (os.getenv("PESAGUARD_BASE_URL") or "").strip().rstrip("/")
-    if not base_url.startswith(("https://", "http://")):
-        print("FAIL configuration: set PESAGUARD_BASE_URL to the deployed API URL")
+    parsed_base = urlparse(base_url)
+    if (
+        parsed_base.scheme not in {"https", "http"}
+        or not parsed_base.netloc
+        or parsed_base.username is not None
+        or parsed_base.password is not None
+        or parsed_base.query
+        or parsed_base.fragment
+    ):
+        print("FAIL configuration: PESAGUARD_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment")
         return 2
-    timeout = float(os.getenv("PESAGUARD_SMOKE_TIMEOUT_SECONDS", "10"))
+    try:
+        timeout = float(os.getenv("PESAGUARD_SMOKE_TIMEOUT_SECONDS", "10"))
+    except (TypeError, ValueError):
+        print("FAIL configuration: PESAGUARD_SMOKE_TIMEOUT_SECONDS must be a positive number")
+        return 2
+    if not isfinite(timeout) or timeout <= 0 or timeout > 60:
+        print("FAIL configuration: PESAGUARD_SMOKE_TIMEOUT_SECONDS must be greater than 0 and at most 60")
+        return 2
     token = (os.getenv("PESAGUARD_SMOKE_BEARER_TOKEN") or "").strip() or None
     failures = 0
 
@@ -70,10 +87,13 @@ def main() -> int:
         try:
             status, payload, elapsed_ms = request(url, token if name == "authenticated read" else None, timeout)
             healthy_payload = True
-            if name in {"readiness", "public status"} and isinstance(payload, dict):
-                state = str(payload.get("status", "")).lower()
-                if state and state not in {"ok", "healthy", "up"}:
-                    healthy_payload = False
+            if name == "readiness":
+                # /health exposes {"status": "ok"|"degraded"|"failed", ...}.
+                healthy_payload = isinstance(payload, dict) and payload.get("status") == "ok"
+            elif name == "public status":
+                # The public contract nests its state under overall.status.
+                overall = payload.get("overall") if isinstance(payload, dict) else None
+                healthy_payload = isinstance(overall, dict) and overall.get("status") == "operational"
             passed = status in expected and healthy_payload
             print(f'{"PASS" if passed else "FAIL"} {name}: HTTP {status}, {elapsed_ms} ms')
             if not passed:
@@ -96,7 +116,8 @@ def main() -> int:
 
     if os.getenv("PESAGUARD_REQUIRE_OTEL", "").strip().lower() in {"1", "true", "yes"}:
         otel_endpoint = (os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or "").strip()
-        if otel_endpoint.startswith(("https://", "http://")):
+        parsed_endpoint = urlparse(otel_endpoint)
+        if parsed_endpoint.scheme in {"https", "http"} and parsed_endpoint.netloc:
             print("PASS OpenTelemetry endpoint configuration: configured (delivery not verified by this check)")
         else:
             print("FAIL OpenTelemetry endpoint configuration: missing or invalid URL")
