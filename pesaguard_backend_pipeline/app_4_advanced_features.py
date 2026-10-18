@@ -277,7 +277,7 @@ def _apply_external_idp_policy_update(
     policy = dict(current_policy)
     mutable_policy = {
         key: value for key, value in requested_policy.items()
-        if key not in {"approved_by", "approved_at", "review_required"}
+        if key not in {"approved_by", "approved_at", "review_required", "configured_by"}
     }
     changed = any(policy.get(key) != value for key, value in mutable_policy.items())
     policy.update(mutable_policy)
@@ -285,6 +285,8 @@ def _apply_external_idp_policy_update(
         policy["approved_by"] = None
         policy["approved_at"] = None
         policy["review_required"] = True
+        # This field is set by the authenticated route, never by request data.
+        policy["configured_by"] = None
     return policy, changed
 
 
@@ -4039,7 +4041,10 @@ def external_idp_policy_route():
     if isinstance(trust_policy, dict):
         # Approval metadata is server-controlled and may only be changed by the
         # dedicated review endpoint, never by the policy configuration payload.
-        policy, _ = _apply_external_idp_policy_update(policy, trust_policy)
+        policy, changed = _apply_external_idp_policy_update(policy, trust_policy)
+        if changed:
+            principal = get_current_user()
+            policy["configured_by"] = str(principal.username or principal.user_id)
 
     pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
@@ -4083,6 +4088,19 @@ def external_idp_policy_review_route():
         return _api_error("invalid_request", "decision must be either approve or reject.", 400)
 
     if decision == "approve":
+        configured_by = str(policy.get("configured_by") or "").strip()
+        if not configured_by:
+            return _api_error(
+                "policy_review_unavailable",
+                "This policy has no recorded configurator. Re-submit the policy configuration before requesting approval.",
+                409,
+            )
+        if hmac.compare_digest(configured_by, reviewer):
+            return _api_error(
+                "separation_of_duties_required",
+                "The policy configurator cannot approve their own SSO trust-policy change.",
+                403,
+            )
         policy["review_required"] = False
         policy["approved_by"] = reviewer
         policy["approved_at"] = datetime.now(timezone.utc).isoformat()
