@@ -113,6 +113,13 @@ financial traffic on the basis of this tracker.
 - Repository's existing production certification document reports production
   status as NOT VERIFIED and lists CI billing, staging configuration, secret
   management, and integration/recovery verification as gates.
+- GitHub API reports the `main` branch is not protected and has no required
+  status checks. Enable branch protection/rulesets with required CI and review
+  before accepting security changes into `main`.
+- Recent Actions runs fail before starting any steps because of the reported
+  GitHub billing lock; the current PR's checks have not produced a passing run.
+- Render has no provisioned managed Redis service, and the production GitHub
+  staging environment/deployment secrets remain unconfigured.
 - This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
 - Focused tests were added for Redis key separation/reset and bounded distinct
   state, production/staging session-lifecycle fail-closed behavior, and insecure JWT-secret environment
