@@ -57,6 +57,8 @@ _SHARED_METRICS_FLAG = "PESAGUARD_SHARED_METRICS"
 _SHARED_METRICS_PREFIX = "pesaguard:metrics"
 _shared_redis_client = None
 _shared_redis_degraded = False
+_shared_redis_retry_after = 0.0
+_SHARED_METRICS_RETRY_SECONDS = 30.0
 # -----------------------------------------------------------------------------
 # Runtime telemetry scope
 #
@@ -76,25 +78,35 @@ _shared_redis_degraded = False
 
 
 def _get_shared_redis():
-    """Lazily connect to the shared Redis metrics backend, degrading gracefully."""
-    global _shared_redis_client, _shared_redis_degraded
-    if os.getenv(_SHARED_METRICS_FLAG, "0") != "1" or _shared_redis_degraded:
+    """Lazily connect to shared Redis and retry after transient startup/network failures."""
+    global _shared_redis_client, _shared_redis_degraded, _shared_redis_retry_after
+    if os.getenv(_SHARED_METRICS_FLAG, "0") != "1":
+        return None
+    now = time.monotonic()
+    if _shared_redis_degraded and now < _shared_redis_retry_after:
         return None
     if _shared_redis_client is None:
         try:
             import redis as redis_lib
-            _shared_redis_client = redis_lib.from_url(
+            client = redis_lib.from_url(
                 os.getenv("REDIS_URL", "redis://localhost:6379/0"),
                 socket_connect_timeout=1,
                 socket_timeout=3,
                 decode_responses=True,
             )
-            _shared_redis_client.ping()
+            client.ping()
+            _shared_redis_client = client
+            _shared_redis_degraded = False
+            _shared_redis_retry_after = 0.0
             logger.info("Shared multi-worker metrics backend enabled via Redis.")
         except Exception:
             _shared_redis_client = None
             _shared_redis_degraded = True
-            logger.warning("Shared metrics Redis backend unavailable; using process-local telemetry.", exc_info=True)
+            _shared_redis_retry_after = now + _SHARED_METRICS_RETRY_SECONDS
+            logger.warning(
+                "Shared metrics Redis backend unavailable; using process-local telemetry and retrying in %.0f seconds.",
+                _SHARED_METRICS_RETRY_SECONDS,
+            )
     return _shared_redis_client
 
 
