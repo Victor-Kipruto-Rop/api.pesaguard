@@ -640,6 +640,167 @@
           }
         }
       }
+    },
+    "/imports": {
+      "get": {
+        "tags": [
+          "Transactions"
+        ],
+        "summary": "List import jobs for the authenticated tenant",
+        "description": "Returns a paginated history of persisted import jobs belonging to the authenticated tenant. File names and counters are included; object storage keys and raw error payloads are not exposed.",
+        "operationId": "listTenantImports",
+        "x-required-permission": "read:transactions",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated tenant import jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "page",
+                    "per_page",
+                    "total"
+                  ],
+                  "properties": {
+                    "page": {
+                      "type": "integer"
+                    },
+                    "per_page": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "import_id",
+                          "source",
+                          "filename",
+                          "file_format",
+                          "status",
+                          "records_received",
+                          "records_valid",
+                          "records_failed"
+                        ],
+                        "properties": {
+                          "import_id": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string"
+                          },
+                          "filename": {
+                            "type": "string"
+                          },
+                          "file_format": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "running",
+                              "completed",
+                              "failed"
+                            ]
+                          },
+                          "records_received": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "records_valid": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "records_failed": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "created_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "started_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          },
+                          "completed_at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination or status filter"
+          },
+          "401": {
+            "description": "Authentication is required"
+          },
+          "403": {
+            "description": "Permission denied or tenant context missing"
+          },
+          "503": {
+            "description": "Import history is temporarily unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
