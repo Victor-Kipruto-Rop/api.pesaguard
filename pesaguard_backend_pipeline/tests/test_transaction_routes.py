@@ -382,3 +382,33 @@ def test_reconciliation_results_collection_is_paginated_filtered_and_tenant_scop
     invalid = client.get("/api/v1/reconciliation/results?status=SETTLED", headers={"X-Tenant-ID": "tenant-a"})
     assert invalid.status_code == 400
     assert invalid.get_json()["error"] == "invalid_status_filter"
+
+def test_fraud_assessment_collection_is_tenant_scoped_and_filters_risk_level(dashboard_api):
+    from datetime import datetime, timezone
+    from models import FraudRiskAssessment
+
+    session = dashboard_api.transaction_event_store.Session()
+    try:
+        session.add_all([
+            FraudRiskAssessment(id="risk-a", tenant_id="tenant-a", transaction_id="txn-a", risk_score=0.91, risk_level="HIGH", action="review", reason_codes=["velocity"], model_version="test-v1", rules_triggered=["velocity"], features={}, created_at=datetime.now(timezone.utc)),
+            FraudRiskAssessment(id="risk-b", tenant_id="tenant-b", transaction_id="txn-b", risk_score=0.99, risk_level="CRITICAL", action="review", reason_codes=["velocity"], model_version="test-v1", rules_triggered=["velocity"], features={}, created_at=datetime.now(timezone.utc)),
+        ])
+        session.commit()
+    finally:
+        session.close()
+
+    client = dashboard_api.app.test_client()
+    response = client.get("/api/v1/fraud/assessments?status=HIGH", headers={"X-Tenant-ID": "tenant-a"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["transaction_id"] == "txn-a"
+    assert payload["items"][0]["risk_level"] == "HIGH"
+
+    hidden = client.get("/api/v1/fraud/assessments", headers={"X-Tenant-ID": "tenant-a"})
+    assert hidden.status_code == 200
+    assert all(item["transaction_id"] != "txn-b" for item in hidden.get_json()["items"])
+
+    invalid = client.get("/api/v1/fraud/assessments?status=EXTREME", headers={"X-Tenant-ID": "tenant-a"})
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_status_filter"
