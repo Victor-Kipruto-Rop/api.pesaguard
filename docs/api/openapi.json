@@ -30,6 +30,9 @@
     },
     {
       "name": "Dashboard"
+    },
+    {
+      "name": "Imports"
     }
   ],
   "paths": {
@@ -644,10 +647,10 @@
     "/imports": {
       "get": {
         "tags": [
-          "Transactions"
+          "Imports"
         ],
         "summary": "List import jobs for the authenticated tenant",
-        "description": "Returns a paginated history of persisted import jobs belonging to the authenticated tenant. File names and counters are included; object storage keys and raw error payloads are not exposed.",
+        "description": "Returns persisted import history scoped to the authenticated tenant. This read endpoint does not upload files or start imports.",
         "operationId": "listTenantImports",
         "x-required-permission": "read:transactions",
         "parameters": [
@@ -689,7 +692,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated tenant import jobs",
+            "description": "Tenant-scoped paginated import jobs",
             "content": {
               "application/json": {
                 "schema": {
@@ -701,15 +704,6 @@
                     "total"
                   ],
                   "properties": {
-                    "page": {
-                      "type": "integer"
-                    },
-                    "per_page": {
-                      "type": "integer"
-                    },
-                    "total": {
-                      "type": "integer"
-                    },
                     "items": {
                       "type": "array",
                       "items": {
@@ -759,22 +753,40 @@
                             "minimum": 0
                           },
                           "created_at": {
-                            "type": "string",
-                            "format": "date-time",
-                            "nullable": true
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
                           },
                           "started_at": {
-                            "type": "string",
-                            "format": "date-time",
-                            "nullable": true
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
                           },
                           "completed_at": {
-                            "type": "string",
-                            "format": "date-time",
-                            "nullable": true
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "format": "date-time"
                           }
                         }
                       }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "per_page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   }
                 }
@@ -785,13 +797,13 @@
             "description": "Invalid pagination or status filter"
           },
           "401": {
-            "description": "Authentication is required"
+            "description": "Authentication required"
           },
           "403": {
-            "description": "Permission denied or tenant context missing"
+            "description": "Tenant or permission context unavailable"
           },
           "503": {
-            "description": "Import history is temporarily unavailable"
+            "description": "Import history temporarily unavailable"
           }
         }
       }
