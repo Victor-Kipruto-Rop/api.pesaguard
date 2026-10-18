@@ -3017,6 +3017,73 @@ def incident_filter_presets():
         session.close()
 
 
+@app.route("/api/v1/dashboard/overview", methods=["GET"])
+@require_auth("read:analytics")
+def tenant_dashboard_overview():
+    """Return persisted, tenant-scoped transaction and discrepancy KPIs."""
+    tenant_id = _current_tenant_id()
+    if not tenant_id:
+        return jsonify({
+            "error": "tenant_context_required",
+            "message": "Authenticated tenant context is required.",
+        }), 403
+
+    session = _open_session(read_only=True)
+    try:
+        transaction_scope = session.query(Transaction).filter(Transaction.tenant_id == tenant_id)
+        transaction_count = transaction_scope.count()
+        transaction_amount = transaction_scope.with_entities(
+            func.coalesce(func.sum(Transaction.trans_amount), 0)
+        ).scalar()
+        transaction_status_rows = (
+            transaction_scope.with_entities(Transaction.status, func.count(Transaction.id))
+            .group_by(Transaction.status)
+            .all()
+        )
+
+        discrepancy_scope = session.query(Discrepancy).filter(Discrepancy.tenant_id == tenant_id)
+        discrepancy_count = discrepancy_scope.count()
+        open_discrepancies = discrepancy_scope.filter(Discrepancy.resolved.is_(False)).count()
+        resolved_discrepancies = discrepancy_scope.filter(Discrepancy.resolved.is_(True)).count()
+        severity_rows = (
+            discrepancy_scope.with_entities(Discrepancy.severity, func.count(Discrepancy.id))
+            .group_by(Discrepancy.severity)
+            .all()
+        )
+
+        now = datetime.now(timezone.utc)
+        recent_cutoff = now - timedelta(days=30)
+        recent_transactions = transaction_scope.filter(Transaction.created_at >= recent_cutoff).count()
+        recent_discrepancies = discrepancy_scope.filter(Discrepancy.detected_at >= recent_cutoff).count()
+
+        return jsonify({
+            "tenant_id": tenant_id,
+            "generated_at": now.isoformat(),
+            "transactions": {
+                "total": transaction_count,
+                "recent_30_days": recent_transactions,
+                "total_amount": str(transaction_amount or 0),
+                "by_status": {str(status): count for status, count in transaction_status_rows},
+            },
+            "discrepancies": {
+                "total": discrepancy_count,
+                "open": open_discrepancies,
+                "resolved": resolved_discrepancies,
+                "recent_30_days": recent_discrepancies,
+                "by_severity": {str(severity): count for severity, count in severity_rows},
+            },
+            "data_source": "persisted_tenant_records",
+        }), 200
+    except SQLAlchemyError:
+        logger.exception("Tenant dashboard overview query failed")
+        return jsonify({
+            "error": "dashboard_overview_unavailable",
+            "message": "Dashboard metrics are temporarily unavailable.",
+        }), 503
+    finally:
+        session.close()
+
+
 @app.route("/analytics/reconciliation-report", methods=["GET"])
 @require_auth("read:discrepancies")
 def reconciliation_report():
