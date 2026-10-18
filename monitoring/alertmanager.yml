@@ -1,12 +1,9 @@
 global:
   resolve_timeout: 5m
 
-# The webhook receivers below point at the PesaGuard gateway (/ops/alerts).
-# To require authentication, set PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET on the
-# gateway and add matching http_config headers to each webhook_configs entry:
-#   http_config:
-#     headers:
-#       X-Alertmanager-Secret: <secret>
+# The webhook receivers below authenticate using a Docker Compose secret
+# mounted at /run/secrets/alertmanager_webhook_secret. Set
+# PESAGUARD_ALERTMANAGER_WEBHOOK_SECRET in the protected host environment.
 
 route:
   receiver: pesaguard-default
