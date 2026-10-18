@@ -56,8 +56,8 @@ ALLOWED_TRANSITIONS = {
     "data_quality_finding": {
         "open": {"triage", "in_progress", "resolved", "closed"},
         "triage": {"in_progress", "resolved", "closed"},
-        "in_progress": {"triage", "needs_information", "resolved", "closed"},
-        "needs_information": {"in_progress", "closed"}, "resolved": {"closed"}, "closed": set(),
+        "in_progress": {"triage", "resolved", "closed"},
+        "resolved": {"closed"}, "closed": set(),
     },
     "scheduled_reconciliation": {
         "draft": {"scheduled", "disabled", "cancelled"}, "scheduled": {"disabled", "cancelled"},
