@@ -4025,6 +4025,12 @@ def external_idp_policy_route():
         if not _validate_saml_provider_policy(policy):
             return _api_error("policy_denied", "The SAML trust policy is missing the required explicit entity identifier.", 403)
 
+    try:
+        settings_store.update(tenant_id, {"external_idp_policy": policy})
+    except Exception:
+        logger.exception("Failed to persist SSO policy for tenant %s", tenant_id)
+        return _api_error("internal_server_error", "The SSO policy could not be saved.", 500)
+
     return _api_success({"policy": policy, "tenant_id": tenant_id}, 200)
 
 
@@ -4054,6 +4060,12 @@ def external_idp_policy_review_route():
         policy["approved_by"] = None
         policy["approved_at"] = None
         policy["review_required"] = True
+
+    try:
+        settings_store.update(tenant_id, {"external_idp_policy": policy})
+    except Exception:
+        logger.exception("Failed to persist SSO policy review for tenant %s", tenant_id)
+        return _api_error("internal_server_error", "The SSO policy review could not be saved.", 500)
 
     return _api_success({"policy": policy, "tenant_id": tenant_id, "decision": decision}, 200)
 
