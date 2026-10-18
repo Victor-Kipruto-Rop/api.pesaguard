@@ -40,3 +40,21 @@ def test_session_lifecycle_read_error_fails_closed_without_legacy_fallback(
     assert session.execute_calls == 1
     assert session.rollback_calls >= 1
     assert session.closed is True
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_missing_session_id_is_rejected_in_production_like_environments(
+    monkeypatch, environment
+):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", environment)
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert auth_rbac._session_is_active(None, "user-1", "tenant-1") is False
+
+
+def test_missing_session_id_remains_tolerated_in_development(monkeypatch):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "development")
+    for name in ("PESAGUARD_ENV", "ENVIRONMENT", "FLASK_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert auth_rbac._session_is_active(None, "user-1", "tenant-1") is True
