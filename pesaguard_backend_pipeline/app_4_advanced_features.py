@@ -201,7 +201,9 @@ def _request_id_value() -> str:
 
 def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """Return the tenant's external-IdP trust policy with sensible provider defaults."""
-    tenant_key = tenant_id or request.args.get("tenant_id") or os.getenv("TENANT_ID") or "default"
+    # Never select a tenant from request query parameters or process-wide configuration.
+    # Callers must pass tenant_id from the authenticated principal when loading tenant policy.
+    tenant_key = str(tenant_id or "").strip()
     provider_family = str(os.getenv("OIDC_PROVIDER_FAMILY", "")).strip().lower() or "generic"
     env_issuer = str(os.getenv("OIDC_ISSUER", "")).strip()
     env_jwks = str(os.getenv("OIDC_JWKS_URI", "")).strip()
@@ -254,7 +256,7 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     policy["allowed_jwks_hosts"] = list(dict.fromkeys(host.lower() for host in policy["allowed_jwks_hosts"]))
 
     try:
-        tenant_cfg = settings_store.get(str(tenant_key)) if hasattr(settings_store, "get") else {}
+        tenant_cfg = settings_store.get(tenant_key) if tenant_key and hasattr(settings_store, "get") else {}
         if isinstance(tenant_cfg, dict):
             external_policy = tenant_cfg.get("external_idp_policy") or tenant_cfg.get("sso_policy") or {}
             if isinstance(external_policy, dict):
@@ -3999,7 +4001,9 @@ def oidc_provider_registry():
 @require_privileged_operation_mfa
 def external_idp_policy_route():
     """Get or configure tenant-level external IdP trust policy for OIDC/SAML providers."""
-    tenant_id = request.args.get("tenant_id") or request.get_json(silent=True, force=False).get("tenant_id") if request.get_json(silent=True) else None or get_current_user().tenant_id
+    # Tenant scope is derived exclusively from the authenticated principal. A request
+    # body/query tenant selector must never permit cross-tenant policy reads or writes.
+    tenant_id = str(get_current_user().tenant_id)
     if request.method == "GET":
         return _api_success({"policy": _provider_trust_policy_for_tenant(tenant_id)}, 200)
 
@@ -4025,9 +4029,11 @@ def external_idp_policy_route():
 def external_idp_policy_review_route():
     """Approve or reject a tenant external IdP policy after admin review."""
     data = request.get_json(silent=True) or {}
-    tenant_id = data.get("tenant_id") or get_current_user().tenant_id
+    current_user = get_current_user()
+    tenant_id = str(current_user.tenant_id)
     decision = str(data.get("decision") or "approve").strip().lower()
-    reviewer = str(data.get("reviewer") or get_current_user().username or "admin").strip()
+    # Reviewer identity must be attributable to the authenticated principal, not caller input.
+    reviewer = str(current_user.username or current_user.user_id)
     policy = _provider_trust_policy_for_tenant(tenant_id)
     if isinstance(data.get("trust_policy"), dict):
         policy.update(data.get("trust_policy"))
