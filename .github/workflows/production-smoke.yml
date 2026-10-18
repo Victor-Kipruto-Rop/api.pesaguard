@@ -1,0 +1,36 @@
+name: Production read-only integration smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-read-only-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Read-only deployed API checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify deployed API contracts
+        env:
+          PESAGUARD_BASE_URL: ${{ vars.PESAGUARD_SMOKE_BASE_URL || 'https://api.pesaguard.co.ke' }}
+          PESAGUARD_SMOKE_TIMEOUT_SECONDS: "10"
+          PESAGUARD_AUTHENTICATED_READ_PATH: ${{ vars.PESAGUARD_AUTHENTICATED_READ_PATH }}
+          PESAGUARD_SMOKE_BEARER_TOKEN: ${{ secrets.PESAGUARD_SMOKE_BEARER_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          PESAGUARD_REQUIRE_OTEL: ${{ vars.PESAGUARD_REQUIRE_OTEL || 'false' }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+        run: python pesaguard_backend_pipeline/operations/production_integration_smoke.py
