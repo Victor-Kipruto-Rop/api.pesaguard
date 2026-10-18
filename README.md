@@ -74,7 +74,7 @@ The status website uses these public API routes:
 1. Before merging the backend change, configure the production runtime: SMTP_HOST, SMTP_PORT, SMTP_FROM_EMAIL, TLS (SMTP_USE_TLS or SMTP_USE_SSL), and both SMTP_USERNAME/SMTP_PASSWORD when the provider requires authentication. The mail transport requires TLS.
 2. Keep the existing production JWT_SECRET_KEY configured; it signs unsubscribe links. Do not rotate it solely for this feature.
 3. Set PESAGUARD_STATUS_MONITOR_TOKEN to a newly generated random value of at least 32 characters in the backend runtime and set the same value as the GitHub Actions repository secret. Never commit the token or expose it in logs.
-4. Set PESAGUARD_CORS_ALLOWED_ORIGINS to allow both https://api.pesaguard.co.ke and https://status.pesaguard.co.ke. An explicit value replaces defaults, so retain any other origins required by clients.
+4. Set PESAGUARD_CORS_ALLOWED_ORIGINS to include https://api.pesaguard.co.ke, https://app.pesaguard.co.ke, and https://status.pesaguard.co.ke. An explicit value replaces defaults; retain every other origin required by connected clients. The tenant dashboard calls the public status endpoint from the browser, so omitting the app origin will cause browser CORS failures.
 5. Back up the database, then run migrations from the backend checkout root with production DATABASE_URL configured, before deploying the code:
 
    ```powershell
