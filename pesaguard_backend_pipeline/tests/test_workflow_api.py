@@ -292,3 +292,73 @@ def test_schedules_cannot_enter_scheduled_state_without_valid_config(workflow_cl
     )
     assert scheduled_reconciliation.status_code == 400
     assert scheduled_reconciliation.get_json()["error"] == "schedule_required"
+
+
+def test_completed_report_summary_can_be_downloaded_as_audited_tenant_scoped_csv(workflow_client):
+    import csv
+    import io
+    from action_audit import ActionAuditEntry
+
+    client, app_module, headers = workflow_client
+    created = client.post(
+        "/api/v1/report-runs",
+        headers=headers,
+        json={"title": "Transactions summary", "payload": {"report_type": "transactions"}},
+    )
+    assert created.status_code == 201
+    item = created.get_json()["item"]
+    assert item["status"] == "completed"
+
+    downloaded = client.get(
+        f"/api/v1/report-runs/{item['id']}/download.csv",
+        headers=headers,
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.mimetype == "text/csv"
+    assert "no-store" in downloaded.headers["Cache-Control"]
+    assert downloaded.headers["X-Content-Type-Options"] == "nosniff"
+    rows = list(csv.reader(io.StringIO(downloaded.get_data(as_text=True))))
+    assert rows[0] == ["field", "value"]
+    values = dict(rows[1:])
+    assert values["report_id"] == item["id"]
+    assert values["report_type"] == "transactions"
+    assert values["result.report_type"] == "transactions"
+    assert "result.row_count" in values
+
+    with app_module.SessionLocal() as session:
+        audit = session.query(ActionAuditEntry).filter(
+            ActionAuditEntry.tenant_id == "tenant-a",
+            ActionAuditEntry.resource_id == item["id"],
+            ActionAuditEntry.action == "report.exported",
+        ).one()
+        assert audit.details["domain"] == "report_run"
+        assert audit.details["operation"].startswith("summary_exported_")
+
+    other_tenant_token = AuthRBAC.generate_token(
+        user_id="workflow-admin-b",
+        username="workflow-admin-b",
+        tenant_id="tenant-b",
+        roles=["admin"],
+    )
+    forbidden = client.get(
+        f"/api/v1/report-runs/{item['id']}/download.csv",
+        headers={"Authorization": f"Bearer {other_tenant_token}"},
+    )
+    assert forbidden.status_code == 404
+
+
+def test_report_summary_download_rejects_non_completed_run(workflow_client):
+    client, _, headers = workflow_client
+    created = client.post(
+        "/api/v1/report-runs",
+        headers=headers,
+        json={"title": "Requested report", "status": "requested", "payload": {"report_type": "transactions"}},
+    )
+    assert created.status_code == 201
+    item = created.get_json()["item"]
+    downloaded = client.get(
+        f"/api/v1/report-runs/{item['id']}/download.csv",
+        headers=headers,
+    )
+    assert downloaded.status_code == 409
+    assert downloaded.get_json()["error"] == "report_not_ready"
