@@ -20,7 +20,7 @@ This matrix is the source of truth for wiring `app.pesaguard.co.ke` to `api.pesa
 | Import history | `GET /api/v1/imports` | Newly implemented tenant-scoped paginated import-job listing with validated status filtering; regression test seeds two tenants. |
 | Transaction detail | `GET /transactions/{transaction_id}` | Tenant-scoped transaction route; validate mounted prefix and identifier semantics. |
 | Transaction status | `GET /transactions/{transaction_id}/status` | Tenant-scoped status route. |
-| Reconciliation history/results | `GET /reconciliation/{transaction_id}` | Existing published route; transaction-level result, not a run collection. |
+| Reconciliation history/results | `GET /reconciliation/{transaction_id}` and `GET /api/v1/reconciliation/results` | Transaction-level history plus a tenant-scoped paginated collection of reconciliation outcomes. The collection supports validated status filters and exact transaction ID filtering. |
 | Risk assessment | `GET /fraud/{transaction_id}` | Existing published route; transaction-level risk assessment only. |
 | Reconciliation discrepancies/exceptions | `GET /discrepancies` | Existing route; verify filters, pagination, and tenant enforcement. |
 | Operational activity | `GET /activity-feed` | Existing route; verify response shape and tenant filtering. |
@@ -69,3 +69,8 @@ The current route audit does not prove the existence of complete CRUD/read APIs 
 `GET /api/v1/dashboard/overview` requires `read:analytics` and a verified authenticated tenant context. The endpoint aggregates persisted `transactions` and `discrepancies` using the current tenant ID, reports lifecycle counts, recorded transaction amount, open/resolved discrepancy counts, recent 30-day activity, and a generation timestamp. It deliberately does not infer match rates, fraud probabilities, revenue, settlement state, or other metrics not directly supported by persisted source records.
 
 The route test `test_dashboard_overview_returns_persisted_metrics_for_current_tenant_only` seeds records for two tenants and asserts that only the active tenant's data contributes to the response.
+
+
+## Reconciliation results collection
+
+`GET /api/v1/reconciliation/results` requires `read:transactions` and authenticated tenant context. It supports `page`, `per_page` (1–100), comma-separated `status` values from `MATCHED`, `UNMATCHED`, `PARTIAL`, `MISMATCH`, `DUPLICATE`, `PENDING`, and `EXCEPTION`, plus an optional exact `transaction_id`. Results are filtered by tenant before counting and pagination. Response fields exclude the raw `matched_record` payload and expose only a boolean indicating whether a matched record exists. Regression tests cover tenant isolation, status validation, pagination, and payload minimization.
