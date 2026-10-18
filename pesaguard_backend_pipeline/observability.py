@@ -13,6 +13,7 @@ import logging
 import os
 import secrets
 import time
+from urllib.parse import urlparse
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -438,9 +439,14 @@ def init_sentry(service: str = "webhook", provider: str = "mpesa") -> bool:
     Returns True when Sentry is configured and initialized successfully,
     False when no SENTRY_DSN is supplied or the runtime dependency is absent.
     """
-    dsn = os.getenv("SENTRY_DSN")
+    dsn = (os.getenv("SENTRY_DSN") or "").strip()
     if not dsn or not sentry_sdk or not FlaskIntegration or not LoggingIntegration:
         logger.info("Sentry initialization skipped because SENTRY_DSN is not configured or sentry-sdk is unavailable.")
+        return False
+    parsed_dsn = urlparse(dsn)
+    if parsed_dsn.scheme not in {"http", "https"} or not parsed_dsn.netloc or not parsed_dsn.path.strip("/"):
+        # Do not echo the DSN: it contains a project key and should never reach logs.
+        logger.error("Sentry initialization skipped because SENTRY_DSN is malformed; configure a valid Sentry project DSN.")
         return False
 
     try:
