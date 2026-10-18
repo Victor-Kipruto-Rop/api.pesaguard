@@ -58,6 +58,22 @@ def test_workflow_records_are_persisted_and_tenant_scoped(workflow_client):
     assert item["status"] == "open"
     assert item["payload"]["finding_code"] == "LEDGER_REF_MISSING"
 
+    # Workflow mutations and their audit outbox event commit atomically.
+    from action_audit import ActionAuditEntry, AuditOutboxEntry
+    with app_module.SessionLocal() as session:
+        audit = session.query(ActionAuditEntry).filter(
+            ActionAuditEntry.tenant_id == "tenant-a",
+            ActionAuditEntry.resource_id == item["id"],
+            ActionAuditEntry.action == "configuration.created",
+        ).one()
+        outbox = session.query(AuditOutboxEntry).filter(
+            AuditOutboxEntry.audit_id == audit.id,
+            AuditOutboxEntry.tenant_id == "tenant-a",
+        ).one()
+        assert audit.details["domain"] == "data_quality_finding"
+        assert audit.details["operation"] == "created"
+        assert outbox.event_type == "workflow.created"
+
     listed = client.get("/api/v1/data-quality-findings?page=1&per_page=10", headers=headers)
     assert listed.status_code == 200
     assert listed.get_json()["total"] == 1
