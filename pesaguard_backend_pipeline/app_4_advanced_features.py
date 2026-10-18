@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from io import BytesIO
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urlencode, urlparse
 
 import qrcode
@@ -4036,11 +4036,10 @@ def external_idp_policy_route():
     data = request.get_json(silent=True) or {}
     trust_policy = data.get("trust_policy") or data
     policy = _provider_trust_policy_for_tenant(tenant_id)
-    policy_changed = False
     if isinstance(trust_policy, dict):
         # Approval metadata is server-controlled and may only be changed by the
         # dedicated review endpoint, never by the policy configuration payload.
-        policy, policy_changed = _apply_external_idp_policy_update(policy, trust_policy)
+        policy, _ = _apply_external_idp_policy_update(policy, trust_policy)
 
     pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
