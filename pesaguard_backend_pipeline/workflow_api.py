@@ -97,6 +97,19 @@ ALLOWED_TRANSITIONS = {
 }
 
 
+def _contains_sensitive_evidence(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = "".join(character for character in str(key).lower() if character.isalnum())
+            if normalized in {"rawpayload", "msisdn", "phonenumber", "accesstoken", "refreshtoken", "secret", "password", "apikey", "authorization", "privatekey"}:
+                return True
+            if _contains_sensitive_evidence(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_evidence(item) for item in value)
+    return False
+
+
 def create_workflow_blueprint(session_factory):
     bp = Blueprint("tenant_workflow_api", __name__)
 
@@ -394,7 +407,7 @@ def create_workflow_blueprint(session_factory):
             return jsonify({"error": "validation_error", "message": "evidence must be a JSON object."}), 400
         if not isinstance(evidence.get("type"), str) or not evidence["type"].strip():
             return jsonify({"error": "validation_error", "message": "evidence.type is required."}), 400
-        if any(key in evidence for key in ("raw_payload", "msisdn", "phone_number", "access_token", "secret")):
+        if _contains_sensitive_evidence(evidence):
             return jsonify({"error": "sensitive_evidence_rejected", "message": "Raw payment payloads and sensitive credentials cannot be attached."}), 400
         result, error = _get_domain_record("fraud_investigation", record_id)
         if error:
