@@ -35,6 +35,7 @@ financial traffic on the basis of this tracker.
   revocation, logout, and privilege-change session rotation.
 - [x] Change session lifecycle reads to fail closed in production/staging rather than falling back to an active-only legacy query; regression test added (execution pending).
 - [x] Restrict the insecure bootstrap JWT secret override to explicit development/test environments; regression test added (execution pending).
+- [x] Prevent API authentication from being disabled in staging as well as production; regression test added (execution pending).
 - [ ] Verify every route's role/permission and object-level authorization.
 - [ ] Add cross-tenant regression tests for all tenant-owned resources.
 - [ ] Verify PostgreSQL RLS/constraints where supported and prove tenant context
