@@ -14,7 +14,11 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency install
 
 from .api.dashboard_app import create_app as create_dashboard_app
 from .health import build_health_payload, sanitize_health_payload
-from observability import init_opentelemetry
+try:
+    # Shared top-level module used by legacy Flask entry points in Docker.
+    from observability import init_opentelemetry
+except ImportError:  # pragma: no cover - package-only import environments
+    from .observability import init_opentelemetry
 
 
 app = FastAPI(
