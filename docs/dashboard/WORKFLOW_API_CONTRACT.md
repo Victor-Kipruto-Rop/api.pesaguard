@@ -36,7 +36,7 @@ Every record contains server-assigned `id`, `tenant_id`, `domain`, `status`, `cr
 
 ## Production gates and known limitations
 
-- Apply `pesaguard_backend_pipeline/sql/migrations/20261018_tenant_workflow_records.sql` through the approved migration runner before deploying this code. Do not use `Base.metadata.create_all()` as a production migration strategy.
+- Apply Alembic revision `20261018_tenant_workflows` (`pesaguard_backend_pipeline/alembic/versions/20261018_tenant_workflow_records.py`) through the approved migration runner before deploying this code. The SQL file under `sql/migrations/` is a reference equivalent. Do not use `Base.metadata.create_all()` as a production migration strategy.
 - Run the focused workflow tests and the full backend suite; validate tenant-isolation and permission behavior against PostgreSQL in staging.
 - The scheduler and report-delivery worker are not enabled by persisting schedule metadata alone.
 - Report-run execution currently produces persisted-data summary JSON, not a downloadable artifact.
