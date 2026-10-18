@@ -55,8 +55,10 @@ financial traffic on the basis of this tracker.
 - [x] Restrict the insecure bootstrap JWT secret override to explicit development/test environments; regression test added (execution pending).
 - [x] Prevent API authentication from being disabled in staging as well as production; regression test added (execution pending).
 - [ ] Verify every route's role/permission and object-level authorization.
-- [ ] Verify webhook DNS-rebinding defenses with an IP-pinned TLS transport or
-  controlled egress proxy; URL validation alone is not sufficient.
+- [x] Implement IP-pinned HTTPS webhook delivery with DNS answer validation,
+  original-host TLS verification, redirect suppression, malformed URL rejection,
+  Host-header protection, and IPv6 handling; regression tests added (full CI and
+  staging execution pending).
 - [ ] Add cross-tenant regression tests for all tenant-owned resources.
 - [ ] Verify PostgreSQL RLS/constraints where supported and prove tenant context
   cannot be forged by request input.
@@ -133,19 +135,25 @@ financial traffic on the basis of this tracker.
 - GitHub API reports the `main` branch is not protected and has no required
   status checks. Enable branch protection/rulesets with required CI and review
   before accepting security changes into `main`.
-- Recent Actions runs fail before starting any steps because of the reported
-  GitHub billing lock; the current PR's checks have not produced a passing run.
+- Recent Actions runs and explicit reruns still fail, and the GitHub connector cannot retrieve the job logs. The precise failure cause is not independently confirmed; no passing repository CI evidence is available.
 - Render has no provisioned managed Redis service, and the production GitHub
   staging environment/deployment secrets remain unconfigured.
-- PR #106 merged the Redis key-type fix, focused tests, rotation runbook, webhook encryption, and Alertmanager authentication. Follow-up branch `security/webhook-ip-pinning-2026-10` adds an IP-pinned HTTPS transport to close the DNS-rebinding gap.
+- PR #106 merged the Redis key-type fix, focused tests, rotation runbook, webhook encryption, and Alertmanager authentication. PR #107 merged the initial IP-pinned HTTPS webhook transport. PR #108 adds malformed URL/Host-header hardening and expanded regression tests; it remains open pending review and CI evidence.
 - Focused tests were added for Redis key separation/reset and bounded distinct
   state, session-lifecycle fail-closed behavior, auth/secret environment
   restrictions, API security headers, Alertmanager receiver authentication,
-  webhook secret/payload encryption, and destination
-  URL validation. They have not yet been executed by this
-  tool session; a passing result must not be inferred from test code alone.
+  webhook secret/payload encryption, and webhook transport URL/DNS/Host handling.
+  An isolated 9-case transport smoke harness passed locally; the repository test
+  suite and staging delivery have not passed verification in this session.
 - Render currently has no provisioned managed Redis service; provisioning was
   blocked by Render billing requirements. Sentry initialization was previously
   blocked by a malformed `SENTRY_DSN`.
 - A production release requires resolving those environment blockers and running
   the required deployment and integration checks.
+
+
+### Follow-up transport hardening
+- Added input validation for control characters, malformed URL parsing, and IDNA hostname normalization.
+- Ensured caller-provided Host headers cannot override the validated hostname, including correct brackets for IPv6 literals.
+- Expanded regression coverage for mixed public/private DNS answers, malformed and non-HTTPS URLs, DNS failures, and IPv6 Host formatting.
+- These tests are committed as coverage only; CI execution remains required before release.
