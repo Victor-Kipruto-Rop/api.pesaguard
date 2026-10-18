@@ -1,5 +1,8 @@
 name: Dependency and Security Scan
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [ main, staging ]
@@ -32,14 +35,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install pip-audit bandit safety
 
-      - name: Audit Python packages for CVEs (pip-audit)
+      - name: Audit production and development Python dependencies (pip-audit)
         run: |
-          if [ -f requirements.txt ]; then
-            pip-audit -r requirements.txt --desc
+          # The development manifest includes the backend production requirements.
+          # Audit it explicitly so CI/test tooling is not silently omitted.
+          if [ -f pesaguard_backend_pipeline/requirements-dev.txt ]; then
+            pip-audit -r pesaguard_backend_pipeline/requirements-dev.txt --desc
           elif [ -f pesaguard_backend_pipeline/requirements.txt ]; then
             pip-audit -r pesaguard_backend_pipeline/requirements.txt --desc
+          elif [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --desc
           else
-            pip-audit --desc
+            echo "No supported Python requirements manifest found." >&2
+            exit 1
           fi
 
       - name: Scan Python code for security flaws (bandit)
