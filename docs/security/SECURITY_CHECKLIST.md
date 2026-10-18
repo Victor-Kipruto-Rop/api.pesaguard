@@ -31,5 +31,6 @@ timeline within five business days.
 ## Operational Review
 
 - Record the deployment owner and rollback plan.
-- Review dependency and secret rotation status.
+- Review dependency and secret rotation status using [the production secret rotation runbook](../operations/SECRETS_ROTATION.md).
 - Confirm monitoring, alert routing, retention, and incident contacts.
+- Track implementation and evidence for every control in [the security implementation tracker](IMPLEMENTATION_TRACKER.md).
