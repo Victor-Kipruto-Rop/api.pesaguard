@@ -74,3 +74,10 @@ def test_root_returns_service_information(control_plane):
         "health": "/health",
         "liveness": "/livez",
     }
+
+
+
+def test_root_head_returns_success_without_a_response_body(control_plane):
+    response = TestClient(control_plane.app).head("/")
+    assert response.status_code == 200
+    assert response.content == b""
