@@ -144,3 +144,19 @@ def test_workflow_update_uses_version_conflict_guard(workflow_client):
     )
     assert updated.status_code == 200
     assert updated.get_json()["item"]["status"] == "in_progress"
+
+
+
+def test_matching_rule_delete_is_auditable_soft_disable(workflow_client):
+    client, _, headers = workflow_client
+    created = client.post(
+        "/api/v1/matching-rules",
+        headers=headers,
+        json={"title": "M-Pesa exact reference", "payload": {"currency": "KES", "amount_tolerance": 0, "time_window_minutes": 5}},
+    )
+    assert created.status_code == 201
+    item = created.get_json()["item"]
+    deleted = client.delete("/api/v1/matching-rules/" + item["id"], headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.get_json()["item"]["status"] == "disabled"
+    assert deleted.get_json()["disabled"] is True
