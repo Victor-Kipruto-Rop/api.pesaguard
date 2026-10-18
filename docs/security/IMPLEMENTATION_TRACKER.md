@@ -149,3 +149,10 @@ financial traffic on the basis of this tracker.
   blocked by a malformed `SENTRY_DSN`.
 - A production release requires resolving those environment blockers and running
   the required deployment and integration checks.
+
+
+### Follow-up transport hardening
+- Added input validation for control characters, malformed URL parsing, and IDNA hostname normalization.
+- Ensured caller-provided Host headers cannot override the validated hostname, including correct brackets for IPv6 literals.
+- Expanded regression coverage for mixed public/private DNS answers, malformed and non-HTTPS URLs, DNS failures, and IPv6 Host formatting.
+- These tests are committed as coverage only; CI execution remains required before release.
