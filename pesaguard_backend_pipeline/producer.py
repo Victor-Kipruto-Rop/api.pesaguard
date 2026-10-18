@@ -412,7 +412,7 @@ def publish_transaction_batch_results(
         try:
             _validate_payload_schema(payload)
             trans_id = payload.get("TransID") or payload.get("trans_id") or payload.get("aggregate_id") or payload.get("event_id")
-            headers = [("tenant_id", str(payload.get("tenant_id", "default")).encode("utf-8"))]
+            headers = [("tenant_id", _require_payload_tenant_id(payload).encode("utf-8"))]
             if correlation_id:
                 headers.append(("correlation_id", correlation_id.encode("utf-8")))
             future = producer.send(
