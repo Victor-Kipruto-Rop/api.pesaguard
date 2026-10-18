@@ -290,6 +290,39 @@ def test_batch_publish_preserves_per_message_delivery_results(monkeypatch):
     assert [payload["TransID"] for _, payload in batch_producer.sent] == ["tx-1", "tx-2", "tx-3"]
 
 
+
+def test_batch_results_do_not_publish_unscoped_events(monkeypatch):
+    import producer
+
+    class BatchProducer:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, topic, **kwargs):
+            self.sent.append(kwargs["value"])
+            return type("Future", (), {"get": lambda self, timeout: object()})()
+
+        def flush(self, timeout):
+            return None
+
+    batch_producer = BatchProducer()
+    monkeypatch.setattr(producer._producer_manager, "get_producer", lambda: batch_producer)
+    monkeypatch.setattr(producer._circuit_breaker, "can_execute", lambda: True)
+    monkeypatch.setattr(producer._circuit_breaker, "record_success", lambda: None)
+    monkeypatch.setattr(producer._circuit_breaker, "record_failure", lambda: None)
+
+    results = producer.publish_transaction_batch_results(
+        "mpesa.transactions.raw",
+        [
+            {"TransID": "tx-unscoped"},
+            {"TransID": "tx-scoped", "tenant_id": "tenant-a"},
+        ],
+    )
+
+    assert results == [False, True]
+    assert [payload["TransID"] for payload in batch_producer.sent] == ["tx-scoped"]
+
+
 def test_network_failure_is_retried_then_dead_lettered():
     controller = EventDeliveryController(retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.001))
     consumer = EventConsumer(ConsumerGroup("reconciliation", frozenset({"transaction.received"})), controller=controller)
