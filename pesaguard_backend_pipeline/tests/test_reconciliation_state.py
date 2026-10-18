@@ -267,7 +267,7 @@ def test_active_tenant_matching_rule_is_applied_and_version_snapshotted(tmp_path
     assert captured["engine"]["tolerance_percent"] == Decimal("0.25")
     assert captured["engine"]["window_seconds"] == 600
     assert captured["connector"]["since_minutes"] == 10
-    assert captured["connector"]["tolerance"] == Decimal("0.25")
+    assert captured["connector"]["tolerance"] == Decimal("0.0250")
     snapshot = captured["evaluation"]["evidence"]["matching_rule_snapshot"]
     assert snapshot["rule_id"] == "rule-tenant-a"
     assert snapshot["version"] == 3
