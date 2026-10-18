@@ -137,7 +137,7 @@ financial traffic on the basis of this tracker.
   GitHub billing lock; the current PR's checks have not produced a passing run.
 - Render has no provisioned managed Redis service, and the production GitHub
   staging environment/deployment secrets remain unconfigured.
-- This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
+- PR #106 merged the Redis key-type fix, focused tests, rotation runbook, webhook encryption, and Alertmanager authentication. Follow-up branch `security/webhook-ip-pinning-2026-10` adds an IP-pinned HTTPS transport to close the DNS-rebinding gap.
 - Focused tests were added for Redis key separation/reset and bounded distinct
   state, session-lifecycle fail-closed behavior, auth/secret environment
   restrictions, API security headers, Alertmanager receiver authentication,
