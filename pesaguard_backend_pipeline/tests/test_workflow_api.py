@@ -348,16 +348,24 @@ def test_completed_report_summary_can_be_downloaded_as_audited_tenant_scoped_csv
 
 
 def test_report_summary_download_rejects_non_completed_run(workflow_client):
-    client, _, headers = workflow_client
-    created = client.post(
-        "/api/v1/report-runs",
-        headers=headers,
-        json={"title": "Requested report", "status": "requested", "payload": {"report_type": "transactions"}},
-    )
-    assert created.status_code == 201
-    item = created.get_json()["item"]
+    client, app_module, headers = workflow_client
+    from workflow_models import TenantWorkflowRecord
+
+    with app_module.SessionLocal() as session:
+        session.add(TenantWorkflowRecord(
+            id="queued-report-run",
+            tenant_id="tenant-a",
+            domain="report_run",
+            status="queued",
+            title="Queued report",
+            payload={"report_type": "transactions"},
+            created_by="workflow-admin",
+            updated_by="workflow-admin",
+        ))
+        session.commit()
+
     downloaded = client.get(
-        f"/api/v1/report-runs/{item['id']}/download.csv",
+        "/api/v1/report-runs/queued-report-run/download.csv",
         headers=headers,
     )
     assert downloaded.status_code == 409
