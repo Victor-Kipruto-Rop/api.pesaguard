@@ -66,7 +66,11 @@ def _validate_webhook_url(url: str) -> Optional[str]:
         return "url_userinfo_not_allowed"
     if parsed.fragment:
         return "url_fragment_not_allowed"
-    if parsed.port not in (None, 443):
+    try:
+        port = parsed.port
+    except ValueError:
+        return "url_invalid_port"
+    if port not in (None, 443):
         return "url_port_not_allowed"
 
     if parsed.hostname.lower() in {"localhost", "metadata.google.internal", "169.254.169.254"}:
@@ -75,6 +79,9 @@ def _validate_webhook_url(url: str) -> Optional[str]:
     try:
         resolved_ips = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None)}
     except socket.gaierror:
+        return "url_hostname_cannot_be_resolved"
+
+    if not resolved_ips:
         return "url_hostname_cannot_be_resolved"
 
     for ip_str in resolved_ips:
