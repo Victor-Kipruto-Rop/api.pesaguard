@@ -23,13 +23,40 @@ settings_bp = Blueprint("settings_api", __name__, url_prefix="/api/v1/settings")
 settings_store = TenantSettingsStore()
 
 
-def _get_current_context() -> tuple[str, str]:
-    """Helper to extract tenant_id and role from request context or fallback."""
+def _get_current_context() -> tuple[str | None, str | None]:
+    """Resolve tenant and role only from trusted authentication middleware.
+
+    A caller-controlled X-Tenant-ID header is a selector, not proof of membership.
+    This settings blueprint must not grant an implicit admin role when auth context
+    is missing. Authentication middleware may populate g.tenant_id/g.user, or the
+    authenticated principal may carry tenant_id and role directly.
+    """
     user = getattr(g, "user", None)
-    tenant_id = getattr(g, "tenant_id", None) or request.headers.get("X-Tenant-ID") or "default"
-    role = getattr(user, "role", "viewer") if user else "admin"
+    tenant_id = (
+        str(getattr(g, "tenant_id", "") or "").strip()
+        or str(getattr(user, "tenant_id", "") or "").strip()
+        or None
+    )
+    role = (
+        str(getattr(user, "role", "") or "").strip()
+        or str(getattr(g, "role", "") or "").strip()
+        or None
+    )
+    if not tenant_id or not role:
+        return None, None
+    if tenant_id.lower() in {"default", "unknown", "none", "null"}:
+        return None, None
     return tenant_id, role
 
+
+def _context_error(tenant_id: str | None, role: str | None):
+    """Return a safe auth error when trusted tenant context is unavailable."""
+    if not tenant_id or not role:
+        return jsonify({
+            "error": "unauthorized",
+            "message": "Authenticated tenant context is required.",
+        }), 401
+    return None
 
 @settings_bp.route("", methods=["GET"])
 def get_tenant_settings():
