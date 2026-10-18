@@ -24,7 +24,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from models import WebhookConfig, WebhookDelivery
-from data_protection import decrypt_value, encrypt_value
+from data_protection import decrypt_value, encrypt_value, protect_payload
 
 logger = logging.getLogger("pesaguard.webhooks")
 
@@ -192,7 +192,9 @@ class WebhookManager:
             tenant_id=webhook.tenant_id,
             webhook_id=webhook.id,
             event_type=event_type,
-            payload=payload,
+            # Protect sensitive leaves before persisting the delivery audit row;
+            # the outbound HTTP request below still uses the original payload.
+            payload=protect_payload(payload),
             status="pending",
             attempt_count=0,
         )
