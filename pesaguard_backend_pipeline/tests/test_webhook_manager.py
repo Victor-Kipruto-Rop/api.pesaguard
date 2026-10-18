@@ -38,6 +38,7 @@ def test_webhook_delivery_history_retains_owner_tenant(monkeypatch):
     assert stored_webhook.signing_secret.startswith("enc:v1:")
     delivery = session.query(WebhookDelivery).one()
     assert delivery.tenant_id == "tenant-a"
+    assert delivery.response_body == ""
     assert len(manager.get_delivery_history(registration["id"], "tenant-a")) == 1
     assert manager.get_delivery_history(registration["id"], "tenant-b") == []
 
@@ -56,3 +57,23 @@ def test_webhook_url_rejects_userinfo_fragments_and_nonstandard_ports():
     assert webhook_manager._validate_webhook_url(
         "https://example.com:8443/hooks"
     ) == "url_port_not_allowed"
+
+
+
+def test_webhook_url_rejects_private_dns_answers(monkeypatch):
+    monkeypatch.setattr(
+        webhook_manager.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (None, None, None, None, ("127.0.0.1", 443))
+        ],
+    )
+    assert webhook_manager._validate_webhook_url(
+        "https://public-looking.example/events"
+    ) == "url_resolves_to_disallowed_address:127.0.0.1"
+
+
+def test_webhook_url_rejects_malformed_port():
+    assert webhook_manager._validate_webhook_url(
+        "https://example.com:notaport/events"
+    ) == "url_invalid_port"
