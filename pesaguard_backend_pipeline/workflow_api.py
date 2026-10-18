@@ -45,6 +45,21 @@ VALID_STATUSES = {
     "privacy_request": {"requested", "pending_review", "approved", "rejected", "completed", "failed"},
     "support_case": {"open", "triage", "in_progress", "needs_information", "resolved", "closed"},
 }
+# Client-supplied status is restricted to safe initial states. Terminal/review states
+# must be reached through the versioned transition path and its role checks.
+INITIAL_STATUSES = {
+    "reconciliation_run": {"draft", "requested"},
+    "matching_rule": {"draft"},
+    "data_quality_finding": {"open"},
+    "scheduled_reconciliation": {"draft", "scheduled", "disabled"},
+    "settlement_review": {"open"},
+    "refund_reversal_request": {"requested"},
+    "report_definition": {"draft", "open", "scheduled", "disabled"},
+    "report_run": {"requested"},
+    "fraud_investigation": {"open"},
+    "privacy_request": {"requested"},
+    "support_case": {"open"},
+}
 TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 4000
 
@@ -288,9 +303,31 @@ def create_workflow_blueprint(session_factory):
         valid, message = _validate(domain, body, creating=True)
         if message:
             return jsonify({"error": "validation_error", "message": message}), 400
-        status = valid["status"] or ("requested" if domain in {"reconciliation_run", "report_run", "refund_reversal_request", "privacy_request"} else "open")
-        if domain == "scheduled_reconciliation":
-            status = valid["status"] or ("scheduled" if valid["payload"].get("enabled", True) else "disabled")
+        requested_status = valid["status"]
+        if requested_status is not None and requested_status not in INITIAL_STATUSES[domain]:
+            return jsonify({
+                "error": "invalid_initial_status",
+                "message": "The requested status cannot be used at creation; use the audited status-transition workflow.",
+            }), 400
+        if domain == "report_definition" and requested_status == "scheduled":
+            schedule = valid["payload"].get("schedule")
+            if not isinstance(schedule, dict) or schedule.get("enabled", True) is not True:
+                return jsonify({"error": "schedule_required", "message": "An enabled, valid schedule is required before a report definition can be scheduled."}), 400
+        status = requested_status or {
+            "reconciliation_run": "requested",
+            "matching_rule": "draft",
+            "data_quality_finding": "open",
+            "scheduled_reconciliation": "scheduled" if valid["payload"].get("enabled", True) else "disabled",
+            "settlement_review": "open",
+            "refund_reversal_request": "requested",
+            "report_definition": "draft",
+            "report_run": "requested",
+            "fraud_investigation": "open",
+            "privacy_request": "requested",
+            "support_case": "open",
+        }[domain]
+        if domain == "scheduled_reconciliation" and status == "scheduled" and valid["payload"].get("enabled", True) is not True:
+            return jsonify({"error": "schedule_disabled", "message": "A disabled schedule cannot be created in scheduled status."}), 400
         if domain == "report_run":
             # A bounded execution reads only persisted rows belonging to the authenticated tenant.
             report_type = valid["payload"]["report_type"]
