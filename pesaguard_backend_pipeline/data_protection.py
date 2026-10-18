@@ -94,7 +94,10 @@ def protect_payload(payload: Any) -> Any:
         protected = {}
         for key, value in payload.items():
             if key.lower() in _SENSITIVE_KEYS and value not in (None, ""):
-                protected[key] = encrypt_value(value)
+                if isinstance(value, str) and value.startswith("enc:v1:"):
+                    protected[key] = value
+                else:
+                    protected[key] = encrypt_value(value)
             else:
                 protected[key] = protect_payload(value)
         return protected
