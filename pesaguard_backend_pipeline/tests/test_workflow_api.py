@@ -259,3 +259,36 @@ def test_workflow_creation_cannot_bypass_review_or_execution_transitions(workflo
     )
     assert scheduled_without_config.status_code == 400
     assert scheduled_without_config.get_json()["error"] == "schedule_required"
+
+
+def test_schedules_cannot_enter_scheduled_state_without_valid_config(workflow_client):
+    client, _, headers = workflow_client
+    definition = client.post(
+        "/api/v1/report-definitions",
+        headers=headers,
+        json={"title": "Unscheduled report", "payload": {"report_type": "transactions"}},
+    )
+    assert definition.status_code == 201
+    definition_item = definition.get_json()["item"]
+    scheduled_report = client.patch(
+        f"/api/v1/report-definitions/{definition_item['id']}",
+        headers=headers,
+        json={"status": "scheduled", "version": definition_item["version"]},
+    )
+    assert scheduled_report.status_code == 400
+    assert scheduled_report.get_json()["error"] == "schedule_required"
+
+    schedule = client.post(
+        "/api/v1/reconciliation-schedules",
+        headers=headers,
+        json={"title": "Disabled schedule", "payload": {"cadence": "daily", "enabled": False}},
+    )
+    assert schedule.status_code == 201
+    schedule_item = schedule.get_json()["item"]
+    scheduled_reconciliation = client.patch(
+        f"/api/v1/reconciliation-schedules/{schedule_item['id']}",
+        headers=headers,
+        json={"status": "scheduled", "version": schedule_item["version"]},
+    )
+    assert scheduled_reconciliation.status_code == 400
+    assert scheduled_reconciliation.get_json()["error"] == "schedule_required"
