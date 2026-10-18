@@ -242,7 +242,6 @@ def create_workflow_blueprint(session_factory):
         body, error = _json_object()
         if error:
             return error
-        session, record = _get_domain_record(domain, record_id)[0] if False else (None, None)
         result, error = _get_domain_record(domain, record_id)
         if error:
             return error
@@ -279,9 +278,69 @@ def create_workflow_blueprint(session_factory):
         endpoint = slug.replace("-", "_")
         bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"list_{endpoint}", view_func=require_auth("read:discrepancies")(_make_list(domain, _list_domain)), methods=["GET"])
         bp.add_url_rule(f"/api/v1/{slug}", endpoint=f"create_{endpoint}", view_func=require_auth("write:discrepancies")(_make_create(domain, _create_domain)), methods=["POST"])
+        bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth("read:discrepancies")(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth("write:discrepancies")(_make_update(domain, _update_domain)), methods=["PATCH"])
 
+    # Evidence is append-only metadata attached to a tenant-scoped investigation.
+    @bp.post("/api/v1/fraud-investigations/<record_id>/evidence")
+    @require_auth("write:discrepancies")
+    def append_investigation_evidence(record_id):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        body, error = _json_object()
+        if error:
+            return error
+        evidence = body.get("evidence")
+        if not isinstance(evidence, dict):
+            return jsonify({"error": "validation_error", "message": "evidence must be a JSON object."}), 400
+        if not isinstance(evidence.get("type"), str) or not evidence["type"].strip():
+            return jsonify({"error": "validation_error", "message": "evidence.type is required."}), 400
+        if any(key in evidence for key in ("raw_payload", "msisdn", "phone_number", "access_token", "secret")):
+            return jsonify({"error": "sensitive_evidence_rejected", "message": "Raw payment payloads and sensitive credentials cannot be attached."}), 400
+        result, error = _get_domain_record("fraud_investigation", record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            payload = dict(record.payload or {})
+            evidence_items = list(payload.get("evidence") or [])
+            if len(evidence_items) >= 100:
+                return jsonify({"error": "evidence_limit_reached", "message": "A case can contain at most 100 evidence items."}), 409
+            evidence_items.append({
+                **evidence,
+                "evidence_id": "ev_" + __import__("uuid").uuid4().hex,
+                "added_by": user_id,
+                "added_at": datetime.now(timezone.utc).isoformat(),
+            })
+            payload["evidence"] = evidence_items
+            record.payload = payload
+            record.updated_by = user_id
+            record.updated_at = datetime.now(timezone.utc)
+            record.version += 1
+            session.commit()
+            return jsonify({"item": _serialize(record)}), 201
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "evidence_persistence_failed", "message": "Evidence could not be attached."}), 500
+        finally:
+            session.close()
+
     return bp
+
+
+def _make_get(domain, handler, serializer):
+    def view(record_id):
+        result, error = handler(domain, record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            return jsonify({"item": serializer(record)})
+        finally:
+            session.close()
+    view.__name__ = f"get_{domain}"
+    return view
 
 
 def _make_list(domain, handler):
