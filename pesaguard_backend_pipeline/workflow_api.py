@@ -294,6 +294,32 @@ def create_workflow_blueprint(session_factory):
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"get_{endpoint}", view_func=require_auth(read_permission)(_make_get(domain, _get_domain_record, _serialize)), methods=["GET"])
         bp.add_url_rule(f"/api/v1/{slug}/<record_id>", endpoint=f"update_{endpoint}", view_func=require_auth(write_permission)(_make_update(domain, _update_domain)), methods=["PATCH"])
 
+    # Matching-rule deletion is a soft-disable to preserve auditability of prior runs.
+    @bp.delete("/api/v1/matching-rules/<record_id>")
+    @require_auth("write:discrepancies")
+    def disable_matching_rule(record_id):
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        result, error = _get_domain_record("matching_rule", record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            if record.status == "disabled":
+                return jsonify({"item": _serialize(record), "already_disabled": True})
+            record.status = "disabled"
+            record.updated_by = user_id
+            record.updated_at = datetime.now(timezone.utc)
+            record.version += 1
+            session.commit()
+            return jsonify({"item": _serialize(record), "disabled": True})
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "matching_rule_disable_failed", "message": "Matching rule could not be disabled."}), 500
+        finally:
+            session.close()
+
     # Evidence is append-only metadata attached to a tenant-scoped investigation.
     @bp.post("/api/v1/fraud-investigations/<record_id>/evidence")
     @require_auth("write:discrepancies")
