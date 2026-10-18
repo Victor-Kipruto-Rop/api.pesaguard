@@ -8,7 +8,7 @@ The Compose stack runs:
 - PesaGuard services with the OpenTelemetry SDK and supported framework/client instrumentation.
 - OpenTelemetry Collector accepting OTLP/gRPC on 4317 and OTLP/HTTP on 4318.
 - Jaeger as the trace store and UI.
-- Prometheus scraping the collector's exported metrics and collector self-metrics.
+- Prometheus scraping collector self-metrics and any OTLP metrics emitted by configured applications. Existing PesaGuard application counters continue to use the Prometheus endpoint.
 
 Start the stack using the repository's normal Compose setup. Open the Jaeger UI at `http://localhost:16686`; search for service names such as `pesaguard` or the service-specific name configured by `OTEL_SERVICE_NAME`. The UI is bound to loopback by Compose and should not be exposed publicly without authentication and network controls.
 
