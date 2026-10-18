@@ -34,6 +34,7 @@ financial traffic on the basis of this tracker.
 - [ ] Verify access-token expiry, refresh rotation/reuse detection, session
   revocation, logout, and privilege-change session rotation.
 - [x] Change session lifecycle reads to fail closed in production/staging rather than falling back to an active-only legacy query; regression test added (execution pending).
+- [x] Restrict the insecure bootstrap JWT secret override to explicit development/test environments; regression test added (execution pending).
 - [ ] Verify every route's role/permission and object-level authorization.
 - [ ] Add cross-tenant regression tests for all tenant-owned resources.
 - [ ] Verify PostgreSQL RLS/constraints where supported and prove tenant context
@@ -109,8 +110,9 @@ financial traffic on the basis of this tracker.
   status as NOT VERIFIED and lists CI billing, staging configuration, secret
   management, and integration/recovery verification as gates.
 - This branch adds the Redis key-type fix, focused tests, and a rotation runbook.
-- Focused tests were added for Redis key separation/reset and production/staging
-  session-lifecycle fail-closed behavior. They have not yet been executed by this
+- Focused tests were added for Redis key separation/reset, production/staging
+  session-lifecycle fail-closed behavior, and insecure JWT-secret environment
+  restrictions. They have not yet been executed by this
   tool session; a passing result must not be inferred from test code alone.
 - Render currently has no provisioned managed Redis service; provisioning was
   blocked by Render billing requirements. Sentry initialization was previously
