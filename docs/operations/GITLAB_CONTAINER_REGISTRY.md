@@ -9,11 +9,11 @@ GitHub remains the canonical repository. A GitHub Actions workflow pushes branch
 1. Create a **private** GitLab project named `api-pesaguard` (or another slug you choose).
 2. Leave the repository empty; do not initialize it with a README or license, because GitHub is the source of truth.
 3. Enable the project's Container Registry if it is not enabled by default.
-4. Protect the default branch (normally `main`) and do not make direct changes in GitLab.
+4. Protect the default branch (normally `main`). In branch rules, allow the dedicated mirror identity to push mirrored refs while preventing ordinary developers from making direct edits. Ensure any protected-tag rules also allow the mirror identity to create the tags you intend to mirror.
 
 ## 2. Create a GitLab mirror token
 
-Create a dedicated GitLab token for the mirror with the minimum permission required to push Git refs. A personal access token with the `write_repository` scope can be used; use a dedicated bot identity if you have one. Copy the token once and do not put it in source code.
+Create a dedicated GitLab token for the mirror with the minimum permission required to push Git refs. A personal access token with the `write_repository` scope can be used; use a dedicated bot identity if you have one. The token's user must be allowed to push to the mirrored branches under your branch protection rules. Copy the token once and do not put it in source code.
 
 In the GitHub repository **Settings → Secrets and variables → Actions**, add these repository secrets:
 
