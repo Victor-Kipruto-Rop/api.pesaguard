@@ -128,3 +128,13 @@ The additive transaction lifecycle algorithm checks reversal/original linkage, t
 ## Advanced analytics primitives
 
 The new advanced_reconciliation_algorithms.py module provides seasonal amount assessment and distribution-shift detection. These are advisory-only helpers, not enabled in the live matching/risk decision path. See docs/algorithms/ADVANCED_RECONCILIATION_ALGORITHMS.md for scope, safety boundaries, and test commands. Production activation requires tenant-scoped history, finance-reviewed holdout evaluation, false-positive analysis, monitoring, and an approved rollout.
+
+## Cohort-level reconciliation evaluation
+
+The offline `reconciliation_cohort_evaluation.py` helper evaluates match quality
+separately by tenant, provider, currency, and transaction-size band. It prevents
+overall metrics from hiding weak performance in a cohort and marks undersized
+cohorts as insufficient rather than reporting misleading zero metrics. It is an
+evaluation utility only; it does not tune or change live decisions. See
+`docs/algorithms/COHORT_RECONCILIATION_EVALUATION.md` and
+`pesaguard_backend_pipeline/tests/test_reconciliation_cohort_evaluation.py`.
