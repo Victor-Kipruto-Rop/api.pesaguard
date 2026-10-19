@@ -172,3 +172,55 @@ def test_missing_transaction_ids_do_not_create_false_duplicate_risk():
         [{"TransAmount": "1000", "MSISDN": "254700000001"}],
     )
     assert "duplicate_activity" not in decision.rules_triggered
+
+
+def test_risk_history_rejects_cross_tenant_and_cross_account_rows():
+    current = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-a",
+        "provider_account_id": "account-1",
+    }
+    foreign = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-b",
+        "provider_account_id": "account-1",
+    }
+    decision = assess_transaction(current, [foreign])
+    assert "duplicate_activity" not in decision.rules_triggered
+    assert decision.features.customer_history == 0.0
+
+    same_tenant_wrong_account = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-a",
+        "provider_account_id": "account-2",
+    }
+    decision = assess_transaction(current, [same_tenant_wrong_account])
+    assert "duplicate_activity" not in decision.rules_triggered
+
+
+def test_scoped_risk_history_fails_closed_when_scope_metadata_is_missing():
+    current = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-a",
+        "provider_account_id": "account-1",
+    }
+    unscoped_history = tx("current-scope", amount="1000")
+    decision = assess_transaction(current, [unscoped_history])
+    assert "duplicate_activity" not in decision.rules_triggered
+    assert decision.features.customer_history == 0.0
+
+
+def test_scoped_risk_history_retains_rows_from_the_same_scope():
+    current = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-a",
+        "provider_account_id": "account-1",
+    }
+    same_scope = {
+        **tx("current-scope", amount="1000"),
+        "tenant_id": "tenant-a",
+        "provider_account_id": "account-1",
+    }
+    decision = assess_transaction(current, [same_scope])
+    assert "duplicate_activity" in decision.rules_triggered
+    assert decision.features.customer_history == 0.05

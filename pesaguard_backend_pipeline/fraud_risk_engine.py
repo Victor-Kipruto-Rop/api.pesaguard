@@ -104,6 +104,59 @@ def _identity(transaction: Mapping[str, Any], *keys: str) -> str:
     return "unknown"
 
 
+_SCOPE_ALIASES = {
+    "tenant_id": ("tenant_id", "TenantID", "tenantId"),
+    "provider_account_id": ("provider_account_id", "account_id", "merchant_account_id"),
+    "provider": ("provider", "provider_name"),
+    "currency": ("currency", "Currency"),
+}
+
+
+def _scope_history(
+    transaction: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Fail closed on cross-scope history when the current event declares scope.
+
+    Histories without scope metadata remain supported only for legacy callers whose
+    current transaction also has no explicit scope. Production callers should pass
+    tenant/account metadata on both current event and every history row.
+    """
+    declared: dict[str, str] = {}
+    for scope, aliases in _SCOPE_ALIASES.items():
+        value = next((transaction.get(key) for key in aliases if transaction.get(key) not in (None, "")), None)
+        if value is not None:
+            normalized = str(value).strip()
+            if scope in {"provider", "currency"}:
+                normalized = normalized.casefold()
+            if normalized:
+                declared[scope] = normalized
+
+    if not declared:
+        return list(history)
+
+    scoped: list[Mapping[str, Any]] = []
+    for item in history:
+        if not isinstance(item, Mapping):
+            continue
+        valid = True
+        for scope, expected in declared.items():
+            aliases = _SCOPE_ALIASES[scope]
+            actual_value = next((item.get(key) for key in aliases if item.get(key) not in (None, "")), None)
+            if actual_value is None:
+                valid = False
+                break
+            actual = str(actual_value).strip()
+            if scope in {"provider", "currency"}:
+                actual = actual.casefold()
+            if actual != expected:
+                valid = False
+                break
+        if valid:
+            scoped.append(item)
+    return scoped
+
+
 def detect_cumulative_subthreshold_activity(transaction: Mapping[str, Any], history: Sequence[Mapping[str, Any]] = (), *, threshold: float, window_seconds: int = 3600, min_transactions: int = 3) -> dict[str, Any]:
     """Screen for cumulative below-threshold activity using tenant-scoped history.
 
@@ -118,6 +171,7 @@ def detect_cumulative_subthreshold_activity(transaction: Mapping[str, Any], hist
         raise ValueError("threshold must be a finite non-negative number")
     window = max(0, int(window_seconds))
     minimum = max(2, int(min_transactions))
+    history = _scope_history(transaction, history)
     result = {"evaluated": False, "triggered": False, "transaction_count": 0,
               "total_amount": 0.0, "threshold": limit, "window_seconds": window,
               "reason_codes": []}
@@ -160,6 +214,7 @@ def calculate_features(
     tenant_baseline: Mapping[str, Any] | None = None,
 ) -> FraudFeatures:
     """Calculate bounded, explainable features from transaction and tenant context."""
+    history = _scope_history(transaction, history)
     baseline = tenant_baseline or {}
     amount = _number(transaction.get("TransAmount") or transaction.get("amount"))
     customer_id = _identity(transaction, "MSISDN", "customer_id", "customer")
@@ -216,6 +271,7 @@ def evaluate_rules(
     amount_threshold: float = 150_000.0,
     velocity_limit: float = 5.0,
 ) -> tuple[RuleResult, ...]:
+    history = _scope_history(transaction, history)
     transaction_id = _identity(transaction, "TransID", "trans_id", "transaction_id")
     duplicate = transaction_id != "unknown" and any(
         _identity(item, "TransID", "trans_id", "transaction_id") == transaction_id
