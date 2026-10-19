@@ -18,7 +18,7 @@ This inventory separates a helper's existence from end-to-end integration, persi
 | Reversal lifecycle validation | Existing helper plus new transaction_lifecycle_algorithms.py and focused tests | New helper checks linkage, scope, chronology, duplicate IDs, and cumulative confirmed amounts; still advisory-only and not wired into the persisted lifecycle. |
 | Robust amount anomaly detection | Median/MAD helper and risk-feature integration | Comparable baseline required; outlier is a review signal, not a fraud verdict. |
 | Velocity screening | Trailing-window helper + tests | Caller must provide tenant/entity-scoped history and consistent timestamps. |
-| Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |
+| Window-change detection | Helper + tests | Monitoring signal; seasonality and baseline size matter. |\n| Seasonality-aware robust baseline | `seasonality_aware_baseline.py` + focused tests | Additive helper; caller must scope history and persist evidence; not wired to automatic decisions. |
 | Batch data-quality profile | Helper + tests | Counts findings; does not itself quarantine, repair, or persist rows. |
 | Transaction-quality gate | Helper + shadow hook + enforced in `ReconciliationEngine.reconcile` after normalization | Critical/high quality findings return `EXCEPTION` with structured evidence before candidate selection. Regression tests: `tests/test_reconciliation_quality_gate.py`. Still verify all alternate ingestion/legacy paths and persistence/audit behavior. |
 | Missing ledger timestamp guard | Enforced in `ReconciliationEngine.reconcile` before exact matching | A candidate with matching reference, amount, and compatible phone but no ledger timestamp returns `EXCEPTION` with `ledger_timestamp_missing` and `manual_review_required`; absence of time evidence cannot authorize an automatic match. Regression tests: `tests/test_reconciliation_missing_ledger_timestamp.py`. Verify legacy entry points and persisted evidence before certification. |
@@ -56,7 +56,7 @@ The global batch-assignment helper is currently advisory and is not wired into t
 ### P2 — advanced intelligence after P0/P1
 
 14. Cross-channel entity graphs, only with reliable lawful identifiers; do not merge accounts based only on shared phone, amount, or location.
-15. Seasonality-aware baselines for business hours, weekdays, pay cycles, merchant type, and currency.
+15. Seasonality-aware production wiring: a pure robust cohort-baseline helper and focused tests now exist; tenant-scoped history retrieval, persisted assessment records, monitoring, cohort calibration, and shadow integration remain required for production.
 16. Provider-specific lifecycle/state-transition anomaly rules, including invalid reversal/original ordering.
 17. Settlement arrival-window estimation now has an advisory-only empirical p50/p90 helper. Provider calendars, merchant schedules, holidays, authorized history retrieval, durable evidence, and production monitoring are still required before workflow integration.
 18. Supervised fraud models only after reviewed time-split labels, leakage checks, calibration, explainability, cohort metrics, drift monitoring, and human governance.
