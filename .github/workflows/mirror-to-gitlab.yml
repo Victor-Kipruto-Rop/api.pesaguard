@@ -1,0 +1,67 @@
+name: Mirror repository to GitLab
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Push GitHub refs to GitLab mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate mirror configuration
+        env:
+          GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
+          GITLAB_MIRROR_USERNAME: ${{ secrets.GITLAB_MIRROR_USERNAME }}
+          GITLAB_MIRROR_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GITLAB_MIRROR_URL" || { echo "Missing GITLAB_MIRROR_URL secret"; exit 1; }
+          test -n "$GITLAB_MIRROR_USERNAME" || { echo "Missing GITLAB_MIRROR_USERNAME secret"; exit 1; }
+          test -n "$GITLAB_MIRROR_TOKEN" || { echo "Missing GITLAB_MIRROR_TOKEN secret"; exit 1; }
+          case "$GITLAB_MIRROR_URL" in
+            https://gitlab.com/*) ;;
+            *) echo "GITLAB_MIRROR_URL must be a clean https://gitlab.com/<namespace>/<project>.git URL"; exit 1 ;;
+          esac
+          case "$GITLAB_MIRROR_URL" in
+            *"@"*|*"?"*|*"#"*) echo "Do not embed credentials or query parameters in GITLAB_MIRROR_URL"; exit 1 ;;
+          esac
+
+      - name: Create a bare mirror from GitHub
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          github_auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic $github_auth" \
+            clone --mirror "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" mirror.git
+
+      - name: Push mirrored branches and tags to GitLab
+        env:
+          GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
+          GITLAB_MIRROR_USERNAME: ${{ secrets.GITLAB_MIRROR_USERNAME }}
+          GITLAB_MIRROR_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C mirror.git remote set-url origin "$GITLAB_MIRROR_URL"
+          gitlab_auth="$(printf '%s:%s' "$GITLAB_MIRROR_USERNAME" "$GITLAB_MIRROR_TOKEN" | base64 -w0)"
+          git -C mirror.git -c http.extraheader="AUTHORIZATION: basic $gitlab_auth" \
+            push --mirror origin
