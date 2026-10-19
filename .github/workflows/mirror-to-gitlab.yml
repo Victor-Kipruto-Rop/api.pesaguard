@@ -64,4 +64,4 @@ jobs:
           git -C mirror.git remote set-url origin "$GITLAB_MIRROR_URL"
           gitlab_auth="$(printf '%s:%s' "$GITLAB_MIRROR_USERNAME" "$GITLAB_MIRROR_TOKEN" | base64 -w0)"
           git -C mirror.git -c http.extraheader="AUTHORIZATION: basic $gitlab_auth" \
-            push --mirror origin
+            push --prune origin '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
