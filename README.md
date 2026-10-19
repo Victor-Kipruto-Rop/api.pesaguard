@@ -107,6 +107,12 @@ The event store compares canonical transaction facts for an already-seen tenant/
 
 The additive, deterministic algorithm primitives and their safety/rollout contract are documented in docs/algorithms/SMART_RECONCILIATION_ALGORITHMS.md. They provide tenant-scoped duplicate fingerprints, explainable candidate ranking, ambiguity detection, robust amount outlier detection, rule-based risk triage, rolling-window velocity checks, and transaction-quality findings. They are not yet the authoritative production decision path; run shadow evaluation against approved ground truth before enabling decision-path changes.
 
+## Tenant-scoped algorithm evidence pipeline
+
+The opt-in reconciliation shadow hook now includes a strict scope-aware advisory bundle when authenticated tenant, provider, provider-account, and currency context is available. It combines quality findings, candidate ranking, seasonal amount assessment, velocity checks, and explainable risk triage while excluding candidate/history rows with missing or conflicting scope. It never changes the legacy match result or performs financial actions. If required scope or history is unavailable, the result explicitly reports unavailable/unknown rather than treating missing evidence as normal.
+
+See [Algorithm Evidence Pipeline](docs/algorithms/ALGORITHM_EVIDENCE_PIPELINE.md). This remains a shadow/advisory capability: production certification still requires full CI, bounded tenant-scoped database queries, durable audit persistence, concurrency/isolation tests, ground-truth evaluation, monitoring, and a reviewed staged rollout.
+
 ## Reconciliation algorithm evaluation
 
 The ground-truth evaluation helper reports automatic-match precision, recall, F1, false-positive rate, exact-decision accuracy, automatic-match coverage, review rate, and unmatched rate against reviewed labels. See docs/algorithms/RECONCILIATION_GROUND_TRUTH_EVALUATION.md. These metrics are a validation tool, not production certification; no policy is enabled by adding the evaluator.
