@@ -144,6 +144,46 @@ def test_partial_payment_aggregation_surfaces_overpayment_and_rejects_missing_id
         aggregate_partial_payments([{"reference": "A", "amount": "10.00"}], "10.00", reference="A")
 
 
+def test_partial_payment_aggregation_rejects_sub_minor_precision_and_non_positive_amounts():
+    with pytest.raises(ValueError, match="precision beyond"):
+        aggregate_partial_payments(
+            [{"TransID": "P1", "reference": "A", "amount": "10.001"}],
+            "10.00",
+            reference="A",
+        )
+    with pytest.raises(ValueError, match="must be positive"):
+        aggregate_partial_payments(
+            [{"TransID": "P1", "reference": "A", "amount": "0.00"}],
+            "10.00",
+            reference="A",
+        )
+
+
+def test_partial_payment_aggregation_rejects_invalid_currency_codes():
+    with pytest.raises(ValueError, match="currency must be"):
+        aggregate_partial_payments([], "10.00", reference="A", currency="KES!")
+
+
+def test_partial_payment_aggregation_rejects_conflicting_duplicate_ids():
+    with pytest.raises(ValueError, match="conflicting duplicate transaction ID"):
+        aggregate_partial_payments(
+            [
+                {"TransID": "P1", "reference": "A", "amount": "40.00"},
+                {"TransID": "P1", "reference": "A", "amount": "60.00"},
+            ],
+            "100.00",
+            reference="A",
+        )
+
+
+def test_settlement_variance_rejects_sub_minor_precision():
+    with pytest.raises(ValueError, match="precision beyond"):
+        decompose_settlement_variance(
+            expected_gross="100.001",
+            actual_net="100.00",
+        )
+
+
 def test_velocity_detection_uses_trailing_window_and_same_identity_only():
     result = detect_velocity_spike(
         {"MSISDN": "254700000001", "TransTime": "20261014120030"},
