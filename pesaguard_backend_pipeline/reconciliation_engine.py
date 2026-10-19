@@ -462,27 +462,67 @@ def _smart_shadow_assessment(
 ) -> Dict[str, Any]:
     """Run new algorithms in shadow mode; never changes the legacy match decision."""
     event_time = _parse_event_time(event.get("TransTime") or event.get("timestamp"))
+    # Preserve trusted scope metadata in the shadow candidate ranker. The
+    # tenant_id argument is resolved by the worker from the event's tenant
+    # context; it must not be inferred from candidate data. Provider/account/
+    # currency are copied only when explicitly present on the event.
     normalized_event = {
         "transaction_id": event.get("TransID") or event.get("trans_id"),
         "reference": event.get("BillRefNumber") or event.get("reference"),
         "amount": event.get("TransAmount", event.get("amount")),
         "timestamp": event_time.isoformat() if event_time else None,
         "phone": event.get("MSISDN") or event.get("phone_number"),
+        "tenant_id": str(tenant_id).strip(),
     }
+    scope_aliases = {
+        "provider": ("provider", "provider_name", "providerName"),
+        "account_id": (
+            "provider_account_id", "account_id", "merchant_account_id",
+            "BusinessShortCode", "business_short_code",
+        ),
+        "currency": ("currency", "Currency"),
+    }
+    for canonical, aliases in scope_aliases.items():
+        value = next(
+            (event.get(key) for key in aliases if event.get(key) not in (None, "")),
+            None,
+        )
+        if value is not None:
+            normalized_event[canonical] = str(value).strip()
+
     quality = validate_transaction_quality(normalized_event)
     candidates = []
     for record in internal_records:
         record_time = _parse_record_time(
             record.get("timestamp") or record.get("synced_at") or record.get("created_at")
         )
-        candidates.append({
+        candidate = {
             **record,
             "internal_ref": record.get("internal_ref") or record.get("id"),
             "reference": record.get("reference") or record.get("merchant_ref"),
             "amount": record.get("amount"),
             "timestamp": record_time.isoformat() if record_time else None,
             "phone": record.get("phone_number") or record.get("msisdn"),
-        })
+        }
+        # Connector records use several provider-specific aliases. Normalize
+        # them for comparison, without inventing missing scope metadata.
+        candidate_scope_aliases = {
+            "tenant_id": ("tenant_id", "tenantId", "TenantID"),
+            "provider": ("provider", "provider_name", "providerName"),
+            "account_id": (
+                "provider_account_id", "account_id", "merchant_account_id",
+                "BusinessShortCode", "business_short_code",
+            ),
+            "currency": ("currency", "Currency"),
+        }
+        for canonical, aliases in candidate_scope_aliases.items():
+            value = next(
+                (record.get(key) for key in aliases if record.get(key) not in (None, "")),
+                None,
+            )
+            if value is not None:
+                candidate[canonical] = str(value).strip()
+        candidates.append(candidate)
     amount = _coerce_amount(normalized_event.get("amount"))
     tolerance = max(
         Decimal("0.01"),

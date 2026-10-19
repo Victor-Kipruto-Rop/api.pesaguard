@@ -308,6 +308,89 @@ def test_ranker_treats_tenant_and_account_identifiers_as_case_sensitive():
     assert result["excluded_candidates"][0]["reason_codes"] == ["tenant_scope_conflict"]
 
 
+@pytest.mark.parametrize(
+    ("candidate_scope", "reason_code"),
+    [
+        ({"tenant_id": "tenant-b"}, "tenant_scope_conflict"),
+        ({"provider": "airtel_money"}, "provider_scope_conflict"),
+        ({"provider_account_id": "paybill-other"}, "account_scope_conflict"),
+        ({"currency": "USD"}, "currency_scope_conflict"),
+    ],
+)
+def test_shadow_adapter_preserves_scope_and_excludes_conflicting_candidates(candidate_scope, reason_code):
+    from reconciliation_engine import evaluate_smart_reconciliation_shadow
+
+    event = {
+        "TransID": "SCOPE-SHADOW-1",
+        "TransAmount": "100",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-1",
+        "MSISDN": "254700000000",
+        "provider": "mpesa",
+        "BusinessShortCode": "paybill-1",
+        "currency": "KES",
+    }
+    candidate = {
+        "internal_ref": "ledger-wrong-scope",
+        "reference": "INV-1",
+        "amount": "100",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+        "phone_number": "254700000000",
+        **candidate_scope,
+    }
+    result = evaluate_smart_reconciliation_shadow(
+        event,
+        [candidate],
+        tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": True}},
+        tenant_id="tenant-a",
+    )
+
+    assert result is not None
+    ranking = result["candidate_ranking"]
+    assert ranking["decision"] == "REVIEW"
+    assert ranking["top_candidate"] is None
+    assert ranking["excluded_candidate_count"] == 1
+    assert reason_code in ranking["excluded_candidates"][0]["reason_codes"]
+    assert result["legacy_decision_unchanged"] is True
+
+
+def test_shadow_adapter_keeps_tenant_scope_on_eligible_candidate():
+    from reconciliation_engine import evaluate_smart_reconciliation_shadow
+
+    event = {
+        "TransID": "SCOPE-SHADOW-2",
+        "TransAmount": "100",
+        "TransTime": "20261014130000",
+        "BillRefNumber": "INV-2",
+        "MSISDN": "254700000000",
+        "provider": "mpesa",
+        "BusinessShortCode": "paybill-1",
+        "currency": "KES",
+    }
+    candidate = {
+        "internal_ref": "ledger-correct-scope",
+        "tenant_id": "tenant-a",
+        "provider": "mpesa",
+        "provider_account_id": "paybill-1",
+        "currency": "KES",
+        "reference": "INV-2",
+        "amount": "100",
+        "timestamp": "2026-10-14T13:00:00+03:00",
+        "phone_number": "254700000000",
+    }
+    result = evaluate_smart_reconciliation_shadow(
+        event,
+        [candidate],
+        tenant_settings={"reconciliation": {"smart_algorithms_shadow_enabled": True}},
+        tenant_id="tenant-a",
+    )
+
+    assert result is not None
+    assert result["candidate_ranking"]["top_candidate"]["candidate_id"] == "ledger-correct-scope"
+    assert result["candidate_ranking"]["excluded_candidate_count"] == 0
+    assert result["legacy_decision_unchanged"] is True
+
+
 def test_public_shadow_adapter_is_opt_in_and_returns_advisory_evidence():
     from reconciliation_engine import evaluate_smart_reconciliation_shadow
 
