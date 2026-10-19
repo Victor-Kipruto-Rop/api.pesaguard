@@ -1,0 +1,91 @@
+# PesaGuard Core API: GitLab image build and registry publishing.
+# GitHub remains the source of truth. This pipeline runs against the GitLab mirror.
+# It never deploys to Render or applies database migrations.
+
+stages:
+  - publish
+  - scan
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "staging"'
+    - when: never
+
+variables:
+  DOCKER_HOST: "tcp://docker:2376"
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_TLS_VERIFY: "1"
+  DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+  DOCKER_BUILDKIT: "1"
+  IMAGE_SHA: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+build-and-publish:
+  stage: publish
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  interruptible: true
+  before_script:
+    - |
+      for attempt in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for Docker-in-Docker service ($attempt/30)..."
+        sleep 2
+      done
+      docker info
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - docker buildx create --name pesaguard-builder --driver docker-container --use
+    - docker buildx inspect --bootstrap
+  script:
+    - |
+      set -eu
+      set --         --pull         --file infra/docker/Dockerfile         --build-arg "PESAGUARD_BUILD_REVISION=$CI_COMMIT_SHA"         --label "org.opencontainers.image.revision=$CI_COMMIT_SHA"         --label "org.opencontainers.image.source=$CI_PROJECT_URL"         --tag "$IMAGE_SHA"         --cache-from "type=registry,ref=$CI_REGISTRY_IMAGE:buildcache"         --cache-to "type=registry,ref=$CI_REGISTRY_IMAGE:buildcache,mode=max"         --push
+
+      # Publish a convenience branch/tag alias as well as the immutable commit tag.
+      # The commit-SHA tag is the release identity; do not deploy from a moving alias.
+      if [ -n "${CI_COMMIT_BRANCH:-}" ]; then
+        set -- "$@" --tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+      elif [ -n "${CI_COMMIT_TAG:-}" ]; then
+        set -- "$@" --tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+      fi
+
+      docker buildx build "$@" .
+      printf 'Published image: %s\n' "$IMAGE_SHA"
+      printf 'Registry: %s\n' "$CI_REGISTRY_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "staging"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+
+scan-published-image:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.59.1
+    entrypoint: [""]
+  needs:
+    - job: build-and-publish
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  cache:
+    key: "trivy-db"
+    paths:
+      - .trivycache/
+  script:
+    - |
+      set -eu
+      trivy image         --scanners vuln         --exit-code 1         --severity HIGH,CRITICAL         --ignore-unfixed         --username "$CI_REGISTRY_USER"         --password "$CI_REGISTRY_PASSWORD"         "$IMAGE_SHA"
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "staging"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
