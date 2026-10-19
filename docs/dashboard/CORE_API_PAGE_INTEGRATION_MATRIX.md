@@ -63,7 +63,7 @@ The Core API now mounts a shared tenant-scoped workflow API for the following pe
 | Settlement reviews | `/api/v1/settlement-reviews` | GET/PATCH `/{record_id}` | Review records only; no settlement initiation, confirmation, or movement of funds. |
 | Refund/reversal review | `/api/v1/refund-reversal-requests` | GET/PATCH `/{record_id}` | Review requests only; no provider refund/reversal command or ledger posting. |
 | Report definitions | `/api/v1/report-definitions` | GET/PATCH `/{record_id}` | Supports transactions, discrepancies, and reconciliation summaries; scheduling metadata requires a worker for recurring delivery. |
-| Report runs | `/api/v1/report-runs` | POST and GET/PATCH `/{record_id}` | Generates bounded persisted-data JSON summaries synchronously; not asynchronous job execution or CSV/PDF artifact generation. |
+| Report runs | `/api/v1/report-runs` | POST and GET/PATCH `/{record_id}`; GET `/{record_id}/download.csv` | Generates bounded persisted-data JSON summaries synchronously; completed summaries can be exported as audited tenant-scoped CSV. Detailed row-level CSV/PDF artifacts and object-storage persistence are not implemented. |
 | Fraud investigations | `/api/v1/fraud-investigations` | GET/PATCH `/{record_id}`; POST `/{record_id}/evidence` | Append-only evidence metadata; sensitive payment payloads and credentials are rejected. |
 | Privacy requests | `/api/v1/privacy-requests` | GET/PATCH `/{record_id}` | Registers access/export/correction/deletion requests; does not execute data deletion or claim an export exists. |
 | Support cases | `/api/v1/support-cases` | GET/PATCH `/{record_id}` | Persisted case tracking; customer support delivery/notifications are separate integrations. |

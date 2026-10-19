@@ -5000,9 +5000,16 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["status"],
+                  "required": [
+                    "status"
+                  ],
                   "properties": {
-                    "status": {"type": "string", "enum": ["alive"]}
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "alive"
+                      ]
+                    }
                   }
                 }
               }
@@ -5026,12 +5033,35 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["status", "service", "release", "checks"],
+                  "required": [
+                    "status",
+                    "service",
+                    "release",
+                    "checks"
+                  ],
                   "properties": {
-                    "status": {"type": "string", "enum": ["ok", "degraded", "failed"]},
-                    "service": {"type": "string", "example": "pesaguard"},
-                    "release": {"type": "string", "description": "Build commit revision, or unknown when not set"},
-                    "checks": {"type": "object", "additionalProperties": {"type": "object"}}
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "degraded",
+                        "failed"
+                      ]
+                    },
+                    "service": {
+                      "type": "string",
+                      "example": "pesaguard"
+                    },
+                    "release": {
+                      "type": "string",
+                      "description": "Build commit revision, or unknown when not set"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
                   }
                 }
               }
@@ -7162,6 +7192,107 @@
           }
         }
       }
+    },
+    "/api/v1/report-runs/{record_id}/download.csv": {
+      "get": {
+        "operationId": "workflow_api_report_summary_download_csv",
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Download an audited CSV summary for a completed tenant-scoped report run",
+        "description": "Returns a key/value CSV derived from the persisted summary JSON. This is not a detailed transaction-level export or a durable object-storage artifact.",
+        "x-required-permission": "read:analytics",
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV summary export",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Private response; no-store."
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "nosniff"
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Error: insufficient permissions or missing tenant context.",
+            "x-error-codes": [
+              "insufficient_permissions",
+              "tenant_context_required"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The report run does not exist in the authenticated tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The report run has not completed or has no persisted summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "description": "The report summary could not be exported safely.",
+            "x-error-codes": [
+              "report_export_failed"
+            ],
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "tags": [
@@ -7215,6 +7346,9 @@
     },
     {
       "name": "Webhooks"
+    },
+    {
+      "name": "Reports"
     }
   ]
 }

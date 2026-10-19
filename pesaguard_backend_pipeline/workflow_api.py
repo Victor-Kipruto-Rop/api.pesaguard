@@ -8,11 +8,14 @@ at the configured time. Report runs execute a bounded persisted-data summary.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import csv
+import io
+import json
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func
 
 from auth_rbac import get_current_user, require_auth
@@ -127,6 +130,37 @@ def _contains_sensitive_evidence(value):
     elif isinstance(value, list):
         return any(_contains_sensitive_evidence(item) for item in value)
     return False
+
+
+
+def _csv_safe_cell(value: Any) -> str:
+    """Neutralize spreadsheet formula prefixes in generated report CSV values."""
+    if value is None:
+        return ""
+    text = str(value)
+    if text.lstrip(" \\t\\r\\n")[:1] in {"=", "+", "-", "@"}:
+        return "'" + text
+    return text
+
+
+def _flatten_summary(value: Any, prefix: str = "", depth: int = 0) -> list[tuple[str, str]]:
+    """Flatten a bounded persisted summary into deterministic CSV key/value rows."""
+    if depth > 5:
+        return [(prefix or "value", "[maximum nesting reached]")]
+    if isinstance(value, dict):
+        rows: list[tuple[str, str]] = []
+        for key in sorted(value, key=lambda item: str(item)):
+            child_key = f"{prefix}.{key}" if prefix else str(key)
+            rows.extend(_flatten_summary(value[key], child_key, depth + 1))
+            if len(rows) >= 200:
+                return rows[:200]
+        return rows
+    if isinstance(value, list):
+        serialized = json.dumps(value[:50], ensure_ascii=False, sort_keys=True, default=str)
+        return [(prefix or "value", serialized[:2000])]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return [(prefix or "value", str(value)[:2000] if value is not None else "")]
+    return [(prefix or "value", str(value)[:2000])]
 
 
 def create_workflow_blueprint(session_factory):
@@ -677,6 +711,66 @@ def create_workflow_blueprint(session_factory):
         except Exception:
             session.rollback()
             return jsonify({"error": "privacy_execution_failed", "message": "The privacy request could not be executed safely."}), 500
+        finally:
+            session.close()
+
+
+    @bp.get("/api/v1/report-runs/<record_id>/download.csv")
+    @require_auth("read:analytics")
+    def download_report_summary_csv(record_id):
+        """Download the persisted summary for a completed report run.
+
+        This is a generated summary export, not a stored object-storage artifact
+        and not a full transaction-level export. The source record is tenant scoped.
+        """
+        tenant_id, user_id = _tenant_user()
+        if not tenant_id:
+            return jsonify({"error": "tenant_context_required", "message": "Authenticated tenant context is required."}), 403
+        result, error = _get_domain_record("report_run", record_id)
+        if error:
+            return error
+        session, record = result
+        try:
+            payload = record.payload if isinstance(record.payload, dict) else {}
+            summary = payload.get("result")
+            if record.status != "completed" or not isinstance(summary, dict):
+                return jsonify({"error": "report_not_ready", "message": "Only completed report runs with a persisted summary can be downloaded."}), 409
+            rows = _flatten_summary({
+                "report_id": record.id,
+                "report_type": payload.get("report_type"),
+                "executed_at": payload.get("executed_at"),
+                "result": summary,
+            })
+            output = io.StringIO(newline="")
+            writer = csv.writer(output, lineterminator="\\n")
+            writer.writerow(["field", "value"])
+            for key, value in rows[:200]:
+                writer.writerow([_csv_safe_cell(key), _csv_safe_cell(value)])
+            filename = f"pesaguard-report-summary-{record.id}.csv"
+            operation = f"summary_exported_{uuid.uuid4().hex}"
+            _record_workflow_audit(
+                session,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="report.exported",
+                domain="report_run",
+                record_id=record.id,
+                operation=operation,
+                version=record.version,
+            )
+            session.commit()
+            return Response(
+                output.getvalue(),
+                mimetype="text/csv",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Cache-Control": "no-store, private",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        except Exception:
+            session.rollback()
+            return jsonify({"error": "report_export_failed", "message": "The report summary could not be exported safely."}), 500
         finally:
             session.close()
 
