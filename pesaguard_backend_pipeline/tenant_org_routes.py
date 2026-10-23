@@ -9,6 +9,7 @@ from tenant_organization_service import (
     TenantOrganizationService,
 )
 from models import Organization, OrganizationApproval, OrganizationMembership, Department, Team
+from registry_datasource_client import DatasourceNotConfigured, DatasourceUpstreamError, lookup_registry_record
 
 bp = Blueprint("tenant_org_routes", __name__, url_prefix="/api/v1")
 service = None
@@ -247,3 +248,41 @@ def review_approval(organization_id: str, approval_id: str):
         return jsonify({"status": approval.status, "approval": {"id": approval.id, "status": approval.status}}), 200
     finally:
         session.close()
+
+
+@bp.route("/registry/datasource/lookup", methods=["POST"])
+@require_auth("manage:organizations")
+def lookup_datasource_registry_record():
+    """Look up one registration number or tax PIN using the server-side Datasource key.
+
+    The authenticated user's tenant is required, but no tenant ID or credential is
+    accepted from the request body. The result is evidence for review, not KYB approval.
+    """
+    try:
+        _tenant_scope()
+    except PermissionError:
+        return jsonify({"error": "tenant_context_required"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    registration_number = payload.get("registration_number", payload.get("reg_no"))
+    tax_pin = payload.get("tax_pin")
+    if bool(registration_number) == bool(tax_pin):
+        return jsonify({"error": "invalid_identifier", "message": "Provide exactly one registration_number or tax_pin."}), 400
+    if registration_number is not None and not isinstance(registration_number, str):
+        return jsonify({"error": "invalid_identifier", "message": "registration_number must be a string."}), 400
+    if tax_pin is not None and not isinstance(tax_pin, str):
+        return jsonify({"error": "invalid_identifier", "message": "tax_pin must be a string."}), 400
+
+    try:
+        result = lookup_registry_record(
+            registration_number=registration_number,
+            tax_pin=tax_pin,
+            correlation_id=request.headers.get("X-Correlation-ID"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": "invalid_identifier", "message": str(exc)}), 400
+    except DatasourceNotConfigured as exc:
+        return jsonify({"error": "datasource_not_configured", "message": str(exc)}), 503
+    except DatasourceUpstreamError as exc:
+        return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
+    return jsonify(result), 200
