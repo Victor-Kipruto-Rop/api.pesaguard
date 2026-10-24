@@ -30,6 +30,38 @@ pytest -v --tb=short --durations=10
 python -m compileall -q pesaguard_backend_pipeline
 ```
 
+## Local datasource registry integration
+
+The server-side registry lookup client and tenant-scoped endpoint are documented in [Local datasource registry integration](docs/integrations/LOCAL_DATASOURCE_REGISTRY.md). This is a read-only lookup against imported datasource records; it does not by itself connect to BRS/KRA or verify an organization.
+
+For local Windows testing, start the datasource from the `pesaguard-datasource` repository first:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\start-windows-local.ps1
+$env:PESAGUARD_DATASOURCE_API_KEY = '<local-only datasource key>'
+.\scripts\test-pesaguard-local-integration.ps1
+```
+
+Then configure the backend's local `.env` (never frontend/Vite variables):
+
+```dotenv
+PESAGUARD_DATASOURCE_BASE_URL=http://host.docker.internal:8000
+PESAGUARD_DATASOURCE_API_KEY=<same local-only datasource key>
+PESAGUARD_DATASOURCE_CONNECT_TIMEOUT_SECONDS=2
+PESAGUARD_DATASOURCE_READ_TIMEOUT_SECONDS=5
+```
+
+Use `http://127.0.0.1:8000` if the backend runs directly on the same host outside Docker. Restart the backend after changing environment variables. Run focused checks from the backend repository root:
+
+```powershell
+$env:PYTHONPATH = "."
+pytest -q pesaguard_backend_pipeline/tests/test_registry_datasource_client.py
+python -m compileall -q pesaguard_backend_pipeline
+```
+
+After creating or identifying a local test organization and obtaining a local PesaGuard bearer token with `read:settings`, call `POST /api/v1/organizations/{organization_id}/registry-lookup` with exactly one `registration_number` or `tax_pin`. Do not use production credentials/data. Keep the PR in draft until CI, the datasource smoke test, and a full local request through the backend all pass.
+
 ## Local services
 
 Use Docker Compose after setting real local values in .env:
