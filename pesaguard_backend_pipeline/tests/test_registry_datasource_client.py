@@ -98,3 +98,26 @@ def test_identifier_choice_is_exactly_one():
         client.lookup(registration_number="ABC123", tax_pin="A123456789")
     with pytest.raises(ValueError):
         client.lookup()
+
+
+def test_local_http_is_allowed_only_in_development(monkeypatch):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "development")
+    monkeypatch.setenv("PESAGUARD_DATASOURCE_BASE_URL", "http://host.docker.internal:8000")
+    monkeypatch.setenv("PESAGUARD_DATASOURCE_API_KEY", "local-only-key")
+    settings = DatasourceSettings.from_env()
+    assert settings.base_url == "http://host.docker.internal:8000"
+
+
+def test_nonlocal_environment_rejects_plain_http(monkeypatch):
+    monkeypatch.setenv("PESAGUARD_ENVIRONMENT", "production")
+    monkeypatch.setenv("PESAGUARD_DATASOURCE_BASE_URL", "http://registry.example.com")
+    monkeypatch.setenv("PESAGUARD_DATASOURCE_API_KEY", "configured-key")
+    with pytest.raises(DatasourceNotConfigured):
+        DatasourceSettings.from_env()
+
+
+def test_missing_configuration_fails_closed(monkeypatch):
+    monkeypatch.delenv("PESAGUARD_DATASOURCE_BASE_URL", raising=False)
+    monkeypatch.delenv("PESAGUARD_DATASOURCE_API_KEY", raising=False)
+    with pytest.raises(DatasourceNotConfigured):
+        DatasourceSettings.from_env()
