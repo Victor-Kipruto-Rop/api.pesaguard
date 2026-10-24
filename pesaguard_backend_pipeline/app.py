@@ -52,6 +52,14 @@ webhook_rate_limiter = RateLimiter()
 webhook_rate_limiter.set_limits(int(os.getenv("PESAGUARD_WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")))
 
 
+def _trusted_runtime_tenant_id() -> str:
+    """Return only a server-configured tenant ID, never a caller-supplied header."""
+    tenant_id = os.getenv("TENANT_ID", "").strip()
+    if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
+        return ""
+    return tenant_id
+
+
 def _transaction_read_session():
     event_store._ensure_ready()
     return event_store.Session()
@@ -227,7 +235,7 @@ def setup_request_context():
         trace_id=trace_id,
         span_id=span_id,
         traceparent=traceparent,
-        tenant_id=request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", ""),
+        tenant_id=_trusted_runtime_tenant_id(),
     )
     g.request_started = __import__("time").perf_counter()
 

@@ -229,6 +229,23 @@ def test_replay_preserves_event_identity_after_retry_exhaustion(tmp_path):
         "business"
     ].get("transaction_received", 0) + 1
 
+
+def test_legacy_publish_rejects_missing_or_placeholder_tenant_scope():
+    import producer
+
+    for payload in (
+        {"TransID": "missing-tenant"},
+        {"TransID": "default-tenant", "tenant_id": "default"},
+        {"TransID": "unknown-tenant", "tenant_id": "unknown"},
+    ):
+        with pytest.raises(ValueError, match="tenant_id is required"):
+            producer._validate_payload_schema(payload)
+
+    with pytest.raises(ValueError, match="Conflicting tenant identifiers"):
+        producer._validate_payload_schema(
+            {"TransID": "conflicting-tenant", "tenant_id": "tenant-a", "TenantID": "tenant-b"}
+        )
+
 def test_broker_unavailable_raises_without_acknowledging_event(monkeypatch):
     import producer
 
@@ -237,7 +254,7 @@ def test_broker_unavailable_raises_without_acknowledging_event(monkeypatch):
     producer._circuit_breaker.state = "CLOSED"
     producer._circuit_breaker.failure_count = 0
     with pytest.raises(ConnectionError):
-        producer.publish_transaction_event("mpesa.transactions.raw", {"TransID": "broker-down"})
+        producer.publish_transaction_event("mpesa.transactions.raw", {"TransID": "broker-down", "tenant_id": "tenant-a"})
 
 
 def test_batch_publish_preserves_per_message_delivery_results(monkeypatch):
@@ -271,11 +288,44 @@ def test_batch_publish_preserves_per_message_delivery_results(monkeypatch):
 
     results = producer.publish_transaction_batch_results(
         "mpesa.transactions.raw",
-        [{"TransID": "tx-1"}, {"TransID": "tx-2"}, {"TransID": "tx-3"}],
+        [{"TransID": "tx-1", "tenant_id": "tenant-a"}, {"TransID": "tx-2", "tenant_id": "tenant-a"}, {"TransID": "tx-3", "tenant_id": "tenant-a"}],
     )
 
     assert results == [True, False, True]
     assert [payload["TransID"] for _, payload in batch_producer.sent] == ["tx-1", "tx-2", "tx-3"]
+
+
+
+def test_batch_results_do_not_publish_unscoped_events(monkeypatch):
+    import producer
+
+    class BatchProducer:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, topic, **kwargs):
+            self.sent.append(kwargs["value"])
+            return type("Future", (), {"get": lambda self, timeout: object()})()
+
+        def flush(self, timeout):
+            return None
+
+    batch_producer = BatchProducer()
+    monkeypatch.setattr(producer._producer_manager, "get_producer", lambda: batch_producer)
+    monkeypatch.setattr(producer._circuit_breaker, "can_execute", lambda: True)
+    monkeypatch.setattr(producer._circuit_breaker, "record_success", lambda: None)
+    monkeypatch.setattr(producer._circuit_breaker, "record_failure", lambda: None)
+
+    results = producer.publish_transaction_batch_results(
+        "mpesa.transactions.raw",
+        [
+            {"TransID": "tx-unscoped"},
+            {"TransID": "tx-scoped", "tenant_id": "tenant-a"},
+        ],
+    )
+
+    assert results == [False, True]
+    assert [payload["TransID"] for payload in batch_producer.sent] == ["tx-scoped"]
 
 
 def test_network_failure_is_retried_then_dead_lettered():

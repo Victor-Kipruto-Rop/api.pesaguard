@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from io import BytesIO
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urlencode, urlparse
 
 import qrcode
@@ -201,7 +201,9 @@ def _request_id_value() -> str:
 
 def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """Return the tenant's external-IdP trust policy with sensible provider defaults."""
-    tenant_key = tenant_id or request.args.get("tenant_id") or os.getenv("TENANT_ID") or "default"
+    # Never select a tenant from request query parameters or process-wide configuration.
+    # Callers must pass tenant_id from the authenticated principal when loading tenant policy.
+    tenant_key = str(tenant_id or "").strip()
     provider_family = str(os.getenv("OIDC_PROVIDER_FAMILY", "")).strip().lower() or "generic"
     env_issuer = str(os.getenv("OIDC_ISSUER", "")).strip()
     env_jwks = str(os.getenv("OIDC_JWKS_URI", "")).strip()
@@ -223,12 +225,12 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     }
 
     if provider_family == "microsoft_entra":
-        tenant_hint = str(tenant_id or os.getenv("TENANT_ID") or "").strip()
+        # Only an explicit trusted tenant scope may parameterize an Entra issuer.
+        tenant_hint = str(tenant_id or "").strip()
         issuer_template = "https://login.microsoftonline.com/{tenant}/v2.0"
         if tenant_hint:
             policy["allowed_issuers"].append(issuer_template.format(tenant=tenant_hint))
-        else:
-            policy["allowed_issuers"].append("https://login.microsoftonline.com/")
+        # Without an explicit trusted tenant, do not add a broad Entra issuer.
         policy["allowed_jwks_hosts"].append("login.microsoftonline.com")
         policy["pin_jwks"] = True
     elif provider_family == "okta":
@@ -254,7 +256,7 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     policy["allowed_jwks_hosts"] = list(dict.fromkeys(host.lower() for host in policy["allowed_jwks_hosts"]))
 
     try:
-        tenant_cfg = settings_store.get(str(tenant_key)) if hasattr(settings_store, "get") else {}
+        tenant_cfg = settings_store.get(tenant_key) if tenant_key and hasattr(settings_store, "get") else {}
         if isinstance(tenant_cfg, dict):
             external_policy = tenant_cfg.get("external_idp_policy") or tenant_cfg.get("sso_policy") or {}
             if isinstance(external_policy, dict):
@@ -267,6 +269,34 @@ def _provider_trust_policy_for_tenant(tenant_id: Optional[str] = None) -> Dict[s
     return policy
 
 
+
+def _apply_external_idp_policy_update(
+    current_policy: Dict[str, Any], requested_policy: Dict[str, Any]
+) -> Tuple[Dict[str, Any], bool]:
+    """Apply configuration fields while invalidating approval after trust changes."""
+    policy = dict(current_policy)
+    mutable_policy = {
+        key: value for key, value in requested_policy.items()
+        if key not in {"approved_by", "approved_at", "review_required", "configured_by"}
+    }
+    changed = any(policy.get(key) != value for key, value in mutable_policy.items())
+    policy.update(mutable_policy)
+    if changed:
+        policy["approved_by"] = None
+        policy["approved_at"] = None
+        policy["review_required"] = True
+        # This field is set by the authenticated route, never by request data.
+        policy["configured_by"] = None
+    return policy, changed
+
+
+def _external_idp_reviewer_is_independent(policy: Dict[str, Any], reviewer: str) -> bool:
+    """Require a recorded, distinct configurator for SSO trust-policy approval."""
+    configured_by = str(policy.get("configured_by") or "").strip()
+    reviewer_id = str(reviewer or "").strip()
+    return bool(configured_by and reviewer_id and not hmac.compare_digest(configured_by, reviewer_id))
+
+
 def _validate_provider_trust_policy(tenant_id: Optional[str], policy: Optional[Dict[str, Any]], metadata: Optional[Dict[str, Any]]) -> bool:
     """Enforce tenant-specific provider trust rules for OIDC or SAML providers."""
     provider_policy = (policy or _provider_trust_policy_for_tenant(tenant_id)) or {}
@@ -277,24 +307,31 @@ def _validate_provider_trust_policy(tenant_id: Optional[str], policy: Optional[D
         return _validate_saml_provider_policy(provider_policy, metadata)
 
     issuer = str(metadata.get("issuer") or provider_policy.get("issuer") or "").strip()
-    allowed_issuers = {str(item).strip() for item in (provider_policy.get("allowed_issuers") or []) if str(item).strip()}
-    if allowed_issuers and issuer and issuer not in allowed_issuers:
+    allowed_issuers = {
+        str(item).strip() for item in (provider_policy.get("allowed_issuers") or [])
+        if str(item).strip()
+    }
+    # An empty allowlist must not mean "accept any issuer". Require an explicit,
+    # exact issuer binding before registering an external identity provider.
+    if not issuer or not allowed_issuers or issuer not in allowed_issuers:
         return False
 
     jwks_uri = str(metadata.get("jwks_uri") or provider_policy.get("jwks_uri") or "").strip()
-    if jwks_uri:
-        allowed_hosts = {
-            str(item).strip().lower() for item in (provider_policy.get("allowed_jwks_hosts") or []) if str(item).strip()
-        }
-        if allowed_hosts:
-            host = (jwks_uri.split("//", 1)[-1].split("/", 1)[0]).split(":", 1)[0].lower()
-            if host not in allowed_hosts:
-                return False
-
+    allowed_hosts = {
+        str(item).strip().lower() for item in (provider_policy.get("allowed_jwks_hosts") or [])
+        if str(item).strip()
+    }
     if provider_policy.get("pin_jwks"):
         expected_jwks = str(provider_policy.get("jwks_uri") or "").strip()
-        if expected_jwks and jwks_uri and jwks_uri.lower() != expected_jwks.lower():
+        if not expected_jwks or not jwks_uri or jwks_uri.lower() != expected_jwks.lower():
             return False
+    if not jwks_uri or not allowed_hosts:
+        return False
+    parsed_jwks = urlparse(jwks_uri)
+    if parsed_jwks.scheme != "https" or not parsed_jwks.hostname:
+        return False
+    if parsed_jwks.hostname.lower() not in allowed_hosts:
+        return False
 
     if provider_policy.get("require_verified_email") and metadata.get("email_verified") is False:
         return False
@@ -696,12 +733,23 @@ def _resolve_oidc_provider(tenant_id: Optional[str] = None, issuer: Optional[str
         session.close()
 
 
+def _response_tenant_id() -> str:
+    """Return tenant identity only when trusted request authentication supplied it.
+
+    A process-wide TENANT_ID is deployment configuration, not proof of the
+    current API caller's tenant membership. Do not echo it into customer responses.
+    """
+    tenant_id = str(getattr(g, "tenant_id", None) or "").strip()
+    if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
+        return ""
+    return tenant_id
+
 def _api_success(payload: Any, status_code: int = 200, meta: Optional[Dict[str, Any]] = None):
     body = {
         "status": "success",
         "data": payload,
         "request_id": _request_id_value(),
-        "tenant_id": request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", "default"),
+        "tenant_id": _response_tenant_id(),
     }
     if isinstance(payload, dict):
         for key, value in payload.items():
@@ -717,7 +765,7 @@ def _api_error(code: str, message: str, status_code: int = 400, details: Optiona
         "status": "error",
         "error": {"code": code, "message": message},
         "request_id": _request_id_value(),
-        "tenant_id": request.headers.get("X-Tenant-ID") or os.getenv("TENANT_ID", "default"),
+        "tenant_id": _response_tenant_id(),
         "ResultCode": 1,
         "ResultDesc": message,
     }
@@ -3487,9 +3535,12 @@ def revoke_user_access_route():
     """Revoke every active access path belonging to a user."""
     payload = request.json or {}
     user_id = payload.get("user_id")
-    tenant_id = payload.get("tenant_id") or get_current_user().tenant_id
+    current_user = get_current_user()
+    tenant_id = str(current_user.tenant_id)
     if not user_id:
         return _api_error("invalid_request", "user_id is required.", 400)
+    if str(tenant_id) != str(current_user.tenant_id) and "manage:all_tenants" not in current_user.permissions:
+        return _api_error("tenant_access_denied", "You cannot revoke access outside your tenant.", 403)
     AuthRBAC.revoke_user_access(str(user_id), str(tenant_id), reason=payload.get("reason") or "user revocation")
     return _api_success({"status": "user_revoked", "user_id": str(user_id), "tenant_id": str(tenant_id)}, 200)
 
@@ -3873,7 +3924,7 @@ def _provision_external_user_from_claims(tenant_id: str, email: Optional[str], u
 def oidc_provider_registry():
     """Register or list external OIDC providers for a tenant."""
     if request.method == "GET":
-        tenant_id = request.args.get("tenant_id") or get_current_user().tenant_id
+        tenant_id = str(get_current_user().tenant_id)
         session = SessionLocal()
         try:
             providers = session.query(OIDCProvider).filter(OIDCProvider.tenant_id == tenant_id).all()
@@ -3893,7 +3944,9 @@ def oidc_provider_registry():
             session.close()
 
     data = request.get_json(silent=True) or {}
-    tenant_id = data.get("tenant_id") or get_current_user().tenant_id
+    # Provider registrations are scoped to the authenticated principal. Do not
+    # permit a body field to select another tenant.
+    tenant_id = str(get_current_user().tenant_id)
     provider_name = data.get("provider_name") or data.get("name") or "default-oidc"
     issuer = data.get("issuer")
     if not issuer:
@@ -3912,7 +3965,9 @@ def oidc_provider_registry():
         if not metadata and not any(data.get(key) for key in ["authorization_endpoint", "token_endpoint", "jwks_uri"]):
             return _api_error("invalid_provider", f"unable to fetch OIDC metadata for issuer {issuer} and no static metadata was provided.", 400)
 
-    trust_policy = data.get("trust_policy") or _provider_trust_policy_for_tenant(tenant_id)
+    # Trust rules are persisted tenant policy; registration requests may not
+    # supply an ad-hoc policy that bypasses the reviewed configuration.
+    trust_policy = _provider_trust_policy_for_tenant(tenant_id)
     if provider_type == "saml":
         if not _validate_saml_provider_policy(trust_policy, metadata):
             return _api_error("policy_denied", "The SAML trust policy does not allow the supplied provider configuration.", 403)
@@ -3988,7 +4043,9 @@ def oidc_provider_registry():
 @require_privileged_operation_mfa
 def external_idp_policy_route():
     """Get or configure tenant-level external IdP trust policy for OIDC/SAML providers."""
-    tenant_id = request.args.get("tenant_id") or request.get_json(silent=True, force=False).get("tenant_id") if request.get_json(silent=True) else None or get_current_user().tenant_id
+    # Tenant scope is derived exclusively from the authenticated principal. A request
+    # body/query tenant selector must never permit cross-tenant policy reads or writes.
+    tenant_id = str(get_current_user().tenant_id)
     if request.method == "GET":
         return _api_success({"policy": _provider_trust_policy_for_tenant(tenant_id)}, 200)
 
@@ -3996,16 +4053,33 @@ def external_idp_policy_route():
     trust_policy = data.get("trust_policy") or data
     policy = _provider_trust_policy_for_tenant(tenant_id)
     if isinstance(trust_policy, dict):
-        policy.update(trust_policy)
+        # Approval metadata is server-controlled and may only be changed by the
+        # dedicated review endpoint, never by the policy configuration payload.
+        policy, changed = _apply_external_idp_policy_update(policy, trust_policy)
+        if changed:
+            principal = get_current_user()
+            policy["configured_by"] = str(principal.username or principal.user_id)
 
-    if bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip():
-        return _api_error("policy_denied", "The tenant external IdP policy requires admin approval before activation.", 403)
+    pending_review = bool(policy.get("review_required")) and not str(policy.get("approved_by") or "").strip()
 
     if policy.get("provider_type", "oidc").lower() == "saml":
         if not _validate_saml_provider_policy(policy):
             return _api_error("policy_denied", "The SAML trust policy is missing the required explicit entity identifier.", 403)
 
-    return _api_success({"policy": policy, "tenant_id": tenant_id}, 200)
+    try:
+        settings_store.update(tenant_id, {"external_idp_policy": policy})
+    except Exception:
+        logger.exception("Failed to persist SSO policy for tenant %s", tenant_id)
+        return _api_error("internal_server_error", "The SSO policy could not be saved.", 500)
+
+    if pending_review:
+        return _api_success({
+            "policy": policy,
+            "tenant_id": tenant_id,
+            "activation_status": "pending_review",
+        }, 202)
+
+    return _api_success({"policy": policy, "tenant_id": tenant_id, "activation_status": "active"}, 200)
 
 
 @_idempotent_route("/auth/sso/policy/review", methods=["POST"])
@@ -4014,17 +4088,32 @@ def external_idp_policy_route():
 def external_idp_policy_review_route():
     """Approve or reject a tenant external IdP policy after admin review."""
     data = request.get_json(silent=True) or {}
-    tenant_id = data.get("tenant_id") or get_current_user().tenant_id
+    current_user = get_current_user()
+    tenant_id = str(current_user.tenant_id)
     decision = str(data.get("decision") or "approve").strip().lower()
-    reviewer = str(data.get("reviewer") or get_current_user().username or "admin").strip()
+    # Reviewer identity must be attributable to the authenticated principal, not caller input.
+    reviewer = str(current_user.username or current_user.user_id)
+    # Review only the already-persisted tenant policy. Do not accept policy
+    # mutations in the review request, or a caller could approve a policy they
+    # supplied in the same request rather than reviewing stored configuration.
     policy = _provider_trust_policy_for_tenant(tenant_id)
-    if isinstance(data.get("trust_policy"), dict):
-        policy.update(data.get("trust_policy"))
 
     if decision not in {"approve", "reject"}:
         return _api_error("invalid_request", "decision must be either approve or reject.", 400)
 
     if decision == "approve":
+        if not str(policy.get("configured_by") or "").strip():
+            return _api_error(
+                "policy_review_unavailable",
+                "This policy has no recorded configurator. Re-submit the policy configuration before requesting approval.",
+                409,
+            )
+        if not _external_idp_reviewer_is_independent(policy, reviewer):
+            return _api_error(
+                "separation_of_duties_required",
+                "The policy configurator cannot approve their own SSO trust-policy change.",
+                403,
+            )
         policy["review_required"] = False
         policy["approved_by"] = reviewer
         policy["approved_at"] = datetime.now(timezone.utc).isoformat()
@@ -4032,6 +4121,12 @@ def external_idp_policy_review_route():
         policy["approved_by"] = None
         policy["approved_at"] = None
         policy["review_required"] = True
+
+    try:
+        settings_store.update(tenant_id, {"external_idp_policy": policy})
+    except Exception:
+        logger.exception("Failed to persist SSO policy review for tenant %s", tenant_id)
+        return _api_error("internal_server_error", "The SSO policy review could not be saved.", 500)
 
     return _api_success({"policy": policy, "tenant_id": tenant_id, "decision": decision}, 200)
 

@@ -167,14 +167,36 @@ _producer_manager = _ProducerManager()
 _circuit_breaker = CircuitBreaker()
 
 
+def _require_payload_tenant_id(payload: Dict[str, Any]) -> str:
+    """Return one explicit tenant scope; reject missing, placeholder, or conflicting aliases."""
+    tenant_values = []
+    for key in ("tenant_id", "TenantID", "tenantId", "Tenant-Id"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        tenant_id = str(value).strip()
+        if not tenant_id or tenant_id.lower() in {"default", "unknown", "none", "null"}:
+            raise ValueError("A concrete tenant_id is required before publishing or dead-lettering an event.")
+        tenant_values.append(tenant_id)
+
+    if not tenant_values:
+        raise ValueError("A concrete tenant_id is required before publishing or dead-lettering an event.")
+    if len(set(tenant_values)) != 1:
+        raise ValueError("Conflicting tenant identifiers were supplied in the event payload.")
+    return tenant_values[0]
+
+
 def _validate_payload_schema(payload: Dict[str, Any]) -> None:
-    """Enforce strict runtime validation for mandatory event fields before dispatching."""
+    """Enforce tenant scope and mandatory event fields before dispatching."""
     if not isinstance(payload, dict):
         raise ValueError("Event payload must be a JSON object dictionary.")
-    
+
+    tenant_id = _require_payload_tenant_id(payload)
     if payload.get("event_id") and payload.get("event_type") and payload.get("event_version"):
         from event_bus import EventEnvelope
-        EventEnvelope.from_dict(payload)
+        event = EventEnvelope.from_dict(payload)
+        if event.tenant_id != tenant_id:
+            raise ValueError("Event tenant_id does not match its payload tenant scope.")
         return
     trans_id = payload.get("TransID") or payload.get("trans_id")
     if not trans_id:
@@ -194,7 +216,7 @@ def _fallback_to_dead_letter_queue(topic: str, payload: Dict[str, Any], error_re
         import uuid
         from datetime import datetime, timezone
 
-        tenant_id = payload.get("tenant_id") or payload.get("TenantID") or "default"
+        tenant_id = _require_payload_tenant_id(payload)
         trans_id = payload.get("TransID") or payload.get("trans_id") or payload.get("aggregate_id") or payload.get("event_id") or "unknown"
         event_type = payload.get("event_type") or "legacy.event"
         event_id = payload.get("event_id") or "unknown"
@@ -279,7 +301,7 @@ def publish_transaction_event(
     if correlation_id:
         msg_headers.append(("correlation_id", correlation_id.encode("utf-8")))
     
-    tenant_id = str(payload.get("tenant_id") or payload.get("TenantID") or "default")
+    tenant_id = _require_payload_tenant_id(payload)
     msg_headers.append(("tenant_id", tenant_id.encode("utf-8")))
 
     trans_id = payload.get("TransID") or payload.get("trans_id") or payload.get("aggregate_id") or payload.get("event_id")
@@ -349,7 +371,7 @@ def publish_transaction_batch(
             trans_id = payload.get("TransID") or payload.get("trans_id") or payload.get("aggregate_id") or payload.get("event_id")
             key = str(trans_id).encode("utf-8") if trans_id else None
             
-            headers = [("tenant_id", str(payload.get("tenant_id", "default")).encode("utf-8"))]
+            headers = [("tenant_id", _require_payload_tenant_id(payload).encode("utf-8"))]
             if correlation_id:
                 headers.append(("correlation_id", correlation_id.encode("utf-8")))
 
@@ -397,7 +419,7 @@ def publish_transaction_batch_results(
         try:
             _validate_payload_schema(payload)
             trans_id = payload.get("TransID") or payload.get("trans_id") or payload.get("aggregate_id") or payload.get("event_id")
-            headers = [("tenant_id", str(payload.get("tenant_id", "default")).encode("utf-8"))]
+            headers = [("tenant_id", _require_payload_tenant_id(payload).encode("utf-8"))]
             if correlation_id:
                 headers.append(("correlation_id", correlation_id.encode("utf-8")))
             future = producer.send(
