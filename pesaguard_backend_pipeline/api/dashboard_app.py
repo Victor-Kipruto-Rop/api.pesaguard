@@ -227,6 +227,10 @@ engine = primary_engine
 workflow_session_factory = sessionmaker(bind=primary_engine, expire_on_commit=False)
 app.register_blueprint(create_workflow_blueprint(workflow_session_factory))
 
+# Read-only, tenant-scoped registry evidence lookup (server-to-server only).
+from pesaguard_backend_pipeline.registry_datasource_routes import create_registry_datasource_blueprint
+app.register_blueprint(create_registry_datasource_blueprint(workflow_session_factory))
+
 if READ_REPLICA_DATABASE_URL and READ_REPLICA_DATABASE_URL.startswith("sqlite"):
     replica_engine = _create_engine(READ_REPLICA_DATABASE_URL)
 elif READ_REPLICA_DATABASE_URL:
