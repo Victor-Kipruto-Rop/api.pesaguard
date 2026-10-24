@@ -72,14 +72,14 @@ class RegistryDatasourceClient:
             raise ValueError("Provide exactly one registration number or tax PIN.")
         if len(reg or pin) > 128:
             raise ValueError("Registry identifier is too long.")
-        params = {"reg_no": reg} if reg else {"tax_pin": pin}
+        payload = {"reg_no": reg} if reg else {"tax_pin": pin}
         headers = {"X-API-Key": self.settings.api_key, "Accept": "application/json"}
         if correlation_id:
             headers["X-Correlation-ID"] = correlation_id[:100]
         try:
-            response = self.session.get(
+            response = self.session.post(
                 f"{self.settings.base_url}/api/v1/registry/lookup",
-                params=params,
+                json=payload,
                 headers=headers,
                 timeout=(self.settings.connect_timeout, self.settings.read_timeout),
             )
